@@ -16,7 +16,7 @@ class KeyProvider:
 class KeyringProvider(KeyProvider):
     """Use the OS credential store (Keychain on macOS) for the DB key."""
 
-    def __init__(self, service: str = "palisade"):
+    def __init__(self, service: str = "stopaskingme"):
         self.service = service
 
     def load_or_create(self, name: str) -> bytes:

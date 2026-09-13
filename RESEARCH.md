@@ -1,4 +1,4 @@
-# Palisade: Agent Information Broker Research
+# StopAskingMe: Agent Information Broker Research
 
 **Research date:** 2026-09-12
 **Purpose:** Basis for deciding whether to build or adopt a single agent-facing access point for email, personal information, credential use, and messages.

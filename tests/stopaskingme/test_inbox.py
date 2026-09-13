@@ -1,6 +1,6 @@
-from palisade.inbox import build_html
-from palisade.service import Broker
-from palisade.storage import Store
+from stopaskingme.inbox import build_html
+from stopaskingme.service import Broker
+from stopaskingme.storage import Store
 
 
 def test_inbox_page_contains_review_metadata_without_secrets():

@@ -1,4 +1,4 @@
-"""Palisade: local-first personal information broker for agent clients."""
+"""StopAskingMe: local-first personal information broker for agent clients."""
 
 from .service import Broker, BrokerError, AuthorizationError, CredentialUseError
 from .imap_adapter import IMAPEmailAdapter

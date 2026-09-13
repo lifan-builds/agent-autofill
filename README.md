@@ -1,6 +1,6 @@
-# Palisade
+# StopAskingMe
 
-Palisade is a local-first personal information broker for AI agents. It gives
+StopAskingMe is a local-first personal information broker for AI agents. It gives
 an authenticated MCP client one controlled surface for user-owned profile
 fields, read-only email, read-only macOS Messages, and origin-bound credential
 use without turning the agent into a password database reader.
@@ -19,22 +19,22 @@ The first implementation is intentionally small and runnable:
 
 ```bash
 python3 -m pip install -r requirements.txt
-./scripts/palisade --db ~/.palisade.sqlite3 init
-./scripts/palisade --db ~/.palisade.sqlite3 setup
-./scripts/palisade --db ~/.palisade.sqlite3 inbox
+./scripts/stopaskingme --db ~/.stopaskingme.sqlite3 init
+./scripts/stopaskingme --db ~/.stopaskingme.sqlite3 setup
+./scripts/stopaskingme --db ~/.stopaskingme.sqlite3 inbox
 ```
 
 Run the MCP server with the token printed by `agent-create` in its environment:
 
 ```bash
-PALISADE_AGENT_TOKEN="<token>" \
-  ./scripts/palisade --db ~/.palisade.sqlite3 serve
+STOPASKINGME_AGENT_TOKEN="<token>" \
+  ./scripts/stopaskingme --db ~/.stopaskingme.sqlite3 serve
 ```
 
-The complete setup and Codex configuration are in [docs/palisade.md](docs/palisade.md).
+The complete setup and Codex configuration are in [docs/stopaskingme.md](docs/stopaskingme.md).
 The market and architecture research is in [RESEARCH.md](RESEARCH.md).
 
-Palisade is information-only. It does not submit forms, send or delete
+StopAskingMe is information-only. It does not submit forms, send or delete
 messages, control a browser, or expose a `get_password` tool. A credential-use
 request returns a short-lived origin-bound handle; a trusted local helper may
 consume that handle once to perform a fill without putting the password in
@@ -44,7 +44,7 @@ agent context.
 
 ```bash
 PYTHONPATH=. pytest -q
-ruff check palisade
+ruff check stopaskingme
 ```
 
 The repository requires Python 3.11 or newer.

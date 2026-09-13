@@ -1,8 +1,8 @@
 import pytest
-from palisade.server import TOOLS
-from palisade.server import _call
-from palisade.service import Broker, BrokerError
-from palisade.storage import Store
+from stopaskingme.server import TOOLS
+from stopaskingme.server import _call
+from stopaskingme.service import Broker, BrokerError
+from stopaskingme.storage import Store
 
 
 def test_mcp_tool_catalog_has_information_only_surface():

@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 import pytest
-from palisade.service import Broker, AuthorizationError, BrokerError
-from palisade.models import EmailMessage, TextMessage
+from stopaskingme.service import Broker, AuthorizationError, BrokerError
+from stopaskingme.models import EmailMessage, TextMessage
 
 
 def setup():

@@ -1,4 +1,4 @@
-# Palisade
+# StopAskingMe
 
 This package is a local MCP information service. It keeps profile values,
 connector configuration, credentials imported during cold start, grants, and
@@ -10,21 +10,21 @@ separately in macOS Keychain through Python `keyring`.
 Install the two small runtime dependencies first:
 
 ```bash
-python3 -m pip install -r /Users/lfan/Project/palisade/requirements.txt
+python3 -m pip install -r /Users/lfan/Project/StopAskingMe/requirements.txt
 ```
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/palisade python -m palisade.cli \
-  --db /Users/lfan/.palisade.sqlite3 init
-PYTHONPATH=/Users/lfan/Project/palisade python -m palisade.cli \
-  --db /Users/lfan/.palisade.sqlite3 setup
-PYTHONPATH=/Users/lfan/Project/palisade python -m palisade.cli \
-  --db /Users/lfan/.palisade.sqlite3 agent-create codex
-PYTHONPATH=/Users/lfan/Project/palisade python -m palisade.cli \
-  --db /Users/lfan/.palisade.sqlite3 grant codex profile.read name \
+PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
+  --db /Users/lfan/.stopaskingme.sqlite3 init
+PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
+  --db /Users/lfan/.stopaskingme.sqlite3 setup
+PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
+  --db /Users/lfan/.stopaskingme.sqlite3 agent-create codex
+PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
+  --db /Users/lfan/.stopaskingme.sqlite3 grant codex profile.read name \
   --origin example.com --purpose form
-PYTHONPATH=/Users/lfan/Project/palisade python -m palisade.cli \
-  --db /Users/lfan/.palisade.sqlite3 grant codex credential.use <credential-id> \
+PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
+  --db /Users/lfan/.stopaskingme.sqlite3 grant codex credential.use <credential-id> \
   --origin https://example.com --purpose form
 ```
 
@@ -41,20 +41,20 @@ error when that permission is absent.
 To run the local MCP process for a client:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/palisade python -m palisade.cli \
-  --db /Users/lfan/.palisade.sqlite3 serve
+PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
+  --db /Users/lfan/.stopaskingme.sqlite3 serve
 ```
 
 For a human review page, run `inbox-web` and open the printed loopback URL:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/palisade python -m palisade.cli \
-  --db /Users/lfan/.palisade.sqlite3 inbox-web
+PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
+  --db /Users/lfan/.stopaskingme.sqlite3 inbox-web
 ```
 
 The process uses MCP `initialize`, `tools/list`, and `tools/call` JSON-RPC
 messages over stdin/stdout. A client should launch it as a local stdio server
-and set the one-time token from `agent-create` as `PALISADE_AGENT_TOKEN` in the
+and set the one-time token from `agent-create` as `STOPASKINGME_AGENT_TOKEN` in the
 MCP process environment. The stable identity is passed as `agent_id` in tool
 arguments. Create grants with the CLI; grants are short-lived and default-deny.
 
@@ -62,9 +62,9 @@ A Codex MCP entry follows this shape (keep the token in the process environment
 or a secret manager, not in source control):
 
 ```toml
-[mcp_servers.palisade]
-command = "/Users/lfan/Project/palisade/scripts/palisade"
-args = ["--db", "/Users/lfan/.palisade.sqlite3", "serve"]
+[mcp_servers.stopaskingme]
+command = "/Users/lfan/Project/StopAskingMe/scripts/stopaskingme"
+args = ["--db", "/Users/lfan/.stopaskingme.sqlite3", "serve"]
 ```
 
 The information surface is intentionally read-only. It does not expose
@@ -79,6 +79,6 @@ local connection record, deletes its Keychain secret when present, and revokes
 grants scoped to that source:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/palisade python -m palisade.cli \
-  --db /Users/lfan/.palisade.sqlite3 source-remove personal-mail
+PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
+  --db /Users/lfan/.stopaskingme.sqlite3 source-remove personal-mail
 ```

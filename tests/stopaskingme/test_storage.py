@@ -1,4 +1,4 @@
-from palisade.storage import KeyProvider, Store
+from stopaskingme.storage import KeyProvider, Store
 
 
 class MemoryKeys(KeyProvider):

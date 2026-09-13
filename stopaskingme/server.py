@@ -148,7 +148,7 @@ TOOLS = [
 
 def _call(broker: Broker, name: str, params: dict):
     agent = params.pop("agent_id", "local-agent")
-    token = params.pop("agent_token", None) or os.environ.get("PALISADE_AGENT_TOKEN")
+    token = params.pop("agent_token", None) or os.environ.get("STOPASKINGME_AGENT_TOKEN")
     if name not in {
         "list_sources",
         "list_profile_fields",
@@ -218,8 +218,8 @@ def _register_connections(broker: Broker, keyring: KeyringProvider) -> None:
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="palisade-server")
-    parser.add_argument("--db", default="palisade.sqlite3")
+    parser = argparse.ArgumentParser(prog="stopaskingme-server")
+    parser.add_argument("--db", default="stopaskingme.sqlite3")
     parser.add_argument("--key-name", default=None)
     args = parser.parse_args(argv)
     keyring = KeyringProvider()
@@ -239,7 +239,7 @@ def main(argv=None):
                 result = {
                     "protocolVersion": "2025-06-18",
                     "capabilities": {"tools": {"listChanged": False}},
-                    "serverInfo": {"name": "palisade", "version": "0.1.0"},
+                    "serverInfo": {"name": "stopaskingme", "version": "0.1.0"},
                 }
             elif name == "tools/list":
                 result = {"tools": TOOLS}

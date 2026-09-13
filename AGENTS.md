@@ -1,4 +1,4 @@
-# Palisade development guidance
+# StopAskingMe development guidance
 
 - Keep the product local-first and information-only unless the scope is
   explicitly expanded.

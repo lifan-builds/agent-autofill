@@ -23,10 +23,10 @@ def _broker(path: str) -> Broker:
 
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="palisade", description="Local personal information broker"
+        prog="stopaskingme", description="Local personal information broker"
     )
     p.add_argument(
-        "--db", default="palisade.sqlite3", help="encrypted SQLite database path"
+        "--db", default="stopaskingme.sqlite3", help="encrypted SQLite database path"
     )
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("init", help="create/open the encrypted local database")
