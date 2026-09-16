@@ -27,3 +27,25 @@ Enabled Trellis 0.6.16 Codex integration for this local project; verified platfo
 ### Status
 
 [OK] **Completed**
+
+
+## Session 2: Bootstrap backend guidelines
+<!-- trellis-session: v=2 fp=2eccb6e98a0f4789 -->
+
+**Date**: 2026-09-16
+**Task**: Bootstrap backend guidelines
+**Branch**: `main`
+
+### Summary
+
+Populated the StopAskingMe backend Trellis specs from current code and project guidance, documented the existing OTP response policy mismatch, and verified 18 tests plus the project Ruff target.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cb366b4` | docs: bootstrap backend guidelines |
+
+### Status
+
+[OK] **Completed**
