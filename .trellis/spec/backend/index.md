@@ -6,7 +6,9 @@
 
 ## Overview
 
-This directory contains guidelines for backend development. Fill in each file with your project's specific conventions.
+This directory records the current backend conventions for the local-first
+Python broker. Read the guides relevant to the modules you will change before
+editing code.
 
 ---
 
@@ -14,24 +16,24 @@ This directory contains guidelines for backend development. Fill in each file wi
 
 | Guide | Description | Status |
 |-------|-------------|--------|
-| [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
-| [Database Guidelines](./database-guidelines.md) | ORM patterns, queries, migrations | To fill |
-| [Error Handling](./error-handling.md) | Error types, handling strategies | To fill |
-| [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
-| [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
+| [Directory Structure](./directory-structure.md) | Module organization and boundaries | Current |
+| [Database Guidelines](./database-guidelines.md) | Encrypted SQLite and read-only source patterns | Current |
+| [Error Handling](./error-handling.md) | Error types and boundary behavior | Current |
+| [Quality Guidelines](./quality-guidelines.md) | Security contracts, testing, and review | Current |
+| [Logging Guidelines](./logging-guidelines.md) | Audit, protocol, and sensitive-output rules | Current |
 
 ---
 
-## How to Fill These Guidelines
+## Pre-Development Checklist
 
-For each guideline file:
-
-1. Document your project's **actual conventions** (not ideals)
-2. Include **code examples** from your codebase
-3. List **forbidden patterns** and why
-4. Add **common mistakes** your team has made
-
-The goal is to help AI assistants and new team members understand how YOUR project works.
+1. Read [Directory Structure](./directory-structure.md) for every backend task.
+2. Read [Quality Guidelines](./quality-guidelines.md) for every behavior change.
+3. Read [Database Guidelines](./database-guidelines.md) for storage, audit,
+   Chrome, Messages, key, or connector changes.
+4. Read [Error Handling](./error-handling.md) for service, adapter, CLI, or MCP
+   boundary changes.
+5. Read [Logging Guidelines](./logging-guidelines.md) before adding output,
+   audit metadata, errors, diagnostics, or review UI fields.
 
 ---
 
