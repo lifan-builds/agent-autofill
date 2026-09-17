@@ -97,6 +97,11 @@ class Store:
         create table if not exists kv (namespace text, key text, value text not null, primary key(namespace,key));
         create table if not exists audit (id integer primary key, agent_id text, operation text, resource text, created_at text, metadata text);
         """)
+        # Older releases used the plaintext OTP in the ``otp-used`` key.  The
+        # current broker stores only a non-secret hash in ``otp-consumed``;
+        # remove legacy keys as soon as a compatible store is opened so a code
+        # cannot remain in SQLite identifiers indefinitely.
+        self.purge_legacy_otp_markers()
 
     def _seal(self, value: Any) -> str:
         raw = json.dumps(value, separators=(",", ":")).encode()
@@ -115,11 +120,66 @@ class Store:
         )
         self.db.commit()
 
+    def put_many(self, records: list[tuple[str, str, Any]]) -> None:
+        """Persist a small group of values atomically.
+
+        Connector replacement writes the connection and its source metadata as
+        one logical operation.  Keeping this transaction primitive here avoids
+        callers having to own SQLite encryption details or leave half-written
+        configurations behind when a write fails.
+        """
+
+        sealed = [
+            (namespace, key, self._seal(value))
+            for namespace, key, value in records
+        ]
+        try:
+            self.db.executemany("insert or replace into kv values (?,?,?)", sealed)
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+
+    def put_if_absent(self, namespace: str, key: str, value: Any) -> bool:
+        """Insert one value only when its namespace/key is unused.
+
+        SQLite's primary key makes this safe when more than one broker process
+        tries to consume the same one-time marker at once.  A failed insert is
+        a normal "already present" result; other database failures still
+        propagate to the caller.
+        """
+
+        sealed = self._seal(value)
+        try:
+            self.db.execute(
+                "insert into kv values (?,?,?)", (namespace, key, sealed)
+            )
+            self.db.commit()
+        except sqlite3.IntegrityError:
+            self.db.rollback()
+            return False
+        except Exception:
+            self.db.rollback()
+            raise
+        return True
+
     def get(self, namespace: str, key: str) -> Any | None:
         row = self.db.execute(
             "select value from kv where namespace=? and key=?", (namespace, key)
         ).fetchone()
         return None if row is None else self._open(row["value"])
+
+    def delete(self, namespace: str, key: str) -> None:
+        self.db.execute(
+            "delete from kv where namespace=? and key=?", (namespace, key)
+        )
+        self.db.commit()
+
+    def purge_legacy_otp_markers(self) -> None:
+        """Remove pre-hash OTP markers whose keys contained the code."""
+
+        self.db.execute("delete from kv where namespace='otp-used'")
+        self.db.commit()
 
     def audit(
         self,

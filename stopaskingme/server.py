@@ -8,6 +8,7 @@ from pathlib import Path
 from .service import Broker, BrokerError
 from .storage import Store, KeyringProvider
 from .imap_adapter import IMAPEmailAdapter
+from .google_oauth import GoogleOAuthError, GoogleOAuthTokenProvider
 from .messages_adapter import MacMessagesAdapter
 
 TOOLS = [
@@ -183,33 +184,72 @@ def _register_connections(broker: Broker, keyring: KeyringProvider) -> None:
         config = broker.store.get("connection", row["key"])
         if not config:
             continue
-        if config["kind"] == "imap":
-            secret = keyring.get_secret(config["secret_name"])
-            if secret is None:
+        if config.get("kind") == "imap":
+            source_id = config.get("source_id", row["key"])
+            if source_id not in broker.sources:
+                broker.add_source(
+                    source_id, "email", config.get("label") or source_id
+                )
+            secret_name = config.get("secret_name")
+            if not secret_name:
+                broker.mark_email_unavailable(source_id)
                 continue
-            if config.get("auth_kind") == "oauth2":
-                adapter = IMAPEmailAdapter(
-                    config["source_id"],
-                    config["host"],
-                    config["username"],
-                    None,
-                    config.get("port", 993),
-                    config.get("mailbox", "INBOX"),
-                    secret.decode(),
-                )
-            else:
-                adapter = IMAPEmailAdapter(
-                    config["source_id"],
-                    config["host"],
-                    config["username"],
-                    secret.decode(),
-                    config.get("port", 993),
-                    config.get("mailbox", "INBOX"),
-                )
+            try:
+                secret = keyring.get_secret(secret_name)
+            except Exception:
+                broker.mark_email_unavailable(source_id)
+                continue
+            if not secret:
+                broker.mark_email_unavailable(source_id)
+                continue
+            try:
+                auth_kind = config.get("auth_kind")
+                if auth_kind == "google_oauth":
+                    provider = GoogleOAuthTokenProvider.from_keychain_secret(secret)
+                    adapter = IMAPEmailAdapter(
+                        source_id,
+                        config["host"],
+                        config["username"],
+                        None,
+                        config.get("port", 993),
+                        config.get("mailbox", "INBOX"),
+                        None,
+                        provider,
+                    )
+                else:
+                    value = secret.decode()
+                    if auth_kind == "oauth2":
+                        adapter = IMAPEmailAdapter(
+                            source_id,
+                            config["host"],
+                            config["username"],
+                            None,
+                            config.get("port", 993),
+                            config.get("mailbox", "INBOX"),
+                            value,
+                        )
+                    else:
+                        adapter = IMAPEmailAdapter(
+                            source_id,
+                            config["host"],
+                            config["username"],
+                            value,
+                            config.get("port", 993),
+                            config.get("mailbox", "INBOX"),
+                        )
+            except (
+                GoogleOAuthError,
+                KeyError,
+                UnicodeDecodeError,
+                TypeError,
+                ValueError,
+            ):
+                broker.mark_email_unavailable(source_id)
+                continue
             broker.register_email_adapter(
-                config["source_id"], adapter, config.get("label")
+                source_id, adapter, config.get("label")
             )
-        elif config["kind"] == "messages":
+        elif config.get("kind") == "messages":
             broker.register_message_adapter(
                 config["source_id"],
                 MacMessagesAdapter(config.get("database")),

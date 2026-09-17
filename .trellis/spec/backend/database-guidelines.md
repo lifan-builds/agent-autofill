@@ -37,7 +37,9 @@ create table if not exists audit (
 
 - Table and column names are lowercase `snake_case`.
 - Logical record types are lowercase namespace strings such as `profile`,
-  `grant`, `agent`, `connection`, `credential`, and `otp-used`.
+  `grant`, `agent`, `connection`, `credential`, and `otp-consumed`. Legacy
+  `otp-used` rows are purged when a compatible store opens because older keys
+  included the plaintext code.
 - Identifiers intended to be opaque use `secrets` or truncated SHA-256 hashes;
   do not derive secret-bearing identifiers from plaintext output.
 - Timestamps are timezone-aware ISO 8601 strings produced by `now_iso()`.
@@ -64,8 +66,10 @@ create table if not exists audit (
 - There is no migration runner or schema-version table. The two base tables
   are created with `create table if not exists` when `Store` opens.
 - Current writes are small and commit immediately. Multi-record atomic
-  transactions are not an established convention; adding one requires an
-  explicit design and tests for failure/rollback behavior.
+  transactions are not an established convention; connector replacement is
+  the explicit exception and uses `Store.put_many` with rollback coverage.
+- One-time consumption markers use `Store.put_if_absent`; the `kv` primary key
+  rejects a second insert even when separate broker processes race.
 - Any future schema change must remain compatible with existing local database
   files. Do not silently drop or rewrite user data.
 
@@ -73,6 +77,9 @@ create table if not exists audit (
 
 - Do not store database keys or connector credentials in SQLite. Normal keys
   and connector secrets live behind `KeyringProvider`.
+- OTP consumption markers must be derived from a hash of the agent, account,
+  and message identifiers; never include the code in a SQLite namespace or
+  key. The code itself is transient response data only.
 - Non-memory broker database files are created with mode `0600`.
 - Keep audit metadata encrypted and filtered. `Store.audit` removes the known
   secret-bearing keys `body`, `code`, `password`, and `token` before sealing.
@@ -81,6 +88,26 @@ create table if not exists audit (
 - Read Chrome databases from a temporary snapshot, close the connection in a
   `finally` block, and unlink the snapshot. Password material is accepted only
   from an explicit user-exported CSV and is encrypted immediately.
+
+### Google OAuth connector state
+
+- A Gmail connection uses `auth_kind=google_oauth` and stores the host,
+  username, mailbox, label, and opaque `secret_name` in encrypted `connection`
+  metadata. The client JSON path is not persisted.
+- The Keychain value is a versioned JSON payload containing only the Google
+  client id, optional client secret, and refresh token. Short-lived access
+  tokens are process-memory state and must never enter SQLite, Keychain,
+  audit metadata, exceptions, or CLI output.
+- Treat the OAuth payload as a closed schema: require exactly `version`,
+  `provider`, `client_id`, `refresh_token`, and optional `client_secret`.
+  Reject and do not preserve unknown keys, especially `access_token`; callers
+  canonicalize through `GoogleOAuthTokenProvider` before writing Keychain.
+- On server or `email-test` startup, reconstruct a provider from the Keychain
+  payload and refresh only when a new IMAP connection needs a token. A failed
+  payload parse leaves the source visible but unavailable for reads.
+- Connector replacement writes the new refresh/client payload and encrypted
+  metadata before deleting the prior Keychain entry. A failed metadata write
+  removes the new payload and preserves the previous configuration.
 
 ## Common Mistakes to Avoid
 

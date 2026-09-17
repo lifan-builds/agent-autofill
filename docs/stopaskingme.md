@@ -26,6 +26,9 @@ PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
 PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
   --db /Users/lfan/.stopaskingme.sqlite3 grant codex credential.use <credential-id> \
   --origin https://example.com --purpose form
+PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
+  --db /Users/lfan/.stopaskingme.sqlite3 grant codex email.otp personal-mail \
+  --origin https://example.test --purpose login
 ```
 
 The wizard can import Chrome autofill data and login metadata from a selected
@@ -33,6 +36,64 @@ profile, optionally import a user-exported Chrome password CSV after typing
 `IMPORT`, and configure read-only IMAP and local Messages sources. The broker
 never attempts to decrypt Chrome's `Login Data` database and never prints an
 imported password.
+
+For a generic Thunderbird-style IMAP source, use `email-add`. The command
+checks the login and read-only mailbox selection before saving the password or
+OAuth2 bearer token in Keychain. Encrypted SQLite stores only connection
+metadata and an opaque Keychain lookup name:
+
+```bash
+PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
+  --db /Users/lfan/.stopaskingme.sqlite3 email-add personal-mail \
+  imap.example.test user@example.test --mailbox INBOX
+PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
+  --db /Users/lfan/.stopaskingme.sqlite3 email-test personal-mail
+```
+
+`email-test` reconnects with the saved Keychain secret and prints only source
+metadata. Each broker/server process opens a fresh TLS connection, selects the
+mailbox read-only, performs its operation, and logs out; a live IMAP socket is
+never serialized. Replace a source by running `email-add` again. Disconnect it
+with `source-remove`, which deletes the current Keychain secret before
+removing local metadata.
+
+For Gmail, use a Google Cloud Desktop OAuth client that you own. In Google
+Cloud, enable the Gmail API, configure the OAuth consent screen (choose
+External for a personal Gmail account and add that account as a test user),
+add `https://mail.google.com/` under Data Access, then create an OAuth client
+with application type Desktop app and download its JSON. StopAskingMe does not
+bundle or publish a shared client:
+
+```bash
+PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
+  --db /Users/lfan/.stopaskingme.sqlite3 email-add-gmail personal-gmail \
+  user@gmail.com --client-secrets /private/path/client-secret.json
+PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
+  --db /Users/lfan/.stopaskingme.sqlite3 email-test personal-gmail
+```
+
+`email-add-gmail` opens Google Sign-In in the system browser, receives the
+authorization code only on a temporary `127.0.0.1` listener, validates state
+and PKCE, and checks Gmail XOAUTH2 access by selecting the requested mailbox
+read-only before saving. The Keychain stores only the client id, optional
+client secret, and refresh token; encrypted SQLite stores non-secret source
+metadata and the opaque Keychain name. Access tokens remain in memory and are
+refreshed when a later process needs a new IMAP connection. Gmail exposes the
+full `https://mail.google.com/` scope for IMAP even though this adapter never
+writes mail or sends messages.
+
+Google marks External consent clients in Testing as having refresh tokens that
+expire after seven days for this Gmail scope. If that happens, `email-test`
+fails safely and the operator must run `email-add-gmail` again. For an opt-in
+live smoke test, use only a mailbox and Desktop client you explicitly own,
+run `email-add-gmail` followed by `email-test`, and remove the source with
+`source-remove`; never put live addresses, messages, OAuth tokens, or client
+JSON in repository files or diagnostics.
+
+Automated coverage uses a deterministic fake IMAP provider. A live smoke test
+is opt-in: use only a mailbox you explicitly provide, run `email-add` followed
+by `email-test`, and remove it afterward. Do not copy live messages, addresses,
+passwords, bearer tokens, or OTPs into repository files or diagnostics.
 
 macOS may require granting the terminal or Python process Full Disk Access to
 read `~/Library/Messages/chat.db`; the adapter reports a clear unavailable
@@ -70,9 +131,27 @@ args = ["--db", "/Users/lfan/.stopaskingme.sqlite3", "serve"]
 The information surface is intentionally read-only. It does not expose
 password retrieval, send/delete operations, browser control, or form submit.
 For imported credentials, `request_credential_use` returns an origin-bound,
-short-lived handle plus the username; a trusted local browser helper may
-consume that handle exactly once to perform a fill. The MCP response never
-contains the password.
+short-lived handle plus the username; the consuming agent owns any later
+interaction. The MCP response never contains the password.
+
+To request an email OTP, the authenticated agent needs an active
+`email.otp` grant scoped to the account, target origin, and purpose. A
+successful request returns the one-time code plus email/message/received-time
+provenance; the code is never stored, audited, or included in an error. For
+example, a client calls `request_auth_code` with an argument shape like:
+
+```json
+{
+  "account_id": "personal-mail",
+  "target_origin": "https://example.test",
+  "purpose": "login",
+  "max_age_seconds": 300
+}
+```
+
+The broker refuses missing or expired grants, wrong account/origin/purpose,
+stale or ambiguous candidates, and reuse of a returned message. It only reads
+mail; browser typing and form submission remain outside this project.
 
 Disconnect a mailbox or Messages source with `source-remove`; this removes its
 local connection record, deletes its Keychain secret when present, and revokes

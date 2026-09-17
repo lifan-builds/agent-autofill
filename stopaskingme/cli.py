@@ -2,9 +2,24 @@
 
 import argparse
 import getpass
+import hashlib
 import json
+import secrets
 from pathlib import Path
 from .chrome import cold_start, discover_profiles
+from .imap_adapter import (
+    IMAPAdapterError,
+    IMAPEmailAdapter,
+)
+from .google_oauth import (
+    GoogleOAuthAuthorizationError,
+    GoogleOAuthClient,
+    GoogleOAuthConfigurationError,
+    GoogleOAuthError,
+    GoogleOAuthTokenError,
+    GoogleOAuthTokenProvider,
+    authorize_google_desktop,
+)
 from .service import Broker
 from .storage import KeyringProvider, Store
 
@@ -19,6 +34,313 @@ def _store(path: str) -> Store:
 
 def _broker(path: str) -> Broker:
     return Broker(_store(path))
+
+
+def _imap_secret_name(db_path: str, account_id: str) -> str:
+    """Return a fresh opaque Keychain lookup name for an account replacement."""
+
+    identity = (
+        f"{Path(db_path).expanduser().absolute().as_posix()}\0{account_id}"
+    ).encode()
+    fingerprint = hashlib.sha256(identity).hexdigest()[:16]
+    return f"imap:v1:{fingerprint}:{secrets.token_hex(16)}"
+
+
+def _imap_adapter(
+    account_id: str,
+    host: str,
+    username: str,
+    port: int,
+    mailbox: str,
+    secret: str,
+    oauth2: bool,
+) -> IMAPEmailAdapter:
+    if oauth2:
+        return IMAPEmailAdapter(
+            account_id,
+            host,
+            username,
+            None,
+            port,
+            mailbox,
+            secret,
+        )
+    return IMAPEmailAdapter(
+        account_id,
+        host,
+        username,
+        secret,
+        port,
+        mailbox,
+    )
+
+
+def _save_imap_configuration(
+    broker: Broker,
+    db_path: str,
+    account_id: str,
+    config: dict,
+    source: dict,
+    secret: bytes,
+    keyring: KeyringProvider,
+    *,
+    provider_name: str = "IMAP",
+) -> dict:
+    """Save connector state after verification, preserving replacements safely."""
+
+    previous = broker.store.get("connection", account_id)
+    secret_name = config["secret_name"]
+    try:
+        keyring.set_secret(secret_name, secret)
+    except Exception as exc:
+        try:
+            keyring.delete_secret(secret_name)
+        except Exception:
+            pass
+        raise SystemExit(
+            f"Could not save {provider_name} connector secret"
+        ) from exc
+
+    try:
+        broker.store.put_many(
+            [("connection", account_id, config), ("source", account_id, source)]
+        )
+    except Exception as exc:
+        try:
+            keyring.delete_secret(secret_name)
+        except Exception as cleanup_exc:
+            raise SystemExit(
+                f"Could not save {provider_name} configuration or clean up its temporary connector secret"
+            ) from cleanup_exc
+        raise SystemExit(f"Could not save {provider_name} configuration") from exc
+
+    broker.sources[account_id] = source
+    old_secret_name = (previous or {}).get("secret_name")
+    if old_secret_name and old_secret_name != secret_name:
+        try:
+            keyring.delete_secret(old_secret_name)
+        except Exception as exc:
+            raise SystemExit(
+                f"Saved the new {provider_name} configuration but could not remove the previous connector secret"
+            ) from exc
+    return config
+
+
+def _configure_imap(
+    broker: Broker,
+    db_path: str,
+    account_id: str,
+    host: str,
+    username: str,
+    port: int,
+    mailbox: str,
+    secret: str,
+    oauth2: bool = False,
+    label: str | None = None,
+    keyring: KeyringProvider | None = None,
+) -> dict:
+    """Verify and atomically save a generic IMAP source.
+
+    The connector is tested in memory before its secret reaches Keychain.  A
+    new opaque name is written for every replacement, and the old name is
+    removed only after both encrypted metadata records commit.
+    """
+
+    adapter = _imap_adapter(
+        account_id, host, username, port, mailbox, secret, oauth2
+    )
+    try:
+        adapter.check_connection()
+    except IMAPAdapterError as exc:
+        raise SystemExit(str(exc)) from exc
+    except Exception as exc:
+        raise SystemExit("IMAP connection check failed") from exc
+
+    keyring = keyring or KeyringProvider()
+    secret_name = _imap_secret_name(db_path, account_id)
+    auth_kind = "oauth2" if oauth2 else "password"
+    source_label = label or account_id
+    config = {
+        "source_id": account_id,
+        "kind": "imap",
+        "auth_kind": auth_kind,
+        "label": source_label,
+        "host": host,
+        "username": username,
+        "port": port,
+        "mailbox": mailbox,
+        "secret_name": secret_name,
+    }
+    source = {"source_id": account_id, "kind": "email", "label": source_label}
+    config["secret_name"] = secret_name
+    return _save_imap_configuration(
+        broker,
+        db_path,
+        account_id,
+        config,
+        source,
+        secret.encode(),
+        keyring,
+    )
+
+
+def _oauth_keychain_secret(provider: object) -> bytes:
+    """Serialize only the provider's refresh/client state for Keychain."""
+
+    serializer = getattr(provider, "to_keychain_secret", None)
+    if serializer is None:
+        serializer = getattr(provider, "to_secret", None)
+    if serializer is None or not callable(serializer):
+        raise SystemExit("Google OAuth provider cannot save refresh state")
+    try:
+        value = serializer()
+    except Exception as exc:
+        raise SystemExit("Google OAuth provider cannot save refresh state") from exc
+    if not isinstance(value, bytes) or not value:
+        raise SystemExit("Google OAuth provider returned invalid refresh state")
+    try:
+        # Parse and re-serialize through the canonical provider boundary.  This
+        # rejects access tokens or unknown fields even when a test/custom
+        # provider supplies its own serializer.
+        canonical = GoogleOAuthTokenProvider.from_keychain_secret(value)
+        return canonical.to_keychain_secret()
+    except GoogleOAuthError as exc:
+        raise SystemExit("Google OAuth provider returned invalid refresh state") from exc
+
+
+def _configure_gmail(
+    broker: Broker,
+    db_path: str,
+    account_id: str,
+    username: str,
+    client_secrets: str | Path,
+    mailbox: str = "INBOX",
+    label: str | None = None,
+    keyring: KeyringProvider | None = None,
+    *,
+    oauth_provider: object | None = None,
+    authorize_fn=None,
+) -> dict:
+    """Authorize, verify, and persist a read-only Gmail IMAP source."""
+
+    if oauth_provider is None:
+        try:
+            client = GoogleOAuthClient.from_file(client_secrets)
+            oauth_provider = (authorize_fn or authorize_google_desktop)(client)
+        except GoogleOAuthConfigurationError as exc:
+            raise SystemExit("Google OAuth client configuration is invalid") from exc
+        except GoogleOAuthAuthorizationError as exc:
+            raise SystemExit("Google authorization failed") from exc
+        except GoogleOAuthTokenError as exc:
+            raise SystemExit("Google OAuth token exchange failed") from exc
+        except GoogleOAuthError as exc:
+            raise SystemExit("Google OAuth setup failed") from exc
+        except (OSError, TypeError, ValueError) as exc:
+            raise SystemExit("Google OAuth setup failed") from exc
+        except Exception as exc:
+            raise SystemExit("Google OAuth setup failed") from exc
+
+    adapter = IMAPEmailAdapter(
+        account_id,
+        "imap.gmail.com",
+        username,
+        None,
+        993,
+        mailbox,
+        None,
+        oauth_provider,
+    )
+    try:
+        adapter.check_connection()
+    except IMAPAdapterError as exc:
+        raise SystemExit(str(exc)) from exc
+    except Exception as exc:
+        raise SystemExit("Gmail IMAP connection check failed") from exc
+
+    keyring = keyring or KeyringProvider()
+    source_label = label or account_id
+    config = {
+        "source_id": account_id,
+        "kind": "imap",
+        "auth_kind": "google_oauth",
+        "label": source_label,
+        "host": "imap.gmail.com",
+        "username": username,
+        "port": 993,
+        "mailbox": mailbox,
+        "secret_name": _imap_secret_name(db_path, account_id),
+    }
+    source = {"source_id": account_id, "kind": "email", "label": source_label}
+    return _save_imap_configuration(
+        broker,
+        db_path,
+        account_id,
+        config,
+        source,
+        _oauth_keychain_secret(oauth_provider),
+        keyring,
+        provider_name="Gmail OAuth",
+    )
+
+
+def _test_saved_imap(broker: Broker, account_id: str, keyring: KeyringProvider) -> dict:
+    config = broker.store.get("connection", account_id)
+    if not config or config.get("kind") != "imap":
+        raise SystemExit(f"No saved IMAP source named {account_id}")
+    secret_name = config.get("secret_name")
+    if not secret_name:
+        raise SystemExit("Saved IMAP connector secret is unavailable")
+    try:
+        secret = keyring.get_secret(secret_name)
+    except Exception as exc:
+        raise SystemExit("Saved IMAP connector secret is unavailable") from exc
+    if not secret:
+        raise SystemExit("Saved IMAP connector secret is unavailable")
+    try:
+        source_id = config.get("source_id", account_id)
+        host = config["host"]
+        username = config["username"]
+        port = config.get("port", 993)
+        mailbox = config.get("mailbox", "INBOX")
+        auth_kind = config.get("auth_kind")
+        if auth_kind == "google_oauth":
+            provider = GoogleOAuthTokenProvider.from_keychain_secret(secret)
+            adapter = IMAPEmailAdapter(
+                source_id,
+                host,
+                username,
+                None,
+                port,
+                mailbox,
+                None,
+                provider,
+            )
+        else:
+            value = secret.decode()
+            adapter = _imap_adapter(
+                source_id,
+                host,
+                username,
+                port,
+                mailbox,
+                value,
+                auth_kind == "oauth2",
+            )
+    except GoogleOAuthConfigurationError as exc:
+        raise SystemExit("Saved Google OAuth state is invalid") from exc
+    except GoogleOAuthTokenError as exc:
+        raise SystemExit("Saved Google OAuth token refresh failed") from exc
+    except GoogleOAuthError as exc:
+        raise SystemExit("Saved Google OAuth state is invalid") from exc
+    except (KeyError, UnicodeDecodeError, TypeError, ValueError) as exc:
+        raise SystemExit("Saved IMAP connector configuration is invalid") from exc
+    try:
+        adapter.check_connection()
+    except IMAPAdapterError as exc:
+        raise SystemExit(str(exc)) from exc
+    except Exception as exc:
+        raise SystemExit("IMAP connection check failed") from exc
+    return config
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -69,6 +391,22 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="store an OAuth2 bearer token instead of an IMAP password",
     )
+    gmail = sub.add_parser(
+        "email-add-gmail", help="configure Gmail through a Google Desktop OAuth client"
+    )
+    gmail.add_argument("account_id")
+    gmail.add_argument("username")
+    gmail.add_argument(
+        "--client-secrets",
+        required=True,
+        help="path to a user-supplied Google Cloud Desktop client JSON",
+    )
+    gmail.add_argument("--label")
+    gmail.add_argument("--mailbox", default="INBOX")
+    email_test = sub.add_parser(
+        "email-test", help="test a saved read-only IMAP account"
+    )
+    email_test.add_argument("account_id")
     messages = sub.add_parser(
         "messages-add", help="configure the local macOS Messages database"
     )
@@ -171,36 +509,56 @@ def main(argv=None) -> int:
                 KeyringProvider().delete_secret(config["secret_name"])
             except Exception as exc:
                 raise SystemExit(
-                    f"Could not remove Keychain secret; source remains configured: {exc}"
-                )
+                    "Could not remove Keychain secret; source remains configured"
+                ) from exc
         broker.remove_source(args.source_id)
         print(f"Removed source {args.source_id}")
     elif args.command == "email-add":
         keyring = KeyringProvider()
-        secret_name = (
-            f"imap:{Path(args.db).expanduser().absolute().as_posix()}:{args.account_id}"
-        )
-        password = getpass.getpass(
+        secret = getpass.getpass(
             f"IMAP {'OAuth2 token' if args.oauth2 else 'password'} for {args.username}@{args.host} (stored in Keychain): "
         )
-        keyring.set_secret(secret_name, password.encode())
-        broker.store.put(
-            "connection",
+        config = _configure_imap(
+            broker,
+            args.db,
             args.account_id,
-            {
-                "source_id": args.account_id,
-                "kind": "imap",
-                "auth_kind": "oauth2" if args.oauth2 else "password",
-                "label": args.label or args.account_id,
-                "host": args.host,
-                "username": args.username,
-                "port": args.port,
-                "mailbox": args.mailbox,
-                "secret_name": secret_name,
-            },
+            args.host,
+            args.username,
+            args.port,
+            args.mailbox,
+            secret,
+            args.oauth2,
+            args.label,
+            keyring,
         )
-        broker.add_source(args.account_id, "email", args.label or args.account_id)
-        print(f"Configured read-only IMAP source {args.account_id}")
+        print(
+            "Configured read-only IMAP source "
+            f"{config['source_id']} ({config['host']}:{config['port']}/"
+            f"{config['mailbox']}, {config['username']}, {config['auth_kind']})"
+        )
+    elif args.command == "email-add-gmail":
+        config = _configure_gmail(
+            broker,
+            args.db,
+            args.account_id,
+            args.username,
+            args.client_secrets,
+            args.mailbox,
+            args.label,
+        )
+        print(
+            "Configured read-only Gmail source "
+            f"{config['source_id']} ({config['host']}:{config['port']}/"
+            f"{config['mailbox']}, {config['username']}, {config['auth_kind']})"
+        )
+    elif args.command == "email-test":
+        config = _test_saved_imap(broker, args.account_id, KeyringProvider())
+        print(
+            "Read-only IMAP source is reachable "
+            f"{config['source_id']} ({config['host']}:{config.get('port', 993)}/"
+            f"{config.get('mailbox', 'INBOX')}, {config['username']}, "
+            f"{config.get('auth_kind', 'password')})"
+        )
     elif args.command == "messages-add":
         broker.store.put(
             "connection",
@@ -281,26 +639,16 @@ def main(argv=None) -> int:
             host = input("IMAP host: ").strip()
             username = input("Username: ").strip()
             password = getpass.getpass("IMAP password (stored in Keychain): ")
-            keyring = KeyringProvider()
-            secret_name = (
-                f"imap:{Path(args.db).expanduser().absolute().as_posix()}:{account_id}"
-            )
-            keyring.set_secret(secret_name, password.encode())
-            broker.store.put(
-                "connection",
+            _configure_imap(
+                broker,
+                args.db,
                 account_id,
-                {
-                    "source_id": account_id,
-                    "kind": "imap",
-                    "label": account_id,
-                    "host": host,
-                    "username": username,
-                    "port": 993,
-                    "mailbox": "INBOX",
-                    "secret_name": secret_name,
-                },
+                host,
+                username,
+                993,
+                "INBOX",
+                password,
             )
-            broker.add_source(account_id, "email", account_id)
         if input("Configure local Mac Messages access? [y/N] ").strip().lower() == "y":
             database = (
                 input("Messages chat.db path (blank for default): ").strip() or None

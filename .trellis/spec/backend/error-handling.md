@@ -20,8 +20,9 @@ class CredentialUseError(BrokerError): ...
   expired, or mismatched handles.
 - Provider modules use provider-local errors where the broker hierarchy is not
   appropriate: `ChromeImportError`, `MessagesUnavailable`, `KeyError` for an
-  adapter lookup miss, and `RuntimeError` for unavailable credential stores or
-  adapter configuration.
+  adapter lookup miss, `GoogleOAuthError` for OAuth setup/exchange failures,
+  and `RuntimeError` for unavailable credential stores or adapter
+  configuration.
 
 ## Validation and Propagation
 
@@ -64,7 +65,8 @@ class CredentialUseError(BrokerError): ...
 ## Common Mistakes to Avoid
 
 - Returning passwords, tokens, message bodies, OTPs, or raw request payloads in
-  error messages.
+  error messages. An OTP is permitted only in the successful response of the
+  separately scoped `email.otp` use case.
 - Catching `Exception` around broker authorization and continuing with data
   access.
 - Moving business validation into only `cli.py` or `server.py`, which would
@@ -74,6 +76,13 @@ class CredentialUseError(BrokerError): ...
 - Assuming every parse failure can be ignored. The few existing fallback
   parses (`imap_adapter._date`, message dates) are intentionally lossy provider
   normalization, not a general convention.
+- Including a Google authorization code, refresh token, access token, client
+  secret, or provider response body in an exception. OAuth failures must use a
+  fixed operator-facing message and preserve the dependency exception only as
+  a private cause.
+- Treating a non-exception IMAP `NO` or `BAD` return as success. Both password
+  login and XOAUTH2 authenticate calls must explicitly require `OK` before
+  selecting a mailbox.
 
 ## Representative Tests
 

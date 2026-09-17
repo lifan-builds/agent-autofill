@@ -54,9 +54,15 @@ or `token` before encrypting the remaining dictionary.
   tokens, Fernet keys, or one-time credential handles;
 - full email/message bodies outside the narrowly authorized response that
   requested the content;
-- OTP values (see the existing contract mismatch below);
+- Real OTP values in audit, diagnostics, errors, screenshots, or
+  documentation. Deterministic synthetic OTPs may appear only in focused
+  response/redaction tests. The one response exception is an authenticated,
+  explicitly scoped `email.otp` request; that response is not a logging
+  surface.
 - raw search text, which can itself contain private information;
 - plaintext encrypted-store values or user-exported password CSV rows.
+- Google OAuth authorization codes, refresh tokens, access tokens, client
+  secrets, and token-endpoint response bodies.
 
 The prohibition applies to audit records, diagnostic stdout/stderr, exceptions,
 tests containing real user data, fixtures, screenshots, and documentation. A
@@ -64,10 +70,10 @@ one-time credential handle is returned only by its explicit authorized MCP
 operation and must not be copied into audit or error output. Likewise,
 authorized message bodies are response data, not diagnostic logging.
 
-Project guidance also prohibits returning OTPs in MCP responses. The current
-`request_auth_code` tool does return a code and has synthetic-value tests; this
-is an existing contract mismatch, not a convention to copy or broaden. Resolve
-it through an explicit product decision in a separate task.
+The `request_auth_code` tool intentionally returns one recent target-bound OTP
+after transport authentication and an active `email.otp` grant succeed. This
+is a narrow information response, not permission to include OTPs in audits,
+errors, listings, or unrelated tools.
 
 ## Current Level/Format Policy
 

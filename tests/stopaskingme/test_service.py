@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 import pytest
 from stopaskingme.service import Broker, AuthorizationError, BrokerError
 from stopaskingme.models import EmailMessage, TextMessage
+from stopaskingme.storage import Store
 
 
 def setup():
@@ -62,7 +63,18 @@ def test_otp_is_separate_and_not_logged():
     b.grant("codex", "email.otp", "mail1", "example.com", "login")
     out = b.request_auth_code("codex", "mail1", "example.com", "login")
     assert out["code"] == "123456"
+    assert out["provenance"] == {
+        "source": "email",
+        "account_id": "mail1",
+        "message_id": "m1",
+        "received_at": b.email["mail1"][0].received_at,
+    }
+    assert "expires_in" not in out
     assert "123456" not in str(b.store.audits())
+    rows = b.store.db.execute(
+        "select namespace,key,value from kv where namespace like 'otp-%'"
+    ).fetchall()
+    assert "123456" not in str(rows)
 
 
 def test_otp_ambiguity_rejected():
@@ -92,6 +104,30 @@ def test_otp_is_one_time_and_agent_revocation_is_immediate():
     b.revoke_agent("codex2")
     with pytest.raises(AuthorizationError):
         b.search_email("codex2", "mail1", "login")
+
+
+def test_otp_consumption_is_shared_across_broker_instances(tmp_path):
+    path = tmp_path / "broker.sqlite"
+    key = b"p" * 32
+    first = Broker(Store(path, key=key))
+    second = Broker(Store(path, key=key))
+    message = EmailMessage(
+        "m1",
+        "mail1",
+        "no-reply@example.com",
+        "Login code for example.com",
+        "Your code is 123456",
+        datetime.now(timezone.utc).isoformat(),
+    )
+    for broker in (first, second):
+        broker.add_source("mail1", "email", "Personal")
+        broker.email["mail1"] = [message]
+    first.grant("codex", "email.otp", "mail1", "example.com", "login")
+
+    first.request_auth_code("codex", "mail1", "example.com", "login")
+
+    with pytest.raises(BrokerError, match="already consumed"):
+        second.request_auth_code("codex", "mail1", "example.com", "login")
 
 
 def test_otp_requires_target_origin_binding():
@@ -139,4 +175,54 @@ def test_source_removal_revokes_local_route():
     b.remove_source("mail1")
     assert b.list_sources() == []
     with pytest.raises(AuthorizationError):
+        b.search_email("codex", "mail1", "login")
+
+
+def test_source_removal_blocks_new_wildcard_grants_from_using_memory_mail():
+    b = setup()
+    b.remove_source("mail1")
+    b.grant("codex", "email.search", "*", None, None)
+    with pytest.raises(BrokerError, match="not configured"):
+        b.search_email("codex", "mail1", "login")
+
+
+@pytest.mark.parametrize(
+    "binding_text, should_match",
+    [
+        ("Visit https://example.com/login to finish", True),
+        ("Sender: no-reply@example.com", True),
+        ("Visit https://notexample.com/login to finish", False),
+        ("Visit https://example.com.evil/login to finish", False),
+    ],
+)
+def test_otp_hostname_binding_requires_exact_token_boundaries(
+    binding_text, should_match
+):
+    b = setup()
+    b.email["mail1"] = [
+        EmailMessage(
+            "binding",
+            "mail1",
+            "no-reply@sender.test",
+            "Authentication code",
+            f"{binding_text}; your code is 123456",
+            datetime.now(timezone.utc).isoformat(),
+        )
+    ]
+    b.grant("codex", "email.otp", "mail1", "https://example.com", "login")
+    if should_match:
+        assert b.request_auth_code(
+            "codex", "mail1", "https://example.com", "login"
+        )["code"] == "123456"
+    else:
+        with pytest.raises(BrokerError, match="not bound"):
+            b.request_auth_code("codex", "mail1", "https://example.com", "login")
+
+
+def test_source_removal_tombstones_unavailable_source_against_memory_fallback():
+    b = setup()
+    b.mark_email_unavailable("mail1")
+    b.remove_source("mail1")
+    b.grant("codex", "email.search", "*", None, None)
+    with pytest.raises(BrokerError, match="not configured"):
         b.search_email("codex", "mail1", "login")

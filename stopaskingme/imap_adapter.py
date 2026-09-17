@@ -4,13 +4,33 @@ Credentials are supplied by a caller that owns them (normally Keychain). This
 adapter intentionally has no send or mutation methods.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from email import message_from_bytes
 from email.header import decode_header, make_header
 from email.utils import parsedate_to_datetime
 import imaplib
 from .models import EmailMessage
+
+
+class IMAPAdapterError(RuntimeError):
+    """Base class for safe, operator-facing IMAP failures."""
+
+
+class IMAPConnectionError(IMAPAdapterError):
+    """The TLS connection could not be established."""
+
+
+class IMAPAuthenticationError(IMAPAdapterError):
+    """The configured password or bearer token was rejected."""
+
+
+class IMAPMailboxError(IMAPAdapterError):
+    """The configured mailbox could not be selected read-only."""
+
+
+class IMAPConfigurationError(IMAPAdapterError):
+    """The adapter has no usable connector secret."""
 
 
 def _header(value: str | None) -> str:
@@ -47,30 +67,90 @@ class IMAPEmailAdapter:
     account_id: str
     host: str
     username: str
-    password: str | None = None
+    password: str | None = field(default=None, repr=False)
     port: int = 993
     mailbox: str = "INBOX"
-    oauth2_token: str | None = None
+    oauth2_token: str | None = field(default=None, repr=False)
+    oauth_provider: object | None = field(default=None, repr=False)
+    token_provider: object | None = field(default=None, repr=False)
+
+    def _current_oauth2_token(self) -> str | None:
+        provider = (
+            self.oauth_provider
+            if self.oauth_provider is not None
+            else self.token_provider
+        )
+        if provider is not None:
+            try:
+                getter = getattr(provider, "get_access_token", None)
+                if getter is None:
+                    getter = getattr(provider, "access_token", None)
+                if getter is None:
+                    raise TypeError("OAuth provider has no access-token method")
+                token = getter() if callable(getter) else getter
+            except Exception as exc:
+                # Provider exceptions can contain an HTTP response or token;
+                # translate them before they reach CLI, MCP, or audit output.
+                raise IMAPAuthenticationError(
+                    "IMAP OAuth authentication failed"
+                ) from exc
+            if not isinstance(token, str) or not token:
+                raise IMAPAuthenticationError("IMAP OAuth authentication failed")
+            return token
+        return self.oauth2_token
 
     def _connect(self):
-        conn = imaplib.IMAP4_SSL(self.host, self.port)
-        if self.oauth2_token:
-
-            def auth(_):
-                return f"user={self.username}\1auth=Bearer {self.oauth2_token}\1\1".encode()
-
-            conn.authenticate("XOAUTH2", auth)
-        elif self.password is not None:
-            conn.login(self.username, self.password)
-        else:
-            raise RuntimeError(
+        oauth2_token = self._current_oauth2_token()
+        if not oauth2_token and self.password is None:
+            raise IMAPConfigurationError(
                 "IMAP adapter needs a Keychain-provided password or OAuth token"
             )
-        status, _ = conn.select(self.mailbox, readonly=True)
+        try:
+            conn = imaplib.IMAP4_SSL(self.host, self.port)
+        except Exception as exc:
+            raise IMAPConnectionError("IMAP connection failed") from exc
+
+        try:
+            if oauth2_token:
+
+                def auth(_):
+                    return f"user={self.username}\1auth=Bearer {oauth2_token}\1\1".encode()
+
+                status, _ = conn.authenticate("XOAUTH2", auth)
+            else:
+                status, _ = conn.login(self.username, self.password)
+            if status != "OK":
+                raise IMAPAuthenticationError("IMAP authentication failed")
+        except Exception as exc:
+            self._logout(conn)
+            if isinstance(exc, IMAPAuthenticationError):
+                raise
+            raise IMAPAuthenticationError("IMAP authentication failed") from exc
+
+        try:
+            status, _ = conn.select(self.mailbox, readonly=True)
+        except Exception as exc:
+            self._logout(conn)
+            raise IMAPMailboxError("IMAP mailbox selection failed") from exc
         if status != "OK":
-            conn.logout()
-            raise RuntimeError(f"cannot select mailbox {self.mailbox}")
+            self._logout(conn)
+            raise IMAPMailboxError("IMAP mailbox selection failed")
         return conn
+
+    @staticmethod
+    def _logout(conn) -> None:
+        try:
+            conn.logout()
+        except Exception:
+            # A failed network connection must not mask the useful provider
+            # error or leak dependency-specific diagnostics to the caller.
+            pass
+
+    def check_connection(self) -> None:
+        """Authenticate and select the configured mailbox without reading it."""
+
+        conn = self._connect()
+        self._logout(conn)
 
     def _parse(self, uid: bytes, raw: bytes) -> EmailMessage:
         msg = message_from_bytes(raw)
@@ -100,7 +180,7 @@ class IMAPEmailAdapter:
                     result.append(self._parse(uid, raw))
             return result
         finally:
-            conn.logout()
+            self._logout(conn)
 
     def recent(self, max_age_seconds: int = 300) -> list[EmailMessage]:
         conn = self._connect()
@@ -125,7 +205,7 @@ class IMAPEmailAdapter:
                         result.append(msg)
             return result
         finally:
-            conn.logout()
+            self._logout(conn)
 
     def get(self, message_id: str) -> EmailMessage:
         conn = self._connect()
@@ -136,4 +216,4 @@ class IMAPEmailAdapter:
                 raise KeyError(message_id)
             return self._parse(message_id.encode(), raw)
         finally:
-            conn.logout()
+            self._logout(conn)

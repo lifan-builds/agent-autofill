@@ -45,12 +45,30 @@ def _origin_matches(left: str | None, right: str | None) -> bool:
     return a == b or (not a[0] or not b[0]) and a[1:] == b[1:]
 
 
+def _hostname_token_matches(text: str, hostname: str) -> bool:
+    """Match a hostname as a complete token in provider text.
+
+    URL and email delimiters such as ``/``, ``?``, ``@``, ``<`` and ``>`` are
+    valid boundaries. Hostname characters are not, so ``notexample.com`` and
+    ``example.com.evil`` cannot accidentally bind an OTP to ``example.com``.
+    """
+
+    if not hostname:
+        return False
+    boundary = r"A-Za-z0-9_.-"
+    pattern = rf"(?<![{boundary}]){re.escape(hostname)}(?![{boundary}])"
+    return re.search(pattern, text, flags=re.IGNORECASE) is not None
+
+
 class Broker:
     def __init__(self, store: Store | None = None):
         self.store = store or Store()
+        self.store.purge_legacy_otp_markers()
         self.email: dict[str, list[EmailMessage]] = {}
         self.texts: list[TextMessage] = []
         self.email_adapters: dict[str, object] = {}
+        self.unavailable_email_sources: set[str] = set()
+        self.removed_email_sources: set[str] = set()
         self.message_adapters: dict[str, object] = {}
         self.sources: dict[str, dict] = {}
         for row in self.store.db.execute("select key from kv where namespace='source'"):
@@ -59,6 +77,7 @@ class Broker:
                 self.sources[row["key"]] = item
 
     def add_source(self, source_id: str, kind: str, label: str) -> None:
+        self.removed_email_sources.discard(source_id)
         self.sources[source_id] = {"source_id": source_id, "kind": kind, "label": label}
         self.store.put("source", source_id, self.sources[source_id])
 
@@ -66,7 +85,14 @@ class Broker:
         self, account_id: str, adapter: object, label: str | None = None
     ) -> None:
         self.email_adapters[account_id] = adapter
+        self.unavailable_email_sources.discard(account_id)
+        self.removed_email_sources.discard(account_id)
         self.add_source(account_id, "email", label or account_id)
+
+    def mark_email_unavailable(self, account_id: str) -> None:
+        """Keep a saved source visible while refusing unbacked reads."""
+
+        self.unavailable_email_sources.add(account_id)
 
     def register_message_adapter(
         self, source_id: str, adapter: object, label: str | None = None
@@ -75,8 +101,13 @@ class Broker:
         self.add_source(source_id, "messages", label or source_id)
 
     def remove_source(self, source_id: str) -> None:
+        # Keep a tombstone even when the persisted source was unavailable and
+        # no adapter was reconstructed. This prevents stale in-memory fallback
+        # messages from becoming readable again after removal.
+        self.removed_email_sources.add(source_id)
         self.sources.pop(source_id, None)
         self.email_adapters.pop(source_id, None)
+        self.unavailable_email_sources.discard(source_id)
         self.message_adapters.pop(source_id, None)
         self.store.db.execute(
             "delete from kv where namespace in ('source','connection') and key=?",
@@ -354,6 +385,21 @@ class Broker:
     def list_sources(self):
         return list(self.sources.values())
 
+    def _ensure_email_source(self, account_id: str) -> object | None:
+        if account_id in self.removed_email_sources:
+            raise BrokerError("email account is not configured")
+        if account_id in self.unavailable_email_sources:
+            raise BrokerError("email source is unavailable; run email-test")
+        if account_id in self.email_adapters:
+            return self.email_adapters[account_id]
+        if account_id in self.email:
+            if self.sources.get(account_id, {}).get("kind") not in (None, "email"):
+                raise BrokerError("email account is not configured")
+            return None
+        if self.sources.get(account_id, {}).get("kind") == "email":
+            raise BrokerError("email source is unavailable; run email-test")
+        raise BrokerError("email account is not configured")
+
     def list_profile_fields(self):
         return [
             {
@@ -403,14 +449,15 @@ class Broker:
     def search_email(self, agent_id, account_id, query, limit=20):
         limit = _bounded_limit(limit)
         self._authorized(agent_id, "email.search", account_id)
+        adapter = self._ensure_email_source(account_id)
         q = query.lower()
         rows = [
             m
             for m in self.email.get(account_id, [])
             if q in (m.subject + " " + m.sender + " " + m.body).lower()
         ][:limit]
-        if account_id in self.email_adapters:
-            rows = self.email_adapters[account_id].search(query, limit)
+        if adapter is not None:
+            rows = adapter.search(query, limit)
         self.store.audit(
             agent_id,
             "email.search",
@@ -429,8 +476,9 @@ class Broker:
 
     def get_email_message(self, agent_id, account_id, message_id):
         self._authorized(agent_id, "email.read", account_id)
-        if account_id in self.email_adapters:
-            m = self.email_adapters[account_id].get(message_id)
+        adapter = self._ensure_email_source(account_id)
+        if adapter is not None:
+            m = adapter.get(message_id)
             self.store.audit(
                 agent_id,
                 "email.read",
@@ -467,20 +515,27 @@ class Broker:
         if max_age_seconds < 1 or max_age_seconds > 3600:
             raise BrokerError("max_age_seconds must be between 1 and 3600 seconds")
         self._authorized(agent_id, "email.otp", account_id, target_origin, purpose)
+        self.store.purge_legacy_otp_markers()
+        adapter = self._ensure_email_source(account_id)
         now = datetime.now(timezone.utc)
         candidates = []
         messages = (
-            self.email_adapters[account_id].recent(max_age_seconds)
-            if account_id in self.email_adapters
-            and hasattr(self.email_adapters[account_id], "recent")
+            adapter.recent(max_age_seconds)
+            if adapter is not None and hasattr(adapter, "recent")
             else self.email.get(account_id, [])
         )
         for m in messages:
-            age = (now - datetime.fromisoformat(m.received_at)).total_seconds()
+            received_at = datetime.fromisoformat(m.received_at)
+            if received_at.tzinfo is None:
+                received_at = received_at.replace(tzinfo=timezone.utc)
+            age = (now - received_at).total_seconds()
             if 0 <= age <= max_age_seconds:
                 codes = re.findall(r"\b\d{4,8}\b", m.body)
                 candidates.extend((m, c) for c in codes)
-        domain = (urlparse(target_origin).hostname or target_origin).lower()
+        parsed_origin = urlparse(
+            target_origin if "://" in target_origin else "//" + target_origin
+        )
+        domain = (parsed_origin.hostname or "").lower().rstrip(".")
         if len(candidates) != 1:
             raise BrokerError(
                 "no unambiguous recent authentication code associated with target origin"
@@ -488,8 +543,10 @@ class Broker:
         bound = [
             item
             for item in candidates
-            if domain
-            in (item[0].sender + " " + item[0].subject + " " + item[0].body).lower()
+            if _hostname_token_matches(
+                item[0].sender + " " + item[0].subject + " " + item[0].body,
+                domain,
+            )
         ]
         if len(bound) != 1:
             raise BrokerError(
@@ -497,21 +554,32 @@ class Broker:
             )
         candidates = bound
         m, code = candidates[0]
-        used_key = f"{agent_id}:{account_id}:{m.message_id}:{code}"
-        if self.store.get("otp-used", used_key):
+        used_key = hashlib.sha256(
+            f"{agent_id}\0{account_id}\0{m.message_id}".encode()
+        ).hexdigest()
+        if not self.store.put_if_absent(
+            "otp-consumed", used_key, {"used_at": now_iso()}
+        ):
             raise BrokerError("authentication code already consumed")
-        self.store.put("otp-used", used_key, {"used_at": now_iso()})
         self.store.audit(
             agent_id,
             "email.otp",
             account_id,
             now_iso(),
-            {"message_id": m.message_id, "target_origin": target_origin},
+            {
+                "message_id": m.message_id,
+                "target_origin": target_origin,
+                "purpose": purpose,
+            },
         )
         return {
             "code": code,
-            "expires_in": 60,
-            "provenance": {"account_id": account_id, "message_id": m.message_id},
+            "provenance": {
+                "source": "email",
+                "account_id": account_id,
+                "message_id": m.message_id,
+                "received_at": m.received_at,
+            },
         }
 
     def search_messages(self, agent_id, conversation_scope, query, limit=20):
