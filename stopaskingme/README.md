@@ -18,8 +18,9 @@ The database key is stored in the operating-system credential store (Keychain
 on macOS). IMAP passwords are stored there as separate entries. Chrome login
 metadata is read from a read-only database snapshot; actual passwords are
 accepted only from a user-exported CSV after an explicit acknowledgement and
-are encrypted immediately. The broker has no password retrieval, send, delete,
-or browser-submit operation.
+are encrypted immediately. The broker has no unscoped password retrieval,
+send/delete, or browser-submit operation; authenticated field-selective
+credential and financial reads are available under matching grants.
 
 For a password cold start, use Chrome Password Manager's Export passwords
 action, keep the CSV local, run `chrome import --allow-password-import`, and

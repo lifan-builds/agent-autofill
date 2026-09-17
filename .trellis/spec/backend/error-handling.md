@@ -17,7 +17,10 @@ class CredentialUseError(BrokerError): ...
 - Raise `AuthorizationError` when a valid request lacks an active grant or
   violates origin/purpose restrictions.
 - Raise `CredentialUseError` for invalid credential-use requests and consumed,
-  expired, or mismatched handles.
+  expired, or mismatched handles, or when a requested credential record is
+  missing. Field-selective credential and financial reads must raise a broker
+  or authorization error for missing records/fields or failed scopes and must
+  never include a raw value in that error.
 - Provider modules use provider-local errors where the broker hierarchy is not
   appropriate: `ChromeImportError`, `MessagesUnavailable`, `KeyError` for an
   adapter lookup miss, `GoogleOAuthError` for OAuth setup/exchange failures,
@@ -52,6 +55,9 @@ class CredentialUseError(BrokerError): ...
 - Do not emit partial success when a security-sensitive prerequisite fails.
   For example, `source-remove` leaves the source configured if its Keychain
   secret could not be removed.
+- `write_records` validates every entry and its grant before committing any
+  entry. A failed validation, missing confirmation, failed grant, or storage
+  error returns one safe error and leaves the batch uncommitted.
 
 ## Resource Cleanup
 
@@ -69,6 +75,9 @@ class CredentialUseError(BrokerError): ...
   separately scoped `email.otp` use case.
 - Catching `Exception` around broker authorization and continuing with data
   access.
+- Returning a full credential or financial map when the caller requested only
+  selected fields. Successful field reads are the only response surface that
+  may contain the requested raw sensitive values.
 - Moving business validation into only `cli.py` or `server.py`, which would
   leave direct `Broker` callers unprotected.
 - Treating adapter `KeyError` as a server failure before other adapters and the

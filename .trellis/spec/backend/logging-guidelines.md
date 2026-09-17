@@ -24,10 +24,18 @@ has succeeded. Current records contain:
   `message_id`, `target_origin`, or purpose;
 - a SHA-256 `query_hash` instead of raw email/message search text.
 
+Approved record writes and sensitive field reads audit only record type/id,
+selected field ids, target origin/purpose, status, and provenance metadata.
+The raw credential/password or financial `values` map is never sent to
+`Store.audit`.
+
 Examples are in `Broker.request_profile_fields`, `search_email`,
-`request_auth_code`, `search_messages`, and `request_credential_use`.
+`request_auth_code`, `search_messages`, `request_credential_use`,
+`write_records`, `request_credential_fields`, and
+`request_financial_fields`.
 `Store.audit` defensively drops metadata keys named `body`, `code`, `password`,
-or `token` before encrypting the remaining dictionary.
+or `token` before encrypting the remaining dictionary, including nested
+occurrences.
 
 ## MCP Transport Output
 
@@ -63,6 +71,12 @@ or `token` before encrypting the remaining dictionary.
 - plaintext encrypted-store values or user-exported password CSV rows.
 - Google OAuth authorization codes, refresh tokens, access tokens, client
   secrets, and token-endpoint response bodies.
+
+Website credential and financial values are allowed only in the successful
+response of an authenticated, field-selective request whose grant and
+record-level origin/purpose scopes pass. That response exception does not
+permit copying values into audits, listings, errors, diagnostics, fixtures,
+screenshots, or documentation.
 
 The prohibition applies to audit records, diagnostic stdout/stderr, exceptions,
 tests containing real user data, fixtures, screenshots, and documentation. A

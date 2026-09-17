@@ -77,5 +77,6 @@ docs/stopaskingme.md     # setup and operation documentation
   values and redacted audit metadata.
 - `stopaskingme/imap_adapter.py` and `stopaskingme/messages_adapter.py`:
   read-only provider adapters implementing the contracts in `adapters.py`.
-- `tests/stopaskingme/test_transport.py`: verifies the public MCP surface does
-  not acquire mutating or secret-returning tools.
+- `tests/stopaskingme/test_transport.py`: verifies the public MCP surface keeps
+  writes behind explicit confirmation and grant checks, and keeps sensitive
+  reads field-selective and authenticated.

@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Review encryption, atomic writes, compatibility, and lifecycle"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Review safe refusal paths and no partial success"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Review sensitive-output and audit redaction"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Review authorization, scope, response minimization, and tests"}
+{"file":".trellis/tasks/09-16-persistent-email-and-form-suggestions/research/current-code.md","reason":"Compare the implementation with the evidenced baseline"}

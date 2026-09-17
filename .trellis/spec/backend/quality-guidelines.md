@@ -13,9 +13,12 @@ StopAskingMe is local-first and information-only. Changes must preserve:
   connector credentials;
 - loopback-only local review surfaces;
 - read-only email, Messages, and browser-source integrations;
-- no password-returning MCP tool, outbound messaging, browser control, or form
-  submission without a new explicit product decision. The scoped
-  `request_auth_code` operation is the explicit exception for one recent OTP.
+- no unscoped password-returning MCP tool, outbound messaging, browser control,
+  or form submission without a new explicit product decision. The scoped
+  `request_auth_code` operation is the explicit exception for one recent OTP;
+  `request_credential_fields` and `request_financial_fields` may return only
+  caller-selected values after authentication, grant, record-scope, origin,
+  purpose, expiry, and revocation checks succeed.
 
 ## Required Patterns
 
@@ -25,7 +28,8 @@ StopAskingMe is local-first and information-only. Changes must preserve:
 - Bound caller-controlled collection/search sizes before querying an adapter.
 - Return only the minimum data required. Credential listing omits passwords;
   credential use returns a short-lived, origin-bound handle rather than the
-  password; profile listing omits values.
+  password; profile and financial listings omit values. The direct credential
+  and financial field-read tools return only the requested values.
 - Record provenance for returned profile fields, email/messages, OTPs, and
   credential-use handles.
 - Keep secrets out of audit metadata and error text. Hash search terms rather
@@ -38,14 +42,18 @@ StopAskingMe is local-first and information-only. Changes must preserve:
 
 ## Forbidden Patterns
 
-- MCP tools named or behaving like `get_password`, `send_message`, or
-  `submit_form` under the current product scope.
+- MCP tools named or behaving like an unscoped `get_password`, `send_message`,
+  or `submit_form` under the current product scope. Website credential and
+  financial reads are permitted only through the field-selective, authenticated
+  and grant-scoped operations described above.
 - Logging, fixture-writing, or documenting real passwords, mailbox tokens,
   agent tokens, OTPs, Messages database copies, or credential handles. The
   explicit credential-use response may return its short-lived handle to the
-  authenticated requester, but must not duplicate it elsewhere. Synthetic
-  OTP fixtures are acceptable when they never leave the successful response
-  assertion.
+  authenticated requester, but must not duplicate it elsewhere. Successful
+  field-selective credential/financial responses may contain the requested raw
+  values, but those values must not appear in listings, audits, errors,
+  fixtures, screenshots, or documentation. Synthetic OTP fixtures are
+  acceptable when they never leave the successful response assertion.
 - Binding the Inbox review server to a non-loopback host.
 - Writing to provider-owned mailbox, Messages, or Chrome databases.
 - Storing connector credentials in the encrypted SQLite database instead of
@@ -59,9 +67,10 @@ StopAskingMe is local-first and information-only. Changes must preserve:
 `request_auth_code` may return one recent target-bound OTP only after transport
 authentication and an active `email.otp` grant for the account, origin, and
 purpose succeed. The value remains transient and must not be persisted,
-audited, or copied to diagnostics. This exception does not expand the
-information-only surface into password retrieval, browser control, or form
-submission.
+audited, or copied to diagnostics. This OTP exception does not expand the
+information-only surface into browser control or form submission. Website
+passwords and financial values have a separate field-selective response path
+that requires their own authenticated read grant and record scope.
 
 ## Scenario: Generic IMAP Connection and Scoped OTP Retrieval
 
@@ -187,6 +196,109 @@ Correct:
 marker_id = sha256(f"{agent_id}\0{account_id}\0{message_id}".encode()).hexdigest()
 if not store.put_if_absent("otp-consumed", marker_id, marker):
     raise BrokerError("authentication code already consumed")
+```
+
+## Scenario: Approved Sensitive Records and Scoped Field Reads
+
+### 1. Scope / Trigger
+
+Apply this contract when changing reusable profile writes, website credentials,
+payment/financial records, metadata listings, record deletion, or their MCP
+tools. The flow crosses transport authentication, grants, record scopes,
+encrypted persistence, audit redaction, CLI administration, and the Inbox.
+
+### 2. Signatures
+
+```text
+write_records(agent_id, target_origin, purpose, confirmed=true, entries)
+request_credential_fields(agent_id, credential_id, field_ids, target_origin, purpose)
+request_financial_fields(agent_id, record_id, field_ids, target_origin, purpose)
+stopaskingme --db DB record-delete profile|credential|financial RECORD_ID
+```
+
+Record namespaces are `profile`, `credential`, and `financial`; no plaintext
+table or schema migration is introduced. Financial kinds are `payment_card`,
+`bank_account`, `financial_account`, and `custom_financial`.
+
+### 3. Contracts
+
+- `write_records` requires transport authentication, literal `confirmed: true`,
+  1 through 100 entries, and the matching `<type>.write` grant for every exact
+  record id. Validate the whole batch before one atomic encrypted transaction.
+- Profile records cannot carry credential, payment, token, cookie, OTP,
+  session, or handle categories. Passwords stay in `credential`; financial
+  value maps stay in `financial`.
+- Credential and financial listings expose ids, labels, field ids, scopes,
+  timestamps, sensitivity, provenance, and safe matching hints only. They never
+  expose `password` or the encrypted `values` map.
+- Field reads require transport authentication plus an active exact/wildcard
+  read grant and matching record origin/purpose scope. Return only requested
+  fields plus safe provenance; do not add a second approval parameter.
+- Normalize both URL and scheme-less origins before extracting hostnames. The
+  compatibility credential-handle path must treat `example.com` and
+  `https://example.com` as the same host while still rejecting a different
+  hostname.
+- Deletion removes the exact encrypted record and credential handles and
+  revokes exact-id read/write/use grants in the same transaction. Wildcard
+  grants remain capabilities but cannot read an absent record.
+- Audits contain ids, selected field ids, origin, purpose, and status only.
+  Recursive redaction is a defensive second boundary, not permission to send
+  raw entries to the audit layer.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Authentication missing/invalid | Transport refusal before broker access |
+| `confirmed` missing or not literal true | Safe error; no record is written |
+| Duplicate ids, unsupported type/kind, batch over 100 | Safe error; entire batch unchanged |
+| OTP/token/cookie/session/handle field or category | Reject as transient material |
+| Missing, wrong-resource, wrong-origin, wrong-purpose, expired, or revoked grant | Return no raw value and write nothing |
+| Record origin/purpose scope mismatch | Authorization refusal after grant check |
+| Requested field missing | Safe error naming only the field, never a submitted value |
+| Storage or audit insert fails | Roll back puts, deletes, grant changes, and audit together |
+| Exact record deleted | Record and credential handles disappear; exact grants are revoked |
+
+### 5. Good / Base / Bad Cases
+
+- Good: an authenticated agent writes an exactly approved card record, lists
+  only `last4` metadata, and later reads only `card_number` under a matching
+  short-lived grant.
+- Base: an older credential without scope/timestamp fields receives safe
+  read-time defaults and continues to work through both field reads and the
+  one-time handle compatibility path.
+- Bad: placing a password in a profile field, accepting `confirmed: false`,
+  returning the whole financial map, logging the request entry, or committing
+  the first item before a later entry fails validation.
+
+### 6. Tests Required
+
+- Storage tests prove encrypted cross-process persistence, nested audit
+  redaction, and rollback after an injected mid-transaction failure.
+- Service tests cover create/update/no-op, duplicate/size/type/transient
+  validation, full-batch refusal, legacy credentials, metadata redaction,
+  selective reads, missing fields, every grant failure mode, record scopes,
+  deletion, handle invalidation, and exact-grant revocation.
+- Transport tests assert authentication for every new sensitive tool and the
+  absence of a read-confirmation parameter. CLI and Inbox tests exercise exact
+  deletion and ensure full values never appear in review HTML.
+- Full pytest, Ruff, mypy, compileall, diff checks, and Trellis task validation
+  must pass before commit.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+for entry in entries:
+    store.put(entry["record_type"], entry["record_id"], entry)
+```
+
+Correct:
+
+```python
+prepared = validate_every_entry_and_grant(entries, target_origin, purpose)
+store.apply_changes(encrypted_records(prepared), [], audits=[metadata_only_audit])
 ```
 
 ## Testing Requirements

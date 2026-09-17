@@ -66,8 +66,11 @@ create table if not exists audit (
 - There is no migration runner or schema-version table. The two base tables
   are created with `create table if not exists` when `Store` opens.
 - Current writes are small and commit immediately. Multi-record atomic
-  transactions are not an established convention; connector replacement is
-  the explicit exception and uses `Store.put_many` with rollback coverage.
+  transactions are not an established convention; connector replacement and
+  approved record batches are the explicit exceptions and use
+  `Store.put_many`/`Store.apply_changes` with rollback coverage. Seal every
+  value before beginning the transaction and keep deletes in the same
+  transaction as related encrypted updates.
 - One-time consumption markers use `Store.put_if_absent`; the `kv` primary key
   rejects a second insert even when separate broker processes race.
 - Any future schema change must remain compatible with existing local database
@@ -81,8 +84,13 @@ create table if not exists audit (
   and message identifiers; never include the code in a SQLite namespace or
   key. The code itself is transient response data only.
 - Non-memory broker database files are created with mode `0600`.
-- Keep audit metadata encrypted and filtered. `Store.audit` removes the known
-  secret-bearing keys `body`, `code`, `password`, and `token` before sealing.
+- Keep audit metadata encrypted and filtered. `Store.audit` recursively removes
+  secret-bearing keys, including nested password, token, handle, card/account
+  number, security-code, and raw-value fields, before sealing.
+- Website credentials remain in the encrypted `credential` namespace and
+  payment/bank/financial records remain in the encrypted `financial` namespace;
+  neither may be flattened into profile fields. Metadata listings omit the
+  encrypted `password`/`values` maps and expose only field ids and safe hints.
 - Open Messages with a read-only URI. Never write to the user's Messages
   database or copy it into project artifacts.
 - Read Chrome databases from a temporary snapshot, close the connection in a
@@ -115,7 +123,9 @@ create table if not exists audit (
   `chrome.py` is limited to column names discovered from the database schema.
 - Reading or listing decrypted `value` envelopes outside `Store` and the
   narrowly scoped broker operations that need them.
-- Returning a stored password through broker metadata or MCP output.
+- Returning a stored password through broker metadata or an unscoped MCP
+  output. The field-selective credential read is the only website-password
+  response path.
 - Treating `create table if not exists` as a general migration system.
 - Using a normal read/write connection for Messages or reading a live Chrome
   database without taking a disposable snapshot.

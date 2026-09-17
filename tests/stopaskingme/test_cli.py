@@ -62,6 +62,35 @@ def _broker():
     return Broker(Store(":memory:", key=b"c" * 32))
 
 
+def test_record_and_financial_commands_are_available():
+    assert cli._parser().parse_args(["financial-records", "list"]).command == (
+        "financial-records"
+    )
+    parsed = cli._parser().parse_args(
+        ["record-delete", "financial", "primary-card"]
+    )
+    assert parsed.record_type == "financial"
+    assert parsed.record_id == "primary-card"
+
+
+def test_record_delete_command_deletes_the_exact_record(monkeypatch, capsys):
+    broker = _broker()
+    broker.put_financial_record(
+        "primary-card",
+        "payment_card",
+        "Primary card",
+        {"card_number": "4111111111111111"},
+    )
+    monkeypatch.setattr(cli, "_broker", lambda _path: broker)
+
+    assert (
+        cli.main(["--db", "unused.sqlite", "record-delete", "financial", "primary-card"])
+        == 0
+    )
+    assert broker.store.get("financial", "primary-card") is None
+    assert "Deleted financial record primary-card" in capsys.readouterr().out
+
+
 def test_configure_imap_checks_before_persisting_and_uses_versioned_key(monkeypatch):
     monkeypatch.setattr(cli, "IMAPEmailAdapter", FakeAdapter)
     FakeAdapter.instances = []

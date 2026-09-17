@@ -51,6 +51,69 @@ TOOLS = [
         },
     },
     {
+        "name": "list_financial_records",
+        "description": "List approved payment and financial metadata without values.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"agent_id": {"type": "string"}},
+        },
+    },
+    {
+        "name": "write_records",
+        "description": "Persist explicitly confirmed profile, credential, or financial records.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["target_origin", "purpose", "confirmed", "entries"],
+            "properties": {
+                "agent_id": {"type": "string"},
+                "target_origin": {"type": "string"},
+                "purpose": {"type": "string"},
+                "confirmed": {"type": "boolean", "const": True},
+                "entries": {"type": "array", "items": {"type": "object"}},
+            },
+        },
+    },
+    {
+        "name": "request_credential_fields",
+        "description": "Read selected credential fields under an active scoped grant.",
+        "inputSchema": {
+            "type": "object",
+            "required": [
+                "credential_id",
+                "field_ids",
+                "target_origin",
+                "purpose",
+            ],
+            "properties": {
+                "agent_id": {"type": "string"},
+                "credential_id": {"type": "string"},
+                "field_ids": {"type": "array", "items": {"type": "string"}},
+                "target_origin": {"type": "string"},
+                "purpose": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "request_financial_fields",
+        "description": "Read selected payment or financial fields under an active scoped grant.",
+        "inputSchema": {
+            "type": "object",
+            "required": [
+                "record_id",
+                "field_ids",
+                "target_origin",
+                "purpose",
+            ],
+            "properties": {
+                "agent_id": {"type": "string"},
+                "record_id": {"type": "string"},
+                "field_ids": {"type": "array", "items": {"type": "string"}},
+                "target_origin": {"type": "string"},
+                "purpose": {"type": "string"},
+            },
+        },
+    },
+    {
         "name": "search_email",
         "description": "Search an explicitly granted email account.",
         "inputSchema": {
@@ -159,6 +222,14 @@ def _call(broker: Broker, name: str, params: dict):
         "list_sources": lambda: broker.list_sources(),
         "list_profile_fields": lambda: broker.list_profile_fields(),
         "list_credentials": lambda: broker.list_credentials(),
+        "list_financial_records": lambda: broker.list_financial_records(),
+        "write_records": lambda: broker.write_records(agent, **params),
+        "request_credential_fields": lambda: broker.request_credential_fields(
+            agent, **params
+        ),
+        "request_financial_fields": lambda: broker.request_financial_fields(
+            agent, **params
+        ),
         "request_profile_fields": lambda: broker.request_profile_fields(
             agent, **params
         ),

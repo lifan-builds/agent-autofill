@@ -27,6 +27,12 @@ PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
   --db /Users/lfan/.stopaskingme.sqlite3 grant codex credential.use <credential-id> \
   --origin https://example.com --purpose form
 PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
+  --db /Users/lfan/.stopaskingme.sqlite3 grant codex credential.read <credential-id> \
+  --origin https://example.com --purpose form
+PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
+  --db /Users/lfan/.stopaskingme.sqlite3 grant codex financial.read <financial-record-id> \
+  --origin https://example.com --purpose form
+PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
   --db /Users/lfan/.stopaskingme.sqlite3 grant codex email.otp personal-mail \
   --origin https://example.test --purpose login
 ```
@@ -128,11 +134,39 @@ command = "/Users/lfan/Project/StopAskingMe/scripts/stopaskingme"
 args = ["--db", "/Users/lfan/.stopaskingme.sqlite3", "serve"]
 ```
 
-The information surface is intentionally read-only. It does not expose
-password retrieval, send/delete operations, browser control, or form submit.
-For imported credentials, `request_credential_use` returns an origin-bound,
-short-lived handle plus the username; the consuming agent owns any later
-interaction. The MCP response never contains the password.
+The information surface is intentionally local and information-only. It does
+not expose unscoped password retrieval, message send/delete operations,
+browser control, or form submit. For imported credentials, the compatibility
+`request_credential_use` operation returns an origin-bound, short-lived handle
+plus the username. New callers can request only selected website-credential or
+financial fields through `request_credential_fields` or
+`request_financial_fields`; these tools require an authenticated agent,
+matching short-lived grant, record scope, target origin, and purpose. A valid
+read grant is sufficient and does not create a second per-use approval prompt.
+Raw values appear only in that successful scoped response and are never put in
+listings, audits, errors, or documentation. The consuming agent remains
+responsible for any separate approval before browser typing or submission.
+
+After the consuming skill has obtained exact user approval for a proposal, it
+may submit the approved entries in one authenticated `write_records` call with
+`confirmed: true`. The broker validates every entry and returns metadata-only
+created/updated/unchanged statuses. Passwords and payment/financial maps must
+use their dedicated `credential` and `financial` record types rather than
+profile fields; transient OTPs, tokens, cookies, sessions, and handles are
+rejected.
+
+For local administration, list safe financial metadata or delete one record:
+
+```bash
+PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
+  --db /Users/lfan/.stopaskingme.sqlite3 financial-records list
+PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
+  --db /Users/lfan/.stopaskingme.sqlite3 record-delete financial <financial-record-id>
+```
+
+Deletion removes the encrypted record, invalidates any compatibility handle
+for that credential, and revokes grants that name the exact record. Wildcard
+category grants remain capabilities but cannot read a deleted record.
 
 To request an email OTP, the authenticated agent needs an active
 `email.otp` grant scoped to the account, target origin, and purpose. A

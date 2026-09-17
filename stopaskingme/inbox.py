@@ -11,6 +11,7 @@ def build_html(broker: Broker) -> str:
         "sources": broker.list_sources(),
         "profile_fields": broker.list_profile_fields(),
         "credentials": broker.list_credentials(),
+        "financial_records": broker.list_financial_records(),
         "agents": broker.list_agents(),
         "grants": broker.list_grants(),
         "recent_audit": broker.store.audits()[-50:],

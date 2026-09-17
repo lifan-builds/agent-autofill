@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import pytest
 from stopaskingme.service import Broker, AuthorizationError, BrokerError
 from stopaskingme.models import EmailMessage, TextMessage
@@ -226,3 +226,433 @@ def test_source_removal_tombstones_unavailable_source_against_memory_fallback():
     b.grant("codex", "email.search", "*", None, None)
     with pytest.raises(BrokerError, match="not configured"):
         b.search_email("codex", "mail1", "login")
+
+
+def _record_broker():
+    broker = Broker(Store(":memory:", key=b"r" * 32))
+    broker.grant("codex", "profile.write", "legal_name", "example.com", "form")
+    broker.grant("codex", "credential.write", "example-login", "example.com", "form")
+    broker.grant("codex", "financial.write", "primary-card", "example.com", "form")
+    return broker
+
+
+def _financial_entry(record_id="primary-card"):
+    return {
+        "record_type": "financial",
+        "record_id": record_id,
+        "kind": "payment_card",
+        "display_name": "Primary card",
+        "values": {"card_number": "4111111111111111"},
+    }
+
+
+def _expire_grants(broker, agent_id):
+    for row in broker.store.db.execute(
+        "select key,value from kv where namespace='grant'"
+    ).fetchall():
+        grant = broker.store._open(row["value"])
+        if grant["agent_id"] == agent_id:
+            grant["expires_at"] = (
+                datetime.now(timezone.utc) - timedelta(seconds=1)
+            ).isoformat()
+            broker.store.put("grant", row["key"], grant)
+
+
+def test_write_records_is_atomic_scoped_and_metadata_only():
+    broker = _record_broker()
+    result = broker.write_records(
+        "codex",
+        "https://example.com",
+        "form",
+        True,
+        [
+            {
+                "record_type": "profile",
+                "record_id": "legal_name",
+                "category": "identity",
+                "display_name": "Legal name",
+                "value": "Ada Lovelace",
+                "allowed_origins": ["https://example.com"],
+                "allowed_purposes": ["form"],
+            },
+            {
+                "record_type": "credential",
+                "record_id": "example-login",
+                "name": "Example login",
+                "origin": "https://example.com/login",
+                "username": "ada",
+                "password": "synthetic-password",
+            },
+            {
+                "record_type": "financial",
+                "record_id": "primary-card",
+                "kind": "payment_card",
+                "display_name": "Primary card",
+                "values": {
+                    "card_number": "4111111111111111",
+                    "security_code": "123",
+                },
+                "matching_hints": {"network": "Visa"},
+            },
+        ],
+    )
+
+    assert [item["status"] for item in result["records"]] == [
+        "created",
+        "created",
+        "created",
+    ]
+    assert "synthetic-password" not in str(broker.list_credentials())
+    metadata = broker.list_financial_records()[0]
+    assert metadata["matching_hints"] == {"network": "Visa", "last4": "1111"}
+    assert "values" not in metadata
+    assert "4111111111111111" not in str(metadata)
+    raw = str(broker.store.db.execute("select value from kv").fetchall())
+    assert "synthetic-password" not in raw and "4111111111111111" not in raw
+    audits = str(broker.store.audits())
+    assert "synthetic-password" not in audits and "4111111111111111" not in audits
+
+    unchanged = broker.write_records(
+        "codex",
+        "example.com",
+        "form",
+        True,
+        [
+            {
+                "record_type": "financial",
+                "record_id": "primary-card",
+                "kind": "payment_card",
+                "display_name": "Primary card",
+                "values": {
+                    "card_number": "4111111111111111",
+                    "security_code": "123",
+                },
+                "matching_hints": {"network": "Visa"},
+            }
+        ],
+    )
+    assert unchanged["records"][0]["status"] == "unchanged"
+
+    updated = broker.write_records(
+        "codex",
+        "example.com",
+        "form",
+        True,
+        [
+            {
+                "record_type": "financial",
+                "record_id": "primary-card",
+                "kind": "payment_card",
+                "display_name": "Primary card",
+                "values": {
+                    "card_number": "5555555555554444",
+                    "security_code": "321",
+                },
+                "matching_hints": {"network": "Mastercard"},
+            }
+        ],
+    )
+    assert updated["records"][0]["status"] == "updated"
+    assert broker.list_financial_records()[0]["matching_hints"]["last4"] == "4444"
+
+
+def test_write_records_rejects_confirmation_transient_fields_and_rolls_back():
+    broker = _record_broker()
+    with pytest.raises(BrokerError, match="confirmed"):
+        broker.write_records(
+            "codex",
+            "example.com",
+            "form",
+            False,
+            [
+                {
+                    "record_type": "financial",
+                    "record_id": "primary-card",
+                    "kind": "payment_card",
+                    "display_name": "Primary card",
+                    "values": {"card_number": "4111111111111111"},
+                }
+            ],
+        )
+    with pytest.raises(BrokerError, match="transient") as exc_info:
+        broker.write_records(
+            "codex",
+            "example.com",
+            "form",
+            True,
+            [
+                {
+                    "record_type": "profile",
+                    "record_id": "legal_name",
+                    "category": "identity",
+                    "display_name": "Legal name",
+                    "value": "Ada Lovelace",
+                    "otp": "synthetic-code",
+                }
+            ],
+        )
+    assert "synthetic-code" not in str(exc_info.value)
+    with pytest.raises(BrokerError, match="profile category"):
+        broker.write_records(
+            "codex",
+            "example.com",
+            "form",
+            True,
+            [
+                {
+                    "record_type": "profile",
+                    "record_id": "billing_label",
+                    "category": "payment",
+                    "display_name": "Payment",
+                    "value": "not-a-card",
+                }
+            ],
+        )
+    assert broker.store.get("profile", "legal_name") is None
+    assert broker.store.get("financial", "primary-card") is None
+
+
+def test_write_records_rejects_invalid_batches_and_grant_boundaries():
+    broker = _record_broker()
+    entry = _financial_entry()
+
+    with pytest.raises(BrokerError, match="duplicate"):
+        broker.write_records(
+            "codex", "example.com", "form", True, [entry, dict(entry)]
+        )
+    with pytest.raises(BrokerError, match="1 to 100"):
+        broker.write_records(
+            "codex", "example.com", "form", True, [entry] * 101
+        )
+    with pytest.raises(BrokerError, match="unsupported"):
+        broker.write_records(
+            "codex",
+            "example.com",
+            "form",
+            True,
+            [{**entry, "kind": "crypto_wallet"}],
+        )
+    with pytest.raises(AuthorizationError):
+        broker.write_records("codex", "other.example", "form", True, [entry])
+    with pytest.raises(AuthorizationError):
+        broker.write_records("codex", "example.com", "checkout", True, [entry])
+
+    atomic = Broker(Store(":memory:", key=b"a" * 32))
+    atomic.grant("codex", "profile.write", "legal_name", "example.com", "form")
+    with pytest.raises(AuthorizationError):
+        atomic.write_records(
+            "codex",
+            "example.com",
+            "form",
+            True,
+            [
+                {
+                    "record_type": "profile",
+                    "record_id": "legal_name",
+                    "category": "identity",
+                    "display_name": "Legal name",
+                    "value": "Ada Lovelace",
+                },
+                entry,
+            ],
+        )
+    assert atomic.store.get("profile", "legal_name") is None
+
+    expired = Broker(Store(":memory:", key=b"e" * 32))
+    expired.grant(
+        "expired", "financial.write", "primary-card", "example.com", "form"
+    )
+    _expire_grants(expired, "expired")
+    with pytest.raises(AuthorizationError):
+        expired.write_records(
+            "expired", "example.com", "form", True, [entry]
+        )
+
+    revoked = Broker(Store(":memory:", key=b"v" * 32))
+    revoked.grant(
+        "revoked", "financial.write", "primary-card", "example.com", "form"
+    )
+    revoked.revoke_agent("revoked")
+    with pytest.raises(AuthorizationError):
+        revoked.write_records(
+            "revoked", "example.com", "form", True, [entry]
+        )
+
+
+def test_direct_sensitive_reads_are_field_selective_and_delete_revokes_access():
+    broker = _record_broker()
+    broker.write_records(
+        "codex",
+        "https://example.com",
+        "form",
+        True,
+        [
+            {
+                "record_type": "credential",
+                "record_id": "example-login",
+                "name": "Example login",
+                "origin": "https://example.com",
+                "username": "ada",
+                "password": "synthetic-password",
+            },
+            {
+                "record_type": "financial",
+                "record_id": "primary-card",
+                "kind": "payment_card",
+                "display_name": "Primary card",
+                "values": {
+                    "card_number": "4111111111111111",
+                    "security_code": "123",
+                },
+            },
+        ],
+    )
+    broker.grant("codex", "credential.read", "example-login", "example.com", "form")
+    broker.grant("codex", "financial.read", "primary-card", "example.com", "form")
+
+    credential = broker.request_credential_fields(
+        "codex", "example-login", ["username"], "https://example.com", "form"
+    )
+    assert credential["username"] == "ada"
+    assert "password" not in credential
+    financial = broker.request_financial_fields(
+        "codex", "primary-card", ["card_number"], "https://example.com", "form"
+    )
+    assert financial["card_number"] == "4111111111111111"
+    assert "security_code" not in financial
+    with pytest.raises(AuthorizationError):
+        broker.request_financial_fields(
+            "codex", "primary-card", ["card_number"], "https://other.example", "form"
+        )
+
+    broker.delete_record("financial", "primary-card")
+    assert broker.store.get("financial", "primary-card") is None
+    with pytest.raises(BrokerError):
+        broker.request_financial_fields(
+            "codex", "primary-card", ["card_number"], "https://example.com", "form"
+        )
+    grants = broker.list_grants()
+    assert any(
+        item["operation"] == "financial.read"
+        and item["resource_scope"] == "primary-card"
+        and item["revoked"]
+        for item in grants
+    )
+
+
+def test_sensitive_read_refusals_and_audits_do_not_expose_values():
+    broker = Broker(Store(":memory:", key=b"s" * 32))
+    broker.put_financial_record(
+        "primary-card",
+        "payment_card",
+        "Primary card",
+        {"card_number": "4111111111111111", "security_code": "123"},
+        allowed_origins=["example.com"],
+        allowed_purposes=["form"],
+    )
+    broker.grant("codex", "financial.read", "primary-card", "example.com", "form")
+
+    with pytest.raises(BrokerError, match="unknown financial field"):
+        broker.request_financial_fields(
+            "codex", "primary-card", ["missing_field"], "example.com", "form"
+        )
+    with pytest.raises(AuthorizationError):
+        broker.request_financial_fields(
+            "codex", "primary-card", ["card_number"], "example.com", "checkout"
+        )
+
+    broker.grant(
+        "wrong-resource", "financial.read", "other-card", "example.com", "form"
+    )
+    with pytest.raises(AuthorizationError):
+        broker.request_financial_fields(
+            "wrong-resource",
+            "primary-card",
+            ["card_number"],
+            "example.com",
+            "form",
+        )
+
+    broker.grant(
+        "expired", "financial.read", "primary-card", "example.com", "form"
+    )
+    _expire_grants(broker, "expired")
+    with pytest.raises(AuthorizationError):
+        broker.request_financial_fields(
+            "expired", "primary-card", ["card_number"], "example.com", "form"
+        )
+
+    broker.grant(
+        "revoked", "financial.read", "primary-card", "example.com", "form"
+    )
+    broker.revoke_agent("revoked")
+    with pytest.raises(AuthorizationError):
+        broker.request_financial_fields(
+            "revoked", "primary-card", ["card_number"], "example.com", "form"
+        )
+
+    broker.grant(
+        "record-scope",
+        "financial.read",
+        "primary-card",
+        "example.com",
+        "other",
+    )
+    with pytest.raises(AuthorizationError, match="not allowed for record"):
+        broker.request_financial_fields(
+            "record-scope",
+            "primary-card",
+            ["card_number"],
+            "example.com",
+            "other",
+        )
+
+    result = broker.request_financial_fields(
+        "codex", "primary-card", ["card_number"], "example.com", "form"
+    )
+    assert result["card_number"] == "4111111111111111"
+    assert "4111111111111111" not in str(broker.store.audits())
+    assert "123" not in str(broker.store.audits())
+
+
+def test_legacy_credential_defaults_preserve_reads_and_one_time_handles():
+    broker = Broker(Store(":memory:", key=b"l" * 32))
+    broker.store.put(
+        "credential",
+        "legacy-login",
+        {
+            "credential_id": "legacy-login",
+            "name": "Legacy login",
+            "origin": "https://example.com/login",
+            "username": "ada",
+            "password": "synthetic-password",
+            "note": "",
+        },
+    )
+    metadata = broker.list_credentials()[0]
+    assert metadata["allowed_origins"] == ["https://example.com"]
+    assert metadata["sensitivity"] == "credential"
+
+    broker.grant(
+        "codex", "credential.read", "legacy-login", "example.com", "form"
+    )
+    broker.grant(
+        "codex", "credential.use", "legacy-login", "example.com", "form"
+    )
+    direct = broker.request_credential_fields(
+        "codex", "legacy-login", ["password"], "example.com", "form"
+    )
+    assert direct["password"] == "synthetic-password"
+    handle = broker.request_credential_use(
+        "codex", "legacy-login", "example.com", "form"
+    )
+    assert "password" not in handle
+
+    broker.delete_record("credential", "legacy-login")
+    with pytest.raises(BrokerError):
+        broker.consume_credential_handle(handle["handle"], "codex")
+    assert all(
+        grant["revoked"]
+        for grant in broker.list_grants()
+        if grant["resource_scope"] == "legacy-login"
+    )

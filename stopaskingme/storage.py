@@ -1,11 +1,80 @@
 import json
 import os
+import re
 import secrets
 import sqlite3
 import base64
 from cryptography.fernet import Fernet, InvalidToken
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
+
+
+_SECRET_AUDIT_KEY_PARTS = {
+    "access",
+    "account_number",
+    "auth_code",
+    "body",
+    "card_number",
+    "code",
+    "cookie",
+    "credential_handle",
+    "cvc",
+    "cvv",
+    "handle",
+    "number",
+    "otp",
+    "password",
+    "raw",
+    "refresh",
+    "routing_number",
+    "secret",
+    "security_code",
+    "session",
+    "token",
+    "value",
+    "values",
+}
+
+
+def _is_secret_audit_key(key: object) -> bool:
+    """Return whether an audit metadata key can carry private material."""
+
+    if not isinstance(key, str):
+        return False
+    normalized = key.replace("-", "_")
+    normalized = re.sub(
+        r"(?<=[a-z0-9])(?=[A-Z])", "_", normalized
+    ).lower()
+    parts = {part for part in normalized.split("_") if part}
+    return (
+        normalized in _SECRET_AUDIT_KEY_PARTS
+        or bool(parts & _SECRET_AUDIT_KEY_PARTS)
+        or "credential_handle" in normalized
+        or "access_token" in normalized
+        or "refresh_token" in normalized
+    )
+
+
+def _redact_audit(value: Any) -> Any:
+    """Recursively remove secret-bearing keys from audit metadata.
+
+    Audits are intentionally assembled from metadata-only values by the
+    broker.  This recursive filter is a second defensive boundary for future
+    callers and prevents a nested payload from becoming a logging escape
+    hatch.
+    """
+
+    if isinstance(value, dict):
+        return {
+            key: _redact_audit(item)
+            for key, item in value.items()
+            if isinstance(key, str) and not _is_secret_audit_key(key)
+        }
+    if isinstance(value, list):
+        return [_redact_audit(item) for item in value]
+    if isinstance(value, tuple):
+        return [_redact_audit(item) for item in value]
+    return value
 
 
 class KeyProvider:
@@ -120,7 +189,7 @@ class Store:
         )
         self.db.commit()
 
-    def put_many(self, records: list[tuple[str, str, Any]]) -> None:
+    def put_many(self, records: Iterable[tuple[str, str, Any]]) -> None:
         """Persist a small group of values atomically.
 
         Connector replacement writes the connection and its source metadata as
@@ -129,16 +198,61 @@ class Store:
         configurations behind when a write fails.
         """
 
+        self.apply_changes(records, [])
+
+    def apply_changes(
+        self,
+        records: Iterable[tuple[str, str, Any]],
+        deletes: Iterable[tuple[str, str]],
+        audits: Iterable[tuple[str, str, str, str, dict[str, Any]]] | None = None,
+    ) -> None:
+        """Apply encrypted puts and deletes in one SQLite transaction.
+
+        Values are sealed before the transaction starts.  This means a bad
+        value cannot leave an earlier item from the same batch committed, and
+        a database failure rolls back both puts and deletes together.  Optional
+        audit rows are sealed and inserted in the same transaction so a failed
+        audit write cannot leave a caller-visible mutation without its audit.
+        """
+
         sealed = [
             (namespace, key, self._seal(value))
             for namespace, key, value in records
         ]
+        delete_keys = list(deletes)
+        sealed_audits = [
+            (
+                agent_id,
+                operation,
+                resource,
+                created_at,
+                self._seal(_redact_audit(metadata)),
+            )
+            for agent_id, operation, resource, created_at, metadata in (audits or [])
+        ]
         try:
-            self.db.executemany("insert or replace into kv values (?,?,?)", sealed)
+            if sealed:
+                self.db.executemany(
+                    "insert or replace into kv values (?,?,?)", sealed
+                )
+            if delete_keys:
+                self.db.executemany(
+                    "delete from kv where namespace=? and key=?", delete_keys
+                )
+            if sealed_audits:
+                self.db.executemany(
+                    "insert into audit(agent_id,operation,resource,created_at,metadata) values(?,?,?,?,?)",
+                    sealed_audits,
+                )
             self.db.commit()
         except Exception:
             self.db.rollback()
             raise
+
+    def delete_many(self, records: Iterable[tuple[str, str]]) -> None:
+        """Delete a group of namespace/key rows atomically."""
+
+        self.apply_changes([], records)
 
     def put_if_absent(self, namespace: str, key: str, value: Any) -> bool:
         """Insert one value only when its namespace/key is unused.
@@ -189,11 +303,7 @@ class Store:
         created_at: str,
         metadata: dict[str, Any],
     ) -> None:
-        safe = {
-            k: v
-            for k, v in metadata.items()
-            if k not in {"body", "code", "password", "token"}
-        }
+        safe = _redact_audit(metadata)
         self.db.execute(
             "insert into audit(agent_id,operation,resource,created_at,metadata) values(?,?,?,?,?)",
             (agent_id, operation, resource, created_at, self._seal(safe)),

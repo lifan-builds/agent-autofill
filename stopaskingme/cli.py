@@ -379,6 +379,19 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("agents", help="list agent identities without tokens")
     creds = sub.add_parser("credentials")
     creds.add_argument("action", choices=["list"])
+    financial = sub.add_parser(
+        "financial-records",
+        aliases=["financial"],
+        help="list approved payment and financial record metadata",
+    )
+    financial.add_argument("action", choices=["list"], nargs="?", default="list")
+    record_delete = sub.add_parser(
+        "record-delete", help="delete one local profile, credential, or financial record"
+    )
+    record_delete.add_argument(
+        "record_type", choices=["profile", "credential", "financial"]
+    )
+    record_delete.add_argument("record_id")
     email = sub.add_parser("email-add", help="configure a read-only IMAP account")
     email.add_argument("account_id")
     email.add_argument("host")
@@ -500,6 +513,11 @@ def main(argv=None) -> int:
         print(json.dumps(broker.list_agents(), indent=2))
     elif args.command == "credentials":
         print(json.dumps(broker.list_credentials(), indent=2))
+    elif args.command in {"financial-records", "financial"}:
+        print(json.dumps(broker.list_financial_records(), indent=2))
+    elif args.command == "record-delete":
+        broker.delete_record(args.record_type, args.record_id)
+        print(f"Deleted {args.record_type} record {args.record_id}")
     elif args.command == "sources":
         print(json.dumps(broker.list_sources(), indent=2))
     elif args.command == "source-remove":
@@ -583,6 +601,7 @@ def main(argv=None) -> int:
                     "sources": broker.list_sources(),
                     "profile_fields": broker.list_profile_fields(),
                     "credentials": broker.list_credentials(),
+                    "financial_records": broker.list_financial_records(),
                     "grants": broker.list_grants(),
                     "recent_audit": broker.store.audits()[-20:],
                 },

@@ -2,8 +2,9 @@
 
 StopAskingMe is a local-first personal information broker for AI agents. It gives
 an authenticated MCP client one controlled surface for user-owned profile
-fields, read-only email, read-only macOS Messages, and origin-bound credential
-use without turning the agent into a password database reader.
+fields, read-only email, read-only macOS Messages, and scoped website
+credential/financial records without turning the agent into an unscoped
+password database reader.
 
 The first implementation is intentionally small and runnable:
 
@@ -35,10 +36,10 @@ The complete setup and Codex configuration are in [docs/stopaskingme.md](docs/st
 The market and architecture research is in [RESEARCH.md](RESEARCH.md).
 
 StopAskingMe is information-only. It does not submit forms, send or delete
-messages, control a browser, or expose a `get_password` tool. A credential-use
-request returns a short-lived origin-bound handle; a trusted local helper may
-consume that handle once to perform a fill without putting the password in
-agent context.
+messages, control a browser, or expose an unscoped `get_password` tool. New
+field-selective credential and financial reads return only values covered by
+an authenticated, short-lived grant and matching record scope; the consuming
+agent owns any separate browser approval.
 
 ## Development
 
