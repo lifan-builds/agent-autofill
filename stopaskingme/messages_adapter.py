@@ -50,7 +50,7 @@ class MacMessagesAdapter:
                      left join chat_message_join cmj on cmj.message_id=m.ROWID
                      left join chat c on c.ROWID=cmj.chat_id
                      where m.text like ?"""
-            args = [f"%{query}%"]
+            args: list[str | int] = [f"%{query}%"]
             if conversation_scope != "*":
                 sql += " and (c.guid=? or ('chat:' || cmj.chat_id)=?)"
                 args.extend([conversation_scope, conversation_scope])

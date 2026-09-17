@@ -1,6 +1,7 @@
-import csv, sqlite3
+import csv
+import sqlite3
 from pathlib import Path
-from stopaskingme.chrome import cold_start, read_login_metadata, read_autofill
+from stopaskingme.chrome import cold_start
 from stopaskingme.service import Broker
 from stopaskingme.storage import Store
 
