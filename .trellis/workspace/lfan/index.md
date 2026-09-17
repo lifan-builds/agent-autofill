@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 2
-- **Last Active**: 2026-09-16
+- **Total Sessions**: 3
+- **Last Active**: 2026-09-17
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~51 | Active |
+| `journal-1.md` | ~74 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 3 | 2026-09-17 | Persistent Gmail OAuth and OTP retrieval | `721aa2b`, `5e69f13` | `codex/persistent-email-otp` |
 | 2 | 2026-09-16 | Bootstrap backend guidelines | `cb366b4` | `main` |
 | 1 | 2026-09-13 | Enable Trellis Codex integration across local projects | `9239ef1` | `main` |
 <!-- @@@/auto:session-history -->

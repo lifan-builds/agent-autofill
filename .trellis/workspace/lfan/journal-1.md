@@ -49,3 +49,26 @@ Populated the StopAskingMe backend Trellis specs from current code and project g
 ### Status
 
 [OK] **Completed**
+
+
+## Session 3: Persistent Gmail OAuth and OTP retrieval
+<!-- trellis-session: v=2 fp=7fd393f0fa4d7d30 -->
+
+**Date**: 2026-09-17
+**Task**: Persistent Gmail OAuth and OTP retrieval
+**Branch**: `codex/persistent-email-otp`
+
+### Summary
+
+Implemented generic IMAP verification, Gmail Desktop OAuth with Keychain-backed refresh state, saved-source reconnect, scoped one-time OTP safeguards, and safe cleanup. Verified 47 tests, Ruff, mypy, compileall, Trellis validation, live Gmail OAuth/IMAP login, fresh-process reconnect, and read-only mailbox fetching; no unambiguous recent live OTP was available.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `721aa2b` | feat: add persistent Gmail OAuth and scoped OTP retrieval |
+| `5e69f13` | fix: clear pre-existing type and lint errors |
+
+### Status
+
+[OK] **Completed**
