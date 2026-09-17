@@ -72,3 +72,25 @@ Implemented generic IMAP verification, Gmail Desktop OAuth with Keychain-backed 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 4: Encrypted sensitive record access
+<!-- trellis-session: v=2 fp=7dbe9642b11d4236 -->
+
+**Date**: 2026-09-17
+**Task**: Encrypted sensitive record access
+**Branch**: `codex/encrypted-sensitive-records`
+
+### Summary
+
+Implemented encrypted profile, credential, and financial record batches; authenticated field-selective reads; metadata-only listings; atomic delete and grant revocation; recursive audit redaction; CLI administration; documentation and executable specs. Added full grant, rollback, persistence, legacy-compatibility, transport, Inbox, and CLI coverage; fixed scheme-less origin compatibility. Final verification: 62 pytest tests, Ruff, mypy, compileall, diff check, and Trellis validation passed.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `105f3ab` | feat: add encrypted sensitive record access |
+
+### Status
+
+[OK] **Completed**
