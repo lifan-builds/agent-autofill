@@ -116,3 +116,25 @@ Added the repository-local stopaskingme-form-memory skill and exact record-contr
 ### Status
 
 [OK] **Completed**
+
+
+## Session 6: StopAskingMe email OTP and form memory integration
+<!-- trellis-session: v=2 fp=4849a12fb5b14c9e -->
+
+**Date**: 2026-09-17
+**Task**: StopAskingMe email OTP and form memory integration
+**Branch**: `codex/encrypted-sensitive-records`
+
+### Summary
+
+Completed the parent cross-child integration review for persistent generic IMAP and Gmail OAuth, scoped one-time OTP retrieval, encrypted credential/financial records, and the repository form-memory skill. Reconciled the parent artifacts with the delivered Gmail OAuth path and live smoke evidence, confirmed exact MCP/grant/schema alignment and information-only boundaries, and marked all nine parent acceptance criteria complete. Final validation: 62 pytest tests, Ruff, mypy, compileall, skill validation, parent validation, and all three archived child validations passed. Live Gmail login, fresh-process refresh/reconnect, and read-only mailbox fetch passed; no suitable unambiguous live OTP was present in the bounded smoke window.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1db478e` | docs: complete StopAskingMe integration review |
+
+### Status
+
+[OK] **Completed**
