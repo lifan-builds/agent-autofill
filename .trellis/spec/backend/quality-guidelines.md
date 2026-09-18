@@ -225,6 +225,11 @@ table or schema migration is introduced. Financial kinds are `payment_card`,
 - `write_records` requires transport authentication, literal `confirmed: true`,
   1 through 100 entries, and the matching `<type>.write` grant for every exact
   record id. Validate the whole batch before one atomic encrypted transaction.
+- An update is a complete record replacement, not a field patch. Omitted
+  optional credential fields take their defaults and omitted financial values
+  are removed. A consuming agent must submit a complete user-approved entry;
+  it must not copy scoped-read secrets back into a write merely to preserve
+  fields the user did not provide or verify.
 - Profile records cannot carry credential, payment, token, cookie, OTP,
   session, or handle categories. Passwords stay in `credential`; financial
   value maps stay in `financial`.
@@ -256,6 +261,7 @@ table or schema migration is introduced. Financial kinds are `payment_card`,
 | Missing, wrong-resource, wrong-origin, wrong-purpose, expired, or revoked grant | Return no raw value and write nothing |
 | Record origin/purpose scope mismatch | Authorization refusal after grant check |
 | Requested field missing | Safe error naming only the field, never a submitted value |
+| Proposed update omits an existing credential/financial field | Consumer holds it for review; do not write a partial replacement |
 | Storage or audit insert fails | Roll back puts, deletes, grant changes, and audit together |
 | Exact record deleted | Record and credential handles disappear; exact grants are revoked |
 
@@ -279,6 +285,8 @@ table or schema migration is introduced. Financial kinds are `payment_card`,
   validation, full-batch refusal, legacy credentials, metadata redaction,
   selective reads, missing fields, every grant failure mode, record scopes,
   deletion, handle invalidation, and exact-grant revocation.
+- Skill/consumer forward tests prove incomplete replacements remain held for
+  review and partial approval writes only complete selected proposal rows.
 - Transport tests assert authentication for every new sensitive tool and the
   absence of a read-confirmation parameter. CLI and Inbox tests exercise exact
   deletion and ensure full values never appear in review HTML.

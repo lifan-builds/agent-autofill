@@ -1,0 +1,30 @@
+{
+  "id": "persistent-email-and-form-suggestions",
+  "name": "persistent-email-and-form-suggestions",
+  "title": "Persistent Email OTP and Form Record Suggestions",
+  "description": "Plan and deliver persistent email authentication for scoped OTP retrieval plus an agent-facing skill that suggests reusable form records for explicit user approval.",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "lfan",
+  "assignee": "lfan",
+  "createdAt": "2026-09-16",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "09-16-persistent-email-otp",
+    "09-16-suggest-form-records-skill",
+    "09-16-encrypted-sensitive-records"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

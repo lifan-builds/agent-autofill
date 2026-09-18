@@ -1,0 +1,7 @@
+{"file":".trellis/spec/backend/index.md","reason":"Backend pre-development routing for the supporting MCP changes"}
+{"file":".trellis/spec/backend/directory-structure.md","reason":"Skill, service, transport, and storage boundary placement"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Safe suggestion, write, and retrieval refusal behavior"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Transient and sensitive value handling across skill and MCP output"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Authentication, grant, provenance, and information-only requirements"}
+{"file":".trellis/tasks/09-16-persistent-email-and-form-suggestions/research/current-code.md","reason":"Existing profile and credential contract evidence"}
+{"file":".trellis/tasks/09-16-persistent-email-and-form-suggestions/research/codex-skills.md","reason":"Official repository-local Codex skill discovery and authoring evidence"}

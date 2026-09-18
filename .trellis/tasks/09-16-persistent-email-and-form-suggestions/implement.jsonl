@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Parent integration review of authorization, scope, and information-only behavior"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Parent integration review of cross-child secret and OTP redaction"}
+{"file":".trellis/tasks/09-16-persistent-email-and-form-suggestions/research/current-code.md","reason":"Baseline for final cross-child contract review"}
+{"file":".trellis/tasks/09-16-persistent-email-and-form-suggestions/research/codex-skills.md","reason":"Skill discovery and authoring contract for integration review"}
