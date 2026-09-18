@@ -94,3 +94,25 @@ Implemented encrypted profile, credential, and financial record batches; authent
 ### Status
 
 [OK] **Completed**
+
+
+## Session 5: StopAskingMe form memory skill
+<!-- trellis-session: v=2 fp=785fd039bdbbe991 -->
+
+**Date**: 2026-09-17
+**Task**: StopAskingMe form memory skill
+**Branch**: `codex/encrypted-sensitive-records`
+
+### Summary
+
+Added the repository-local stopaskingme-form-memory skill and exact record-contract reference. Forward-tested implicit routing, metadata-first semantic matching, add/update/no-op classification, ambiguity, sensitive masking, OTP exclusion, complete-replacement safety, exact and partial approval, scoped retrieval, and browser-action boundaries. Independent review fixed proposal display/name and authentication wording. Final verification: skill validation, 62 pytest tests, Ruff, mypy, compileall, diff check, and Trellis validation passed.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `670b43e` | feat: add StopAskingMe form memory skill |
+
+### Status
+
+[OK] **Completed**
