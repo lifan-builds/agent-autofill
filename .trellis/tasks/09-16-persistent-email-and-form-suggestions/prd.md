@@ -40,10 +40,12 @@ agent propose stable form values worth saving for future form-filling work.
 - OTP values may appear only in the successful response to the authenticated,
   explicitly granted OTP request; audit and diagnostic surfaces remain
   redacted.
-- The first mailbox path is generic Thunderbird-style IMAP: host, port,
+- The base mailbox path is generic Thunderbird-style IMAP: host, port,
   mailbox, username, and a password or caller-supplied bearer token. A later
-  process reconnects read-only from saved metadata plus the Keychain secret;
-  provider-specific OAuth setup is deferred.
+  process reconnects read-only from saved metadata plus the Keychain secret.
+  The delivered Gmail path additionally uses a user-owned Desktop OAuth client,
+  loopback PKCE consent, Keychain-backed refresh state, and memory-only access
+  tokens.
 - Suggestions must be proposed as a diff against existing saved records and
   require explicit user approval before any record is persisted.
 - Approval happens in the agent conversation: after displaying the exact
@@ -73,28 +75,28 @@ agent propose stable form values worth saving for future form-filling work.
 
 ## Acceptance Criteria
 
-- [ ] A supported mailbox can be connected through the CLI once and reopened
+- [x] A supported mailbox can be connected through the CLI once and reopened
       by a later CLI/server process without asking for the secret again while
       the saved authentication remains valid.
-- [ ] An agent with the correct scoped grant can retrieve one recent,
+- [x] An agent with the correct scoped grant can retrieve one recent,
       unambiguous OTP; wrong-origin, wrong-purpose, expired, ambiguous,
       consumed, revoked, or unauthenticated requests are denied.
-- [ ] No authentication secret or OTP leaks into audit rows, diagnostics,
+- [x] No authentication secret or OTP leaks into audit rows, diagnostics,
       fixtures containing real data, screenshots, or documentation.
-- [ ] The StopAskingMe skill is discoverable for form-filling work and proposes
+- [x] The StopAskingMe skill is discoverable for form-filling work and proposes
       useful stable fields missing from or differing from saved records.
-- [ ] Chrome-style identity/contact/address/payment/credential fields can be
+- [x] Chrome-style identity/contact/address/payment/credential fields can be
       mapped to saved records with confidence and ambiguity surfaced for review.
-- [ ] Authorized agents can retrieve the approved raw values needed for their
+- [x] Authorized agents can retrieve the approved raw values needed for their
       own browser/form workflow, while unscoped, expired, revoked, or
       unauthenticated requests are denied.
-- [ ] Suggestions show the proposed field, source context, sensitivity, and
+- [x] Suggestions show the proposed field, source context, sensitivity, and
       whether the operation would add or update a record; ordinary values are
       exact, while credentials and financial values use masked set/change
       previews.
-- [ ] Rejecting or ignoring a suggestion changes no saved data; approved
+- [x] Rejecting or ignoring a suggestion changes no saved data; approved
       entries survive a new process and are available to later scoped reads.
-- [ ] All three child deliverables pass their focused tests plus the repository
+- [x] All three child deliverables pass their focused tests plus the repository
       pytest, Ruff, and compile checks.
 
 ## Out of Scope
@@ -107,3 +109,20 @@ agent propose stable form values worth saving for future form-filling work.
   values as form records. Passwords and payment/financial records use their
   dedicated encrypted record types instead.
 - Adding multiple providers before one complete supported provider path works.
+
+## Integration Evidence
+
+- Generic IMAP and Gmail OAuth login, Keychain-backed refresh/reconnect in a
+  fresh process, and read-only mailbox fetching were exercised with the user's
+  Gmail account. No single unambiguous OTP was present in the bounded live
+  window; the one-time OTP response path is covered with deterministic
+  provider tests and redaction assertions.
+- Encrypted profile, credential, and financial writes/reads passed persistence,
+  authorization, rollback, deletion, legacy-compatibility, and redaction tests.
+- The form-memory skill passed quick validation plus independent forward tests
+  for discovery routing, add/update/no-op classification, ambiguity, masked
+  previews, transient exclusions, complete-replacement safety, exact/partial
+  approval, and browser-action boundaries.
+- Final parent validation: 62 pytest tests, Ruff, mypy, compileall, skill
+  validation, parent manifest validation, and all three archived child manifest
+  validations passed.

@@ -80,8 +80,10 @@ scoped grants.
   callers; the new skill uses direct `credential.read` instead.
 - Existing `email-add`, `source-remove`, and `request_auth_code` entry points
   are extended rather than renamed.
-- No provider-specific OAuth authorization or refresh lifecycle is implied by
-  support for a caller-supplied IMAP bearer token.
+- Generic caller-supplied bearer-token support does not itself imply a refresh
+  lifecycle. Gmail is the explicit provider-specific exception: its user-owned
+  Desktop OAuth flow stores refresh/client material in Keychain and keeps
+  refreshed access tokens in process memory only.
 
 ## Security and Redaction
 
@@ -101,4 +103,3 @@ Each child is independently testable and revertible. Storage uses new logical
 namespaces and backward-compatible fields rather than destructive schema
 migrations. Removing the new MCP tools and skill leaves prior records intact;
 local record/source deletion remains available for user-controlled cleanup.
-
