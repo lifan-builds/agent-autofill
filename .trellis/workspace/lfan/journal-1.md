@@ -138,3 +138,25 @@ Completed the parent cross-child integration review for persistent generic IMAP 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 7: Complete Agent Autofill rename and local data migration
+<!-- trellis-session: v=2 fp=bf0e75dd755d0603 -->
+
+**Date**: 2026-09-19
+**Task**: Complete Agent Autofill rename and local data migration
+**Branch**: `main`
+
+### Summary
+
+Renamed product, package, CLI, MCP identity, documentation, tests, Trellis specs, and form-memory skill to Agent Autofill; migrated and verified the live encrypted database and connector secret into the new Keychain namespace; removed legacy database, Keychain, generated, installed-command, and working-tree references; passed 65 tests, Ruff, mypy, compile, skill, CLI, and wheel checks.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5615845` | refactor: complete Agent Autofill rename |
+
+### Status
+
+[OK] **Completed**
