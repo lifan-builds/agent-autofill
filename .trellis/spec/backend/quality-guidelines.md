@@ -1,10 +1,10 @@
 # Quality Guidelines
 
-> Current implementation and review standards for StopAskingMe.
+> Current implementation and review standards for Agent Autofill.
 
 ## Core Contract
 
-StopAskingMe is local-first and information-only. Changes must preserve:
+Agent Autofill is local-first and information-only. Changes must preserve:
 
 - explicit authentication and short-lived, scoped grants for data access;
 - origin and purpose binding where the use case requires it;
@@ -84,11 +84,11 @@ a local-only check is not sufficient.
 ### 2. Signatures
 
 ```text
-stopaskingme --db DB email-add ACCOUNT_ID HOST USERNAME
+agent-autofill --db DB email-add ACCOUNT_ID HOST USERNAME
   [--label LABEL] [--port PORT] [--mailbox MAILBOX] [--oauth2]
-stopaskingme --db DB email-add-gmail ACCOUNT_ID USERNAME
+agent-autofill --db DB email-add-gmail ACCOUNT_ID USERNAME
   --client-secrets DESKTOP_CLIENT_JSON [--label LABEL] [--mailbox MAILBOX]
-stopaskingme --db DB email-test ACCOUNT_ID
+agent-autofill --db DB email-test ACCOUNT_ID
 
 request_auth_code(
   account_id: str,
@@ -213,7 +213,7 @@ encrypted persistence, audit redaction, CLI administration, and the Inbox.
 write_records(agent_id, target_origin, purpose, confirmed=true, entries)
 request_credential_fields(agent_id, credential_id, field_ids, target_origin, purpose)
 request_financial_fields(agent_id, record_id, field_ids, target_origin, purpose)
-stopaskingme --db DB record-delete profile|credential|financial RECORD_ID
+agent-autofill --db DB record-delete profile|credential|financial RECORD_ID
 ```
 
 Record namespaces are `profile`, `credential`, and `financial`; no plaintext
@@ -312,7 +312,7 @@ store.apply_changes(encrypted_records(prepared), [], audits=[metadata_only_audit
 ## Testing Requirements
 
 - Add or update focused pytest coverage for changed behavior under
-  `tests/stopaskingme/`. Tests use temporary paths, in-memory SQLite, explicit
+  `tests/agent_autofill/`. Tests use temporary paths, in-memory SQLite, explicit
   deterministic 32-byte keys, and small local fakes rather than real accounts.
 - Cover both the allowed path and the relevant refusal path for authorization,
   scope, one-time use, redaction, and loopback restrictions.
@@ -321,14 +321,14 @@ store.apply_changes(encrypted_records(prepared), [], audits=[metadata_only_audit
   are absent from audits, and passwords are absent from listings and MCP
   output.
 - When the public MCP surface changes, update the catalog test in
-  `tests/stopaskingme/test_transport.py` and verify the information-only
+  `tests/agent_autofill/test_transport.py` and verify the information-only
   negative set remains absent.
 - Run the focused tests for the edited behavior, then the project checks before
   handoff:
 
   ```bash
   PYTHONPATH=. pytest -q
-  ruff check stopaskingme
+  ruff check agent_autofill
   ```
 
 ## Code Review Checklist
@@ -349,9 +349,9 @@ store.apply_changes(encrypted_records(prepared), [], audits=[metadata_only_audit
 
 ## Representative Examples
 
-- `tests/stopaskingme/test_transport.py` protects the information-only MCP
+- `tests/agent_autofill/test_transport.py` protects the information-only MCP
   contract and agent-token authentication.
-- `tests/stopaskingme/test_service.py` exercises grants, origin binding,
+- `tests/agent_autofill/test_service.py` exercises grants, origin binding,
   revocation, audit redaction, and one-time credentials/OTPs.
-- `tests/stopaskingme/test_storage.py` verifies encrypted persistence without
+- `tests/agent_autofill/test_storage.py` verifies encrypted persistence without
   exposing plaintext in SQLite.

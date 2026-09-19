@@ -98,9 +98,9 @@ protocol when the server is running.
 
 ## Representative Tests
 
-- `tests/stopaskingme/test_service.py::test_otp_is_separate_and_not_logged`
+- `tests/agent_autofill/test_service.py::test_otp_is_separate_and_not_logged`
   verifies that the code value is absent from audit output.
-- `tests/stopaskingme/test_service.py::test_audit_storage_does_not_expose_search_terms`
+- `tests/agent_autofill/test_service.py::test_audit_storage_does_not_expose_search_terms`
   verifies raw search text is absent from persisted audit metadata.
-- `tests/stopaskingme/test_inbox.py` verifies the local review HTML contains
+- `tests/agent_autofill/test_inbox.py` verifies the local review HTML contains
   credential metadata without a password field.

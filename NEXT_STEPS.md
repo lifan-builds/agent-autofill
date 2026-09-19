@@ -1,4 +1,4 @@
-# StopAskingMe handoff and next steps
+# Agent Autofill handoff and next steps
 
 This document is the continuation brief for the next agent. It captures the
 current product boundary, the verified repository state, the recommended next
@@ -6,17 +6,16 @@ slice of implementation, and the checks required before expanding scope.
 
 ## Current state
 
-- Repository: `/Users/lfan/Project/StopAskingMe`
-- Product name: `StopAskingMe`
-- Current commit: `88c9706 Rename prototype to StopAskingMe`
+- Repository: `/Users/lfan/Project/agent-autofill`
+- Product name: `Agent Autofill`
 - Branch: `main`
-- Git remote: none configured
-- Working tree at handoff: clean
-- Python package/import: `stopaskingme`
-- CLI: `stopaskingme`
-- MCP executable: `stopaskingme-server`
-- Shell launcher: `scripts/stopaskingme`
-- MCP token environment variable: `STOPASKINGME_AGENT_TOKEN`
+- Git remote: `https://github.com/lifan-builds/agent-autofill.git`
+- Working tree state: inspect with `git status`
+- Python package/import: `agent_autofill`
+- CLI: `agent-autofill`
+- MCP executable: `agent-autofill-server`
+- Shell launcher: `scripts/agent-autofill`
+- MCP token environment variable: `AGENT_AUTOFILL_AGENT_TOKEN`
 
 The initial prototype is local-first and information-only. It currently
 contains encrypted SQLite values, Keychain-backed secrets, per-agent tokens,
@@ -35,11 +34,11 @@ Run these from the repository root before and after each substantive change:
 
 ```bash
 PYTHONPATH=. pytest -q
-ruff check stopaskingme
-python3 -m compileall -q stopaskingme tests/stopaskingme
+ruff check agent_autofill
+python3 -m compileall -q agent_autofill tests/agent_autofill
 ```
 
-The baseline is 18 passing tests. The wheel builds with a clean environment
+The baseline is 65 passing tests. The wheel builds with a clean environment
 that has the declared `cryptography`, `keyring`, and build dependencies. The
 CLI help, CLI database initialization, MCP `initialize`, and MCP server
 advertisement have been smoke-tested. A host interpreter without `keyring`
@@ -163,15 +162,15 @@ an explicit manual smoke procedure.
 ## Useful entry points
 
 - Product overview and quick start: `README.md`
-- Setup and Codex MCP configuration: `docs/stopaskingme.md`
+- Setup and Codex MCP configuration: `docs/agent-autofill.md`
 - Market and architecture research: `RESEARCH.md`
-- Policy and storage core: `stopaskingme/service.py`, `stopaskingme/storage.py`
-- MCP transport and tool schemas: `stopaskingme/server.py`
-- CLI and setup wizard: `stopaskingme/cli.py`
-- Chrome importer: `stopaskingme/chrome.py`
-- Provider contracts: `stopaskingme/adapters.py`, `stopaskingme/imap_adapter.py`,
-  `stopaskingme/messages_adapter.py`
-- Existing acceptance coverage: `tests/stopaskingme/`
+- Policy and storage core: `agent_autofill/service.py`, `agent_autofill/storage.py`
+- MCP transport and tool schemas: `agent_autofill/server.py`
+- CLI and setup wizard: `agent_autofill/cli.py`
+- Chrome importer: `agent_autofill/chrome.py`
+- Provider contracts: `agent_autofill/adapters.py`, `agent_autofill/imap_adapter.py`,
+  `agent_autofill/messages_adapter.py`
+- Existing acceptance coverage: `tests/agent_autofill/`
 
 The next agent should begin by reading this file and `AGENTS.md`, then inspect
 the existing service and transport tests before changing implementation.

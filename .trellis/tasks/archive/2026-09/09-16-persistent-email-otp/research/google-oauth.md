@@ -13,9 +13,9 @@ Official contracts checked on 2026-09-17:
   using the full-mail scope can require Google verification.
   https://developers.google.com/workspace/gmail/imap/xoauth2-protocol
 - Gmail IMAP authenticates with SASL XOAUTH2 using a short-lived OAuth access
-  token. StopAskingMe can keep the access token in memory and persist only the
+  token. Agent Autofill can keep the access token in memory and persist only the
   refresh/client material in Keychain.
 
 Product consequence: the MVP accepts a user-owned Google Cloud Desktop OAuth
-client JSON. It does not bundle or publish a shared StopAskingMe client. App
+client JSON. It does not bundle or publish a shared Agent Autofill client. App
 Passwords and legacy caller-supplied bearer tokens remain optional fallbacks.

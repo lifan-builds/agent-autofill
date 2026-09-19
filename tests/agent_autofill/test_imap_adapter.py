@@ -1,6 +1,6 @@
 import pytest
 
-from stopaskingme.imap_adapter import (
+from agent_autofill.imap_adapter import (
     IMAPAuthenticationError,
     IMAPEmailAdapter,
     IMAPMailboxError,
@@ -41,7 +41,7 @@ class FakeConnection:
 def test_check_connection_authenticates_readonly_and_logs_out(monkeypatch):
     connection = FakeConnection()
     monkeypatch.setattr(
-        "stopaskingme.imap_adapter.imaplib.IMAP4_SSL",
+        "agent_autofill.imap_adapter.imaplib.IMAP4_SSL",
         lambda host, port: connection,
     )
 
@@ -60,7 +60,7 @@ def test_check_connection_authenticates_readonly_and_logs_out(monkeypatch):
 def test_check_connection_uses_xoauth2_without_printing_token(monkeypatch):
     connection = FakeConnection()
     monkeypatch.setattr(
-        "stopaskingme.imap_adapter.imaplib.IMAP4_SSL",
+        "agent_autofill.imap_adapter.imaplib.IMAP4_SSL",
         lambda host, port: connection,
     )
 
@@ -91,7 +91,7 @@ def test_check_connection_uses_xoauth2_without_printing_token(monkeypatch):
 def test_check_connection_reports_safe_auth_and_mailbox_failures(monkeypatch):
     auth_connection = FakeConnection(login_error=RuntimeError("provider detail"))
     monkeypatch.setattr(
-        "stopaskingme.imap_adapter.imaplib.IMAP4_SSL",
+        "agent_autofill.imap_adapter.imaplib.IMAP4_SSL",
         lambda host, port: auth_connection,
     )
     with pytest.raises(IMAPAuthenticationError, match="IMAP authentication failed"):
@@ -100,7 +100,7 @@ def test_check_connection_reports_safe_auth_and_mailbox_failures(monkeypatch):
 
     mailbox_connection = FakeConnection(select_status="NO")
     monkeypatch.setattr(
-        "stopaskingme.imap_adapter.imaplib.IMAP4_SSL",
+        "agent_autofill.imap_adapter.imaplib.IMAP4_SSL",
         lambda host, port: mailbox_connection,
     )
     with pytest.raises(IMAPMailboxError, match="IMAP mailbox selection failed"):
@@ -111,7 +111,7 @@ def test_check_connection_reports_safe_auth_and_mailbox_failures(monkeypatch):
 def test_check_connection_rejects_non_ok_login_and_xoauth2_status(monkeypatch):
     password_connection = FakeConnection(auth_status="NO")
     monkeypatch.setattr(
-        "stopaskingme.imap_adapter.imaplib.IMAP4_SSL",
+        "agent_autofill.imap_adapter.imaplib.IMAP4_SSL",
         lambda host, port: password_connection,
     )
     with pytest.raises(IMAPAuthenticationError, match="IMAP authentication failed"):
@@ -120,7 +120,7 @@ def test_check_connection_rejects_non_ok_login_and_xoauth2_status(monkeypatch):
 
     oauth_connection = FakeConnection(auth_status="BAD")
     monkeypatch.setattr(
-        "stopaskingme.imap_adapter.imaplib.IMAP4_SSL",
+        "agent_autofill.imap_adapter.imaplib.IMAP4_SSL",
         lambda host, port: oauth_connection,
     )
     with pytest.raises(IMAPAuthenticationError, match="IMAP authentication failed"):

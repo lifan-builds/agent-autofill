@@ -1,6 +1,6 @@
 import sqlite3
 
-from stopaskingme.storage import KeyProvider, Store
+from agent_autofill.storage import KeyProvider, KeyringProvider, Store
 
 
 class MemoryKeys(KeyProvider):
@@ -9,6 +9,10 @@ class MemoryKeys(KeyProvider):
 
     def load_or_create(self, name):
         return self.values.setdefault(name, b"z" * 32)
+
+
+def test_keyring_uses_agent_autofill_service_name():
+    assert KeyringProvider().service == "agent-autofill"
 
 
 def test_store_persists_encrypted_values_across_connections(tmp_path):
@@ -38,7 +42,7 @@ def test_store_purges_legacy_plaintext_otp_keys_on_reopen(tmp_path):
 
 
 def test_store_purges_legacy_otp_keys_when_broker_reuses_open_store():
-    from stopaskingme.service import Broker
+    from agent_autofill.service import Broker
 
     store = Store(":memory:", key=b"m" * 32)
     store.put("otp-used", "agent:account:123456", {"used_at": "fixture"})
@@ -99,7 +103,7 @@ def test_store_apply_changes_rolls_back_puts_and_deletes_on_failure():
 
 
 def test_sensitive_records_persist_encrypted_across_store_reopen(tmp_path):
-    from stopaskingme.service import Broker
+    from agent_autofill.service import Broker
 
     path = tmp_path / "records.sqlite"
     key = b"p" * 32

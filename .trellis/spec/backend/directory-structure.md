@@ -1,10 +1,10 @@
 # Directory Structure
 
-> How backend code is organized in StopAskingMe today.
+> How backend code is organized in Agent Autofill today.
 
 ## Overview
 
-StopAskingMe is a single Python 3.11+ package. The package is intentionally
+Agent Autofill is a single Python 3.11+ package. The package is intentionally
 small and flat: transport and CLI entry points depend on a central `Broker`,
 which depends on the encrypted `Store` and provider adapters. There is no
 separate web application, ORM layer, or generic utilities package.
@@ -12,8 +12,8 @@ separate web application, ORM layer, or generic utilities package.
 ## Directory Layout
 
 ```text
-stopaskingme/
-├── __main__.py          # `python -m stopaskingme` entry point
+agent_autofill/
+├── __main__.py          # `python -m agent_autofill` entry point
 ├── cli.py               # setup and local administration commands
 ├── server.py            # JSON-lines MCP transport and tool catalog
 ├── service.py           # authorization and broker use cases
@@ -24,9 +24,9 @@ stopaskingme/
 ├── messages_adapter.py  # read-only macOS Messages integration
 ├── chrome.py            # read-only Chrome metadata/import helpers
 └── inbox.py             # loopback-only local review page
-tests/stopaskingme/       # pytest modules parallel to package behavior
-scripts/stopaskingme     # repository-local executable wrapper
-docs/stopaskingme.md     # setup and operation documentation
+tests/agent_autofill/       # pytest modules parallel to package behavior
+scripts/agent-autofill     # repository-local executable wrapper
+docs/agent-autofill.md     # setup and operation documentation
 ```
 
 ## Module Organization
@@ -46,7 +46,7 @@ docs/stopaskingme.md     # setup and operation documentation
 - Keep interactive setup and administrative output in `cli.py`; it assembles a
   `Store` and `Broker` but does not duplicate their business rules.
 - Put simple immutable records in `models.py` as frozen dataclasses.
-- Add focused tests under `tests/stopaskingme/test_<module-or-feature>.py`.
+- Add focused tests under `tests/agent_autofill/test_<module-or-feature>.py`.
 
 ## Naming Conventions
 
@@ -72,11 +72,11 @@ docs/stopaskingme.md     # setup and operation documentation
 
 ## Representative Examples
 
-- `stopaskingme/service.py`: central business and authorization boundary.
-- `stopaskingme/storage.py`: compact persistence boundary with encrypted
+- `agent_autofill/service.py`: central business and authorization boundary.
+- `agent_autofill/storage.py`: compact persistence boundary with encrypted
   values and redacted audit metadata.
-- `stopaskingme/imap_adapter.py` and `stopaskingme/messages_adapter.py`:
+- `agent_autofill/imap_adapter.py` and `agent_autofill/messages_adapter.py`:
   read-only provider adapters implementing the contracts in `adapters.py`.
-- `tests/stopaskingme/test_transport.py`: verifies the public MCP surface keeps
+- `tests/agent_autofill/test_transport.py`: verifies the public MCP surface keeps
   writes behind explicit confirmation and grant checks, and keeps sensitive
   reads field-selective and authenticated.

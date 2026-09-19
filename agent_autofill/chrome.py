@@ -48,7 +48,7 @@ def _snapshot(path: Path):
     if not path.exists():
         raise ChromeImportError(f"Chrome data file not found: {path}")
     tmp = tempfile.NamedTemporaryFile(
-        prefix="stopaskingme-chrome-", suffix=".db", delete=False
+        prefix="agent-autofill-chrome-", suffix=".db", delete=False
     )
     tmp.close()
     shutil.copy2(path, tmp.name)

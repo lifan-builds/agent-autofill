@@ -1,7 +1,7 @@
-# StopAskingMe record contracts
+# Agent Autofill record contracts
 
 This reference mirrors the record-related MCP catalog in
-`stopaskingme/server.py` and the validation in `stopaskingme/service.py`.
+`agent_autofill/server.py` and the validation in `agent_autofill/service.py`.
 Use these names and inputs exactly; there is no generic profile-write or
 password-read alias.
 

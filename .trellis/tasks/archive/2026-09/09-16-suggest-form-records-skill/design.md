@@ -5,14 +5,14 @@
 Create a repository-local skill at:
 
 ```text
-.agents/skills/stopaskingme-form-memory/
+.agents/skills/agent-autofill-form-memory/
 ├── SKILL.md
 └── references/
     └── record-contracts.md
 ```
 
-The `SKILL.md` frontmatter name is `stopaskingme-form-memory`. Its description
-targets agents preparing or reviewing form values that can reuse StopAskingMe
+The `SKILL.md` frontmatter name is `agent-autofill-form-memory`. Its description
+targets agents preparing or reviewing form values that can reuse Agent Autofill
 records or notice stable user-verified values worth saving. It excludes
 unrelated email search, account administration, and generic profile writing so
 implicit discovery remains precise.
@@ -27,7 +27,7 @@ has the form context and field labels.
 
 The consuming agent supplies the current form labels, target origin, purpose,
 and user-provided/verified values from its own browser or conversation context.
-The skill does not read the screen or operate a browser. StopAskingMe supplies
+The skill does not read the screen or operate a browser. Agent Autofill supplies
 saved metadata and authorized values only.
 
 Retrieval calls require agent authentication and the matching active read

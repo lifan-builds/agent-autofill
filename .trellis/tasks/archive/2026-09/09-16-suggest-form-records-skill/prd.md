@@ -2,7 +2,7 @@
 
 ## Goal
 
-Give agents a repository-local StopAskingMe skill that notices stable values
+Give agents a repository-local Agent Autofill skill that notices stable values
 encountered during form-filling work, compares them with existing profile
 records, and proposes additions or updates for explicit user approval.
 
@@ -21,7 +21,7 @@ records, and proposes additions or updates for explicit user approval.
 ## Requirements
 
 - Create one focused, implicitly discoverable repository skill under
-  `.agents/skills` for StopAskingMe-assisted form memory.
+  `.agents/skills` for Agent Autofill-assisted form memory.
 - Trigger when an agent is preparing or reviewing form values and has stable
   user-provided information that could reduce future questions.
 - Cover broad Chrome-style autofill categories: identity, contact, address,

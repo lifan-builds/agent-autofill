@@ -2,7 +2,7 @@
   "id": "suggest-form-records-skill",
   "name": "suggest-form-records-skill",
   "title": "Suggest Reusable Form Records Skill",
-  "description": "Create an agent-facing StopAskingMe skill and broker flow that proposes reusable form-filling records and saves only user-approved entries.",
+  "description": "Create an agent-facing Agent Autofill skill and broker flow that proposes reusable form-filling records and saves only user-approved entries.",
   "status": "completed",
   "dev_type": null,
   "scope": null,

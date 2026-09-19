@@ -38,7 +38,7 @@ Enabled Trellis 0.6.16 Codex integration for this local project; verified platfo
 
 ### Summary
 
-Populated the StopAskingMe backend Trellis specs from current code and project guidance, documented the existing OTP response policy mismatch, and verified 18 tests plus the project Ruff target.
+Populated the Agent Autofill backend Trellis specs from current code and project guidance, documented the existing OTP response policy mismatch, and verified 18 tests plus the project Ruff target.
 
 ### Git Commits
 
@@ -96,33 +96,33 @@ Implemented encrypted profile, credential, and financial record batches; authent
 [OK] **Completed**
 
 
-## Session 5: StopAskingMe form memory skill
+## Session 5: Agent Autofill form memory skill
 <!-- trellis-session: v=2 fp=785fd039bdbbe991 -->
 
 **Date**: 2026-09-17
-**Task**: StopAskingMe form memory skill
+**Task**: Agent Autofill form memory skill
 **Branch**: `codex/encrypted-sensitive-records`
 
 ### Summary
 
-Added the repository-local stopaskingme-form-memory skill and exact record-contract reference. Forward-tested implicit routing, metadata-first semantic matching, add/update/no-op classification, ambiguity, sensitive masking, OTP exclusion, complete-replacement safety, exact and partial approval, scoped retrieval, and browser-action boundaries. Independent review fixed proposal display/name and authentication wording. Final verification: skill validation, 62 pytest tests, Ruff, mypy, compileall, diff check, and Trellis validation passed.
+Added the repository-local agent-autofill-form-memory skill and exact record-contract reference. Forward-tested implicit routing, metadata-first semantic matching, add/update/no-op classification, ambiguity, sensitive masking, OTP exclusion, complete-replacement safety, exact and partial approval, scoped retrieval, and browser-action boundaries. Independent review fixed proposal display/name and authentication wording. Final verification: skill validation, 62 pytest tests, Ruff, mypy, compileall, diff check, and Trellis validation passed.
 
 ### Git Commits
 
 | Hash | Message |
 |------|---------|
-| `670b43e` | feat: add StopAskingMe form memory skill |
+| `670b43e` | feat: add Agent Autofill form memory skill |
 
 ### Status
 
 [OK] **Completed**
 
 
-## Session 6: StopAskingMe email OTP and form memory integration
+## Session 6: Agent Autofill email OTP and form memory integration
 <!-- trellis-session: v=2 fp=4849a12fb5b14c9e -->
 
 **Date**: 2026-09-17
-**Task**: StopAskingMe email OTP and form memory integration
+**Task**: Agent Autofill email OTP and form memory integration
 **Branch**: `codex/encrypted-sensitive-records`
 
 ### Summary
@@ -133,7 +133,7 @@ Completed the parent cross-child integration review for persistent generic IMAP 
 
 | Hash | Message |
 |------|---------|
-| `1db478e` | docs: complete StopAskingMe integration review |
+| `1db478e` | docs: complete Agent Autofill integration review |
 
 ### Status
 

@@ -1,7 +1,7 @@
-from stopaskingme import google_oauth
-from stopaskingme.server import _register_connections
-from stopaskingme.service import Broker
-from stopaskingme.storage import Store
+from agent_autofill import google_oauth
+from agent_autofill.server import _register_connections
+from agent_autofill.service import Broker
+from agent_autofill.storage import Store
 
 
 class MemoryKeyring:
@@ -59,7 +59,7 @@ def test_server_reconstructs_gmail_provider_and_refreshes_in_fresh_process(monke
     broker = Broker(store)
     connection = FakeConnection()
     monkeypatch.setattr(
-        "stopaskingme.imap_adapter.imaplib.IMAP4_SSL",
+        "agent_autofill.imap_adapter.imaplib.IMAP4_SSL",
         lambda host, port: connection,
     )
     refresh_calls = []

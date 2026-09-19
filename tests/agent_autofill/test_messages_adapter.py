@@ -1,5 +1,5 @@
 import sqlite3
-from stopaskingme.messages_adapter import MacMessagesAdapter
+from agent_autofill.messages_adapter import MacMessagesAdapter
 
 
 def test_messages_adapter_reads_only_requested_scope(tmp_path):

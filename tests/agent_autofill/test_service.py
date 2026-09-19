@@ -1,8 +1,8 @@
 from datetime import datetime, timedelta, timezone
 import pytest
-from stopaskingme.service import Broker, AuthorizationError, BrokerError
-from stopaskingme.models import EmailMessage, TextMessage
-from stopaskingme.storage import Store
+from agent_autofill.service import Broker, AuthorizationError, BrokerError
+from agent_autofill.models import EmailMessage, TextMessage
+from agent_autofill.storage import Store
 
 
 def setup():

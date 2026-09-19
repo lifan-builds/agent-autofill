@@ -95,9 +95,9 @@ class CredentialUseError(BrokerError): ...
 
 ## Representative Tests
 
-- `tests/stopaskingme/test_service.py` covers rejected grants, OTP ambiguity,
+- `tests/agent_autofill/test_service.py` covers rejected grants, OTP ambiguity,
   origin binding, revocation, and one-time handles.
-- `tests/stopaskingme/test_transport.py` covers authentication failure at the
+- `tests/agent_autofill/test_transport.py` covers authentication failure at the
   transport dispatcher.
-- `tests/stopaskingme/test_chrome.py` covers absent optional Chrome databases
+- `tests/agent_autofill/test_chrome.py` covers absent optional Chrome databases
   as a supported empty-source case.

@@ -3,5 +3,5 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONPATH
-PYTHON_BIN="${STOPASKINGME_PYTHON:-python}"
-exec "$PYTHON_BIN" -m stopaskingme.cli "$@"
+PYTHON_BIN="${AGENT_AUTOFILL_PYTHON:-python}"
+exec "$PYTHON_BIN" -m agent_autofill.cli "$@"

@@ -2,7 +2,7 @@
 
 ## Goal
 
-Allow StopAskingMe to retain explicitly approved password credentials and
+Allow Agent Autofill to retain explicitly approved password credentials and
 payment/financial form data locally with encryption so they can be reused
 without being placed in ordinary profile records.
 
@@ -34,7 +34,7 @@ without being placed in ordinary profile records.
 - Do not log or include raw sensitive values in audits, errors, screenshots,
   tests using real data, or documentation.
 - Bind raw-value access to an authenticated agent, scoped grant, target origin,
-  purpose, and short expiry. StopAskingMe returns the authorized value as an
+  purpose, and short expiry. Agent Autofill returns the authorized value as an
   information service; it does not operate the browser.
 - Do not add a second per-use approval prompt at retrieval time. A valid active
   grant authorizes reads until expiry/revocation; the consuming agent is

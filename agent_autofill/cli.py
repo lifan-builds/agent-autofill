@@ -345,10 +345,10 @@ def _test_saved_imap(broker: Broker, account_id: str, keyring: KeyringProvider) 
 
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="stopaskingme", description="Local personal information broker"
+        prog="agent-autofill", description="Local personal information broker"
     )
     p.add_argument(
-        "--db", default="stopaskingme.sqlite3", help="encrypted SQLite database path"
+        "--db", default="agent-autofill.sqlite3", help="encrypted SQLite database path"
     )
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("init", help="create/open the encrypted local database")

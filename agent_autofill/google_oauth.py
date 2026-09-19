@@ -6,7 +6,7 @@ PKCE authorization code, and keeps the resulting access token in memory.  A
 Keychain payload contains only the client material and refresh token needed by
 the next process; access tokens are never serialised.
 
-No Google client is bundled with StopAskingMe.  Callers must supply a Desktop
+No Google client is bundled with Agent Autofill.  Callers must supply a Desktop
 application client JSON downloaded from their own Google Cloud project.
 """
 

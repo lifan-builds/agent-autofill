@@ -41,12 +41,12 @@
 ## Validation
 
 ```bash
-PYTHONPATH=. pytest -q tests/stopaskingme/test_storage.py \
-  tests/stopaskingme/test_service.py tests/stopaskingme/test_transport.py \
-  tests/stopaskingme/test_cli.py tests/stopaskingme/test_inbox.py
+PYTHONPATH=. pytest -q tests/agent_autofill/test_storage.py \
+  tests/agent_autofill/test_service.py tests/agent_autofill/test_transport.py \
+  tests/agent_autofill/test_cli.py tests/agent_autofill/test_inbox.py
 PYTHONPATH=. pytest -q
-ruff check stopaskingme tests
-python3 -m compileall -q stopaskingme tests
+ruff check agent_autofill tests
+python3 -m compileall -q agent_autofill tests
 python3 ./.trellis/scripts/task.py validate \
   .trellis/tasks/09-16-encrypted-sensitive-records
 ```

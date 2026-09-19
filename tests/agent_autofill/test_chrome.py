@@ -1,9 +1,9 @@
 import csv
 import sqlite3
 from pathlib import Path
-from stopaskingme.chrome import cold_start
-from stopaskingme.service import Broker
-from stopaskingme.storage import Store
+from agent_autofill.chrome import cold_start
+from agent_autofill.service import Broker
+from agent_autofill.storage import Store
 
 
 def _profile(tmp_path: Path) -> Path:
@@ -65,7 +65,7 @@ def test_chrome_password_csv_is_encrypted_and_metadata_only_listing(tmp_path):
             }
         )
     broker = Broker(Store(":memory:", key=b"k" * 32))
-    from stopaskingme.chrome import import_password_csv
+    from agent_autofill.chrome import import_password_csv
 
     assert import_password_csv(path, broker) == 1
     assert broker.list_credentials()[0]["username"] == "ada"

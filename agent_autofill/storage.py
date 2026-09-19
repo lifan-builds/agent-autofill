@@ -85,7 +85,7 @@ class KeyProvider:
 class KeyringProvider(KeyProvider):
     """Use the OS credential store (Keychain on macOS) for the DB key."""
 
-    def __init__(self, service: str = "stopaskingme"):
+    def __init__(self, service: str = "agent-autofill"):
         self.service = service
 
     def load_or_create(self, name: str) -> bytes:

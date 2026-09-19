@@ -1,6 +1,6 @@
-from stopaskingme.inbox import build_html
-from stopaskingme.service import Broker
-from stopaskingme.storage import Store
+from agent_autofill.inbox import build_html
+from agent_autofill.service import Broker
+from agent_autofill.storage import Store
 
 
 def test_inbox_page_contains_review_metadata_without_secrets():

@@ -1,18 +1,18 @@
 ---
-name: stopaskingme-form-memory
-description: "Suggest and retrieve reusable StopAskingMe records while preparing or reviewing a form: semantically match stable user-provided or user-verified values to saved profile, credential, and financial metadata, present exact add/update/no-op proposals, and save only explicitly approved entries. Do not use for unrelated email search, account administration, or generic profile writing."
+name: agent-autofill-form-memory
+description: "Suggest and retrieve reusable Agent Autofill records while preparing or reviewing a form: semantically match stable user-provided or user-verified values to saved profile, credential, and financial metadata, present exact add/update/no-op proposals, and save only explicitly approved entries. Do not use for unrelated email search, account administration, or generic profile writing."
 ---
 
-# StopAskingMe form memory
+# Agent Autofill form memory
 
 Use this skill when an agent is preparing or reviewing a form and has either:
 
 - stable values the user supplied or explicitly verified and may want to reuse;
-- a need to compare those values with StopAskingMe records; or
+- a need to compare those values with Agent Autofill records; or
 - an authenticated, scoped need for selected saved values for the consuming
   agent's own form workflow.
 
-StopAskingMe is an information layer. The consuming agent supplies the form
+Agent Autofill is an information layer. The consuming agent supplies the form
 labels, target origin, purpose, and values it obtained from the user or its
 own permitted context. This skill does not read a screen, control a browser,
 type into a form, or submit anything. Read

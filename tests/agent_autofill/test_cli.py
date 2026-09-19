@@ -1,9 +1,9 @@
 import pytest
 
-from stopaskingme import cli
-from stopaskingme.imap_adapter import IMAPAuthenticationError
-from stopaskingme.service import Broker
-from stopaskingme.storage import Store
+from agent_autofill import cli
+from agent_autofill.imap_adapter import IMAPAuthenticationError
+from agent_autofill.service import Broker
+from agent_autofill.storage import Store
 
 
 class MemoryKeyring:
@@ -62,6 +62,13 @@ def _broker():
     return Broker(Store(":memory:", key=b"c" * 32))
 
 
+def test_cli_uses_agent_autofill_name_and_database_default():
+    parser = cli._parser()
+
+    assert parser.prog == "agent-autofill"
+    assert parser.parse_args(["init"]).db == "agent-autofill.sqlite3"
+
+
 def test_record_and_financial_commands_are_available():
     assert cli._parser().parse_args(["financial-records", "list"]).command == (
         "financial-records"
@@ -100,7 +107,7 @@ def test_configure_imap_checks_before_persisting_and_uses_versioned_key(monkeypa
 
     config = cli._configure_imap(
         broker,
-        "/tmp/stopaskingme.sqlite",
+        "/tmp/agent-autofill.sqlite",
         "personal",
         "imap.example.test",
         "user@example.test",
@@ -127,7 +134,7 @@ def test_configure_imap_replacement_cleans_old_secret_after_commit(monkeypatch):
     keyring = MemoryKeyring()
     first = cli._configure_imap(
         broker,
-        "/tmp/stopaskingme.sqlite",
+        "/tmp/agent-autofill.sqlite",
         "personal",
         "imap.example.test",
         "user@example.test",
@@ -138,7 +145,7 @@ def test_configure_imap_replacement_cleans_old_secret_after_commit(monkeypatch):
     )
     second = cli._configure_imap(
         broker,
-        "/tmp/stopaskingme.sqlite",
+        "/tmp/agent-autofill.sqlite",
         "personal",
         "imap.other.example.test",
         "user@example.test",
@@ -170,7 +177,7 @@ def test_configure_imap_failed_check_does_not_touch_saved_source(monkeypatch):
     with pytest.raises(SystemExit, match="IMAP authentication failed"):
         cli._configure_imap(
             broker,
-            "/tmp/stopaskingme.sqlite",
+            "/tmp/agent-autofill.sqlite",
             "personal",
             "imap.example.test",
             "user@example.test",
@@ -191,7 +198,7 @@ def test_email_test_reconnects_saved_secret_without_returning_it(monkeypatch):
     keyring = MemoryKeyring()
     config = cli._configure_imap(
         broker,
-        "/tmp/stopaskingme.sqlite",
+        "/tmp/agent-autofill.sqlite",
         "personal",
         "imap.example.test",
         "user@example.test",
@@ -249,7 +256,7 @@ def test_configure_gmail_authorization_failure_does_not_save(monkeypatch, tmp_pa
     keyring = MemoryKeyring()
 
     def fail(_client):
-        from stopaskingme.google_oauth import GoogleOAuthError
+        from agent_autofill.google_oauth import GoogleOAuthError
 
         raise GoogleOAuthError("access-token-fixture leaked by provider")
 

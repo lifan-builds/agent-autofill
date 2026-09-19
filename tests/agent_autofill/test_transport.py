@@ -1,8 +1,8 @@
 import pytest
-from stopaskingme.server import TOOLS
-from stopaskingme.server import _call
-from stopaskingme.service import Broker, BrokerError
-from stopaskingme.storage import Store
+from agent_autofill.server import TOOLS
+from agent_autofill.server import _call
+from agent_autofill.service import Broker, BrokerError
+from agent_autofill.storage import Store
 
 
 def test_mcp_tool_catalog_has_information_only_surface():
@@ -54,6 +54,26 @@ def test_transport_requires_agent_token_for_data_tools():
                 "purpose": "form",
             },
         )
+
+
+def test_transport_reads_agent_autofill_token_environment_variable(monkeypatch):
+    broker = Broker(Store(":memory:", key=b"e" * 32))
+    broker.put_profile("name", "identity", "Name", "Ada")
+    broker.grant("codex", "profile.read", "name", "example.com", "form")
+    monkeypatch.setenv("AGENT_AUTOFILL_AGENT_TOKEN", broker.create_agent("codex"))
+
+    result = _call(
+        broker,
+        "request_profile_fields",
+        {
+            "agent_id": "codex",
+            "field_ids": ["name"],
+            "target_origin": "example.com",
+            "purpose": "form",
+        },
+    )
+
+    assert result["name"]["value"] == "Ada"
 
 
 def test_transport_authenticates_record_write_and_scoped_financial_read():

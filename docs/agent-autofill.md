@@ -1,4 +1,4 @@
-# StopAskingMe
+# Agent Autofill
 
 This package is a local MCP information service. It keeps profile values,
 connector configuration, credentials imported during cold start, grants, and
@@ -10,30 +10,30 @@ separately in macOS Keychain through Python `keyring`.
 Install the two small runtime dependencies first:
 
 ```bash
-python3 -m pip install -r /Users/lfan/Project/StopAskingMe/requirements.txt
+python3 -m pip install -r /Users/lfan/Project/agent-autofill/requirements.txt
 ```
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
-  --db /Users/lfan/.stopaskingme.sqlite3 init
-PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
-  --db /Users/lfan/.stopaskingme.sqlite3 setup
-PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
-  --db /Users/lfan/.stopaskingme.sqlite3 agent-create codex
-PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
-  --db /Users/lfan/.stopaskingme.sqlite3 grant codex profile.read name \
+PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+  --db /Users/lfan/.agent-autofill.sqlite3 init
+PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+  --db /Users/lfan/.agent-autofill.sqlite3 setup
+PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+  --db /Users/lfan/.agent-autofill.sqlite3 agent-create codex
+PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+  --db /Users/lfan/.agent-autofill.sqlite3 grant codex profile.read name \
   --origin example.com --purpose form
-PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
-  --db /Users/lfan/.stopaskingme.sqlite3 grant codex credential.use <credential-id> \
+PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+  --db /Users/lfan/.agent-autofill.sqlite3 grant codex credential.use <credential-id> \
   --origin https://example.com --purpose form
-PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
-  --db /Users/lfan/.stopaskingme.sqlite3 grant codex credential.read <credential-id> \
+PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+  --db /Users/lfan/.agent-autofill.sqlite3 grant codex credential.read <credential-id> \
   --origin https://example.com --purpose form
-PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
-  --db /Users/lfan/.stopaskingme.sqlite3 grant codex financial.read <financial-record-id> \
+PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+  --db /Users/lfan/.agent-autofill.sqlite3 grant codex financial.read <financial-record-id> \
   --origin https://example.com --purpose form
-PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
-  --db /Users/lfan/.stopaskingme.sqlite3 grant codex email.otp personal-mail \
+PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+  --db /Users/lfan/.agent-autofill.sqlite3 grant codex email.otp personal-mail \
   --origin https://example.test --purpose login
 ```
 
@@ -49,11 +49,11 @@ OAuth2 bearer token in Keychain. Encrypted SQLite stores only connection
 metadata and an opaque Keychain lookup name:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
-  --db /Users/lfan/.stopaskingme.sqlite3 email-add personal-mail \
+PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+  --db /Users/lfan/.agent-autofill.sqlite3 email-add personal-mail \
   imap.example.test user@example.test --mailbox INBOX
-PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
-  --db /Users/lfan/.stopaskingme.sqlite3 email-test personal-mail
+PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+  --db /Users/lfan/.agent-autofill.sqlite3 email-test personal-mail
 ```
 
 `email-test` reconnects with the saved Keychain secret and prints only source
@@ -67,15 +67,15 @@ For Gmail, use a Google Cloud Desktop OAuth client that you own. In Google
 Cloud, enable the Gmail API, configure the OAuth consent screen (choose
 External for a personal Gmail account and add that account as a test user),
 add `https://mail.google.com/` under Data Access, then create an OAuth client
-with application type Desktop app and download its JSON. StopAskingMe does not
+with application type Desktop app and download its JSON. Agent Autofill does not
 bundle or publish a shared client:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
-  --db /Users/lfan/.stopaskingme.sqlite3 email-add-gmail personal-gmail \
+PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+  --db /Users/lfan/.agent-autofill.sqlite3 email-add-gmail personal-gmail \
   user@gmail.com --client-secrets /private/path/client-secret.json
-PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
-  --db /Users/lfan/.stopaskingme.sqlite3 email-test personal-gmail
+PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+  --db /Users/lfan/.agent-autofill.sqlite3 email-test personal-gmail
 ```
 
 `email-add-gmail` opens Google Sign-In in the system browser, receives the
@@ -108,20 +108,20 @@ error when that permission is absent.
 To run the local MCP process for a client:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
-  --db /Users/lfan/.stopaskingme.sqlite3 serve
+PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+  --db /Users/lfan/.agent-autofill.sqlite3 serve
 ```
 
 For a human review page, run `inbox-web` and open the printed loopback URL:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
-  --db /Users/lfan/.stopaskingme.sqlite3 inbox-web
+PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+  --db /Users/lfan/.agent-autofill.sqlite3 inbox-web
 ```
 
 The process uses MCP `initialize`, `tools/list`, and `tools/call` JSON-RPC
 messages over stdin/stdout. A client should launch it as a local stdio server
-and set the one-time token from `agent-create` as `STOPASKINGME_AGENT_TOKEN` in the
+and set the one-time token from `agent-create` as `AGENT_AUTOFILL_AGENT_TOKEN` in the
 MCP process environment. The stable identity is passed as `agent_id` in tool
 arguments. Create grants with the CLI; grants are short-lived and default-deny.
 
@@ -129,9 +129,9 @@ A Codex MCP entry follows this shape (keep the token in the process environment
 or a secret manager, not in source control):
 
 ```toml
-[mcp_servers.stopaskingme]
-command = "/Users/lfan/Project/StopAskingMe/scripts/stopaskingme"
-args = ["--db", "/Users/lfan/.stopaskingme.sqlite3", "serve"]
+[mcp_servers.agent-autofill]
+command = "/Users/lfan/Project/agent-autofill/scripts/agent-autofill"
+args = ["--db", "/Users/lfan/.agent-autofill.sqlite3", "serve"]
 ```
 
 The information surface is intentionally local and information-only. It does
@@ -158,10 +158,10 @@ rejected.
 For local administration, list safe financial metadata or delete one record:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
-  --db /Users/lfan/.stopaskingme.sqlite3 financial-records list
-PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
-  --db /Users/lfan/.stopaskingme.sqlite3 record-delete financial <financial-record-id>
+PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+  --db /Users/lfan/.agent-autofill.sqlite3 financial-records list
+PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+  --db /Users/lfan/.agent-autofill.sqlite3 record-delete financial <financial-record-id>
 ```
 
 Deletion removes the encrypted record, invalidates any compatibility handle
@@ -192,6 +192,6 @@ local connection record, deletes its Keychain secret when present, and revokes
 grants scoped to that source:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/StopAskingMe python -m stopaskingme.cli \
-  --db /Users/lfan/.stopaskingme.sqlite3 source-remove personal-mail
+PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+  --db /Users/lfan/.agent-autofill.sqlite3 source-remove personal-mail
 ```

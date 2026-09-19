@@ -33,10 +33,10 @@ all three child checks and the cross-child review are complete.
 
 ```bash
 PYTHONPATH=. pytest -q
-ruff check stopaskingme tests
-python3 -m compileall -q stopaskingme tests
+ruff check agent_autofill tests
+python3 -m compileall -q agent_autofill tests
 python3 /Users/lfan/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
-  .agents/skills/stopaskingme-form-memory
+  .agents/skills/agent-autofill-form-memory
 python3 ./.trellis/scripts/task.py validate \
   .trellis/tasks/09-16-persistent-email-otp
 python3 ./.trellis/scripts/task.py validate \

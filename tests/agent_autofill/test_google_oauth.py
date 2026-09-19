@@ -4,7 +4,7 @@ from urllib.request import urlopen
 
 import pytest
 
-from stopaskingme.google_oauth import (
+from agent_autofill.google_oauth import (
     CALLBACK_PATH,
     GMAIL_SCOPE,
     GoogleOAuthAuthorizationError,
@@ -209,7 +209,7 @@ def test_saved_oauth_payload_rejects_access_tokens_and_unknown_fields():
 
 def test_exchange_and_refresh_normalize_arbitrary_oauth_errors():
     def failing_request(_endpoint, _fields, _timeout):
-        from stopaskingme.google_oauth import GoogleOAuthError
+        from agent_autofill.google_oauth import GoogleOAuthError
 
         raise GoogleOAuthError("access-token-fixture and refresh-token-fixture")
 

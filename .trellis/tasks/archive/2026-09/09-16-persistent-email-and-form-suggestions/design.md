@@ -16,7 +16,7 @@ server.py -> Broker authorization and validation -> encrypted Store
 read-only IMAP adapter                         operating-system Keychain
 ```
 
-StopAskingMe returns authorized information. It does not inspect a browser,
+Agent Autofill returns authorized information. It does not inspect a browser,
 type values, submit forms, send messages, or decide whether the consuming
 agent needs approval for those external actions.
 

@@ -29,8 +29,8 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
-| 6 | 2026-09-17 | StopAskingMe email OTP and form memory integration | `1db478e` | `codex/encrypted-sensitive-records` |
-| 5 | 2026-09-17 | StopAskingMe form memory skill | `670b43e` | `codex/encrypted-sensitive-records` |
+| 6 | 2026-09-17 | Agent Autofill email OTP and form memory integration | `1db478e` | `codex/encrypted-sensitive-records` |
+| 5 | 2026-09-17 | Agent Autofill form memory skill | `670b43e` | `codex/encrypted-sensitive-records` |
 | 4 | 2026-09-17 | Encrypted sensitive record access | `105f3ab` | `codex/encrypted-sensitive-records` |
 | 3 | 2026-09-17 | Persistent Gmail OAuth and OTP retrieval | `721aa2b`, `5e69f13` | `codex/persistent-email-otp` |
 | 2 | 2026-09-16 | Bootstrap backend guidelines | `cb366b4` | `main` |

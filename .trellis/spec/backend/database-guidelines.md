@@ -1,6 +1,6 @@
 # Database Guidelines
 
-> Current persistence patterns for StopAskingMe.
+> Current persistence patterns for Agent Autofill.
 
 ## Overview
 
@@ -132,9 +132,9 @@ create table if not exists audit (
 
 ## Representative Tests
 
-- `tests/stopaskingme/test_storage.py` proves values persist across connections
+- `tests/agent_autofill/test_storage.py` proves values persist across connections
   while plaintext does not appear in the raw `kv.value` column.
-- `tests/stopaskingme/test_service.py` proves audit storage omits search terms,
+- `tests/agent_autofill/test_service.py` proves audit storage omits search terms,
   OTP values are not logged, and credential handles are one-time.
-- `tests/stopaskingme/test_messages_adapter.py` builds a minimal fixture and
+- `tests/agent_autofill/test_messages_adapter.py` builds a minimal fixture and
   verifies conversation-scoped reads.

@@ -2,7 +2,7 @@
 
 ## Goal
 
-Let an authenticated agent retrieve a recent email OTP through StopAskingMe
+Let an authenticated agent retrieve a recent email OTP through Agent Autofill
 without repeatedly asking the user to reconnect their mailbox, and help the
 agent propose stable form values worth saving for future form-filling work.
 
@@ -19,7 +19,7 @@ agent propose stable form values worth saving for future form-filling work.
 - `request_auth_code` already applies age, ambiguity, origin, one-time-use, and
   audit-redaction checks, but the complete CLI-login-to-agent-retrieval path is
   not covered end to end.
-- The repository has no StopAskingMe product skill. Official OpenAI guidance
+- The repository has no Agent Autofill product skill. Official OpenAI guidance
   supports a repository-local, implicitly discoverable skill under
   `.agents/skills` with a focused `SKILL.md`.
 
@@ -62,8 +62,8 @@ agent propose stable form values worth saving for future form-filling work.
 - Support the broad Chrome-style autofill surface: identity, contact, address,
   payment/financial, credentials, and other stable fields that have a safe
   record type. The LLM performs semantic matching and confidence/ambiguity
-  handling while StopAskingMe remains the encrypted system of record.
-- StopAskingMe and its skill/MCP are an information layer only. They may return
+  handling while Agent Autofill remains the encrypted system of record.
+- Agent Autofill and its skill/MCP are an information layer only. They may return
   raw values, including approved credentials and payment/financial values, to
   an authenticated agent under the applicable narrow grant. Browser
   interaction belongs to the consuming agent and is not implemented here.
@@ -83,7 +83,7 @@ agent propose stable form values worth saving for future form-filling work.
       consumed, revoked, or unauthenticated requests are denied.
 - [x] No authentication secret or OTP leaks into audit rows, diagnostics,
       fixtures containing real data, screenshots, or documentation.
-- [x] The StopAskingMe skill is discoverable for form-filling work and proposes
+- [x] The Agent Autofill skill is discoverable for form-filling work and proposes
       useful stable fields missing from or differing from saved records.
 - [x] Chrome-style identity/contact/address/payment/credential fields can be
       mapped to saved records with confidence and ambiguity surfaced for review.

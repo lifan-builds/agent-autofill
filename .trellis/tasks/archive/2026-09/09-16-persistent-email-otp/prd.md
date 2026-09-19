@@ -2,7 +2,7 @@
 
 ## Goal
 
-Connect a generic IMAP mailbox through the StopAskingMe CLI, including a
+Connect a generic IMAP mailbox through the Agent Autofill CLI, including a
 Thunderbird-style Google Sign-In path for Gmail, verify the credentials before
 saving them, and let later CLI/server processes retrieve a recent OTP for an
 authenticated agent with an active scoped grant.
@@ -59,9 +59,9 @@ authenticated agent with an active scoped grant.
 
 ## Acceptance Criteria
 
-- [x] `stopaskingme ... email-add` tests a generic IMAP login and reports the
+- [x] `agent-autofill ... email-add` tests a generic IMAP login and reports the
       configured account without printing the password or bearer token.
-- [x] `stopaskingme ... email-test <account_id>` verifies a saved read-only
+- [x] `agent-autofill ... email-test <account_id>` verifies a saved read-only
       connection and emits only non-secret account metadata.
 - [x] Closing the login process and starting a fresh server process can use the
       saved authentication to query the mailbox while it remains valid.
@@ -104,7 +104,7 @@ authenticated agent with an active scoped grant.
 - Browser-cookie/profile capture, password scraping, outbound email, browser
   control, and applying the OTP to a form.
 - Supporting provider-specific OAuth for providers other than Google.
-- Registering, publishing, or verifying a shared StopAskingMe Google OAuth
+- Registering, publishing, or verifying a shared Agent Autofill Google OAuth
   client. The local operator owns the supplied Desktop client configuration.
 - Migrating legacy caller-supplied OAuth bearer tokens; they continue to be
   reused only while valid.

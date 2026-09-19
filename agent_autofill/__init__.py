@@ -1,4 +1,4 @@
-"""StopAskingMe: local-first personal information broker for agent clients."""
+"""Agent Autofill: local-first personal information broker for agent clients."""
 
 from .service import Broker, BrokerError, AuthorizationError, CredentialUseError
 from .imap_adapter import IMAPEmailAdapter

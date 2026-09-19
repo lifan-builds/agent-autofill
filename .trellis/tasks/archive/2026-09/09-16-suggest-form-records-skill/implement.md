@@ -10,7 +10,7 @@ grant contracts rather than a speculative interface.
 
 1. Confirm the landed MCP catalog and copy its exact schemas into one concise
    `references/record-contracts.md`.
-2. Create `.agents/skills/stopaskingme-form-memory/SKILL.md` with a precise
+2. Create `.agents/skills/agent-autofill-form-memory/SKILL.md` with a precise
    implicit-discovery description and the workflow in `design.md`.
 3. Teach the skill to use metadata first, field-selective reads only when
    needed, semantic matching with confidence/ambiguity, and proactive stable
@@ -28,12 +28,12 @@ grant contracts rather than a speculative interface.
 
 ```bash
 python3 /Users/lfan/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
-  .agents/skills/stopaskingme-form-memory
-PYTHONPATH=. pytest -q tests/stopaskingme/test_service.py \
-  tests/stopaskingme/test_transport.py
+  .agents/skills/agent-autofill-form-memory
+PYTHONPATH=. pytest -q tests/agent_autofill/test_service.py \
+  tests/agent_autofill/test_transport.py
 PYTHONPATH=. pytest -q
-ruff check stopaskingme tests
-python3 -m compileall -q stopaskingme tests
+ruff check agent_autofill tests
+python3 -m compileall -q agent_autofill tests
 python3 ./.trellis/scripts/task.py validate \
   .trellis/tasks/09-16-suggest-form-records-skill
 ```
