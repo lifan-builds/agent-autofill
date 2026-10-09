@@ -91,10 +91,6 @@ the same command with `--force` when you want to install a newer checkout.
 For contributor development, an editable install is also available with
 `python3 -m pip install -e .`.
 
-The repository's `scripts/agent-autofill` launcher remains available when you
-need to run directly from an uninstalled checkout; normal usage should use the
-installed command below.
-
 ## 30-second path
 
 The shortest path from checkout to a safe, value-free inventory is four
@@ -273,8 +269,8 @@ git diff --check
 ```
 
 The repository targets Python 3.11 or newer. The package metadata is the
-source of truth for runtime dependencies; `requirements.txt` remains a small
-direct-checkout fallback for contributors. Use synthetic values in tests and
+source of truth for runtime dependencies; `requirements.txt` remains available
+for contributor and CI dependency tooling. Use synthetic values in tests and
 documentation. Never place real passwords, mailbox tokens, OTPs, payment
 values, or one-time handles in fixtures, logs, screenshots, or review
 artifacts.

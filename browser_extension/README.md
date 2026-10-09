@@ -13,9 +13,6 @@ second dashboard or a general form-filling UI.
      --db ~/.agent-autofill.sqlite3 fill-server
    ```
 
-   When running directly from an uninstalled checkout, use
-   `./scripts/agent-autofill` in place of `agent-autofill`.
-
 2. Open `chrome://extensions`, enable Developer mode, choose **Load unpacked**,
    and select this `browser_extension/` directory.
 3. On the target HTTPS page, the optional bridge popup can show the active

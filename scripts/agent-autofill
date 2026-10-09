@@ -1,9 +1,0 @@
-#!/bin/sh
-# Development-only checkout fallback. Installed users should run
-# `agent-autofill` from the console script provided by the package.
-set -eu
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
-export PYTHONPATH
-PYTHON_BIN="${AGENT_AUTOFILL_PYTHON:-python}"
-exec "$PYTHON_BIN" -m agent_autofill.cli "$@"

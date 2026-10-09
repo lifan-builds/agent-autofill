@@ -15,9 +15,7 @@ agent-autofill --db ~/.agent-autofill.sqlite3 init
 
 `pipx install .` is an equivalent isolated install. The package exposes the
 `agent-autofill` and `agent-autofill-server` commands, so the normal workflow
-does not require a Python module invocation. If you are intentionally running
-an uninstalled checkout, use `./scripts/agent-autofill` as the development
-fallback.
+does not require a Python module invocation.
 
 The database key is held by the operating-system credential store. The SQLite
 file contains encrypted values and safe metadata; connector passwords and OAuth

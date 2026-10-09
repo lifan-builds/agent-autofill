@@ -9,8 +9,7 @@ alias af="agent-autofill --db $AGENT_AUTOFILL_DB"
 ```
 
 The examples below use `af`; run `agent-autofill --help` to see all
-subcommands. The installed console script is the normal entry point. For a
-direct checkout without an install, substitute `./scripts/agent-autofill`.
+subcommands. The installed console script is the single supported entry point.
 
 ## A small command map
 

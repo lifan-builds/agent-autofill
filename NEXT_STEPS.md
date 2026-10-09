@@ -14,8 +14,6 @@ slice of implementation, and the checks required before expanding scope.
 - Python package/import: `agent_autofill`
 - CLI: `agent-autofill`
 - MCP executable: `agent-autofill-server`
-- Installed CLI: `agent-autofill`
-- Checkout fallback: `scripts/agent-autofill`
 - MCP token environment variable: `AGENT_AUTOFILL_AGENT_TOKEN`
 
 The initial prototype is local-first and information-only. It currently

@@ -87,8 +87,7 @@ uv tool install .
 ```
 
 `pipx install .` is equivalent. These installs expose `agent-autofill` and
-`agent-autofill-server` on your `PATH`; the checkout launcher is only needed
-when you intentionally run without installing the package.
+`agent-autofill-server` on your `PATH`.
 
 ### Installed local service connection
 
