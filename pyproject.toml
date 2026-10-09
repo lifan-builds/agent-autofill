@@ -6,11 +6,26 @@ build-backend = "setuptools.build_meta"
 name = "agent-autofill"
 version = "0.1.0"
 description = "Local-first personal information broker for AI agents"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "cryptography>=42",
   "keyring>=25",
 ]
+
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Security",
+]
+
+[project.urls]
+Homepage = "https://github.com/lifan-builds/agent-autofill"
+Repository = "https://github.com/lifan-builds/agent-autofill"
+Issues = "https://github.com/lifan-builds/agent-autofill/issues"
 
 [project.scripts]
 agent-autofill = "agent_autofill.cli:main"

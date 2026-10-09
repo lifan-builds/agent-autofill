@@ -71,6 +71,30 @@ The three product promises behind it:
 | --- | --- | --- | --- |
 | Encrypted SQLite plus OS credential storage | Grants, origins, purposes, expiry, and revocation | Metadata matching, scoped reads, OTP support, and reusable records | Inbox dashboard, safe status commands, provenance, and audits |
 
+## Install the command
+
+From a checkout, install Agent Autofill as an isolated command-line tool:
+
+```bash
+uv tool install .
+```
+
+If you use `pipx`, the equivalent is:
+
+```bash
+pipx install .
+```
+
+Both commands install the declared runtime dependencies and put the
+`agent-autofill` and `agent-autofill-server` commands on your `PATH`. Re-run
+the same command with `--force` when you want to install a newer checkout.
+For contributor development, an editable install is also available with
+`python3 -m pip install -e .`.
+
+The repository's `scripts/agent-autofill` launcher remains available when you
+need to run directly from an uninstalled checkout; normal usage should use the
+installed command below.
+
 ## 30-second path
 
 The shortest path from checkout to a safe, value-free inventory is four
@@ -78,11 +102,9 @@ commands. The optional setup step comes later, after you can see the local
 surface.
 
 ```bash
-python3 -m pip install -r requirements.txt
-
-./scripts/agent-autofill --db ~/.agent-autofill.sqlite3 init
-./scripts/agent-autofill --db ~/.agent-autofill.sqlite3 quickstart
-./scripts/agent-autofill --db ~/.agent-autofill.sqlite3 inbox-web
+agent-autofill --db ~/.agent-autofill.sqlite3 init
+agent-autofill --db ~/.agent-autofill.sqlite3 quickstart
+agent-autofill --db ~/.agent-autofill.sqlite3 inbox-web
 ```
 
 `quickstart` is safe to rerun. It reports readiness, source health, counts,
@@ -98,8 +120,8 @@ credential requests.
 For guided import and connector setup, continue with:
 
 ```bash
-./scripts/agent-autofill --db ~/.agent-autofill.sqlite3 setup
-./scripts/agent-autofill --db ~/.agent-autofill.sqlite3 doctor
+agent-autofill --db ~/.agent-autofill.sqlite3 setup
+agent-autofill --db ~/.agent-autofill.sqlite3 doctor
 ```
 
 `setup` is interactive and review-first. `doctor` explains a blocked Keychain,
@@ -152,7 +174,7 @@ Start with metadata-only matching. It returns site, username, field, and scope
 information without returning a password:
 
 ```bash
-./scripts/agent-autofill --db ~/.agent-autofill.sqlite3 \
+agent-autofill --db ~/.agent-autofill.sqlite3 \
   credentials list --target-origin https://example.test
 ```
 
@@ -160,7 +182,7 @@ Create a value-free proposal for one site and choose the delivery mode before
 the grant is written:
 
 ```bash
-./scripts/agent-autofill --db ~/.agent-autofill.sqlite3 \
+agent-autofill --db ~/.agent-autofill.sqlite3 \
   grant-site agent-1 https://example.test "account setup" \
   --delivery direct
 ```
@@ -169,7 +191,7 @@ Extension mode is optional. To use it, start the loopback bridge and load
 `browser_extension/` as an unpacked Chrome extension:
 
 ```bash
-./scripts/agent-autofill --db ~/.agent-autofill.sqlite3 fill-server
+agent-autofill --db ~/.agent-autofill.sqlite3 fill-server
 ```
 
 The optional extension is a transport helper. It shows the active origin and
@@ -205,13 +227,13 @@ Connector secrets and the database key remain OS-store-backed.
 Use metadata first, then request only the exact information needed:
 
 ```bash
-./scripts/agent-autofill --db ~/.agent-autofill.sqlite3 \
+agent-autofill --db ~/.agent-autofill.sqlite3 \
   email-match owner@example.test
 
-./scripts/agent-autofill --db ~/.agent-autofill.sqlite3 \
+agent-autofill --db ~/.agent-autofill.sqlite3 \
   profile list --category identity --limit 20
 
-./scripts/agent-autofill --db ~/.agent-autofill.sqlite3 \
+agent-autofill --db ~/.agent-autofill.sqlite3 \
   financial-records --kind payment_card --last4 1234
 ```
 
@@ -262,8 +284,9 @@ python3 -m compileall -q agent_autofill tests/agent_autofill
 git diff --check
 ```
 
-The repository targets Python 3.11 or newer and uses the dependencies in
-`requirements.txt` for the local broker. Use synthetic values in tests and
+The repository targets Python 3.11 or newer. The package metadata is the
+source of truth for runtime dependencies; `requirements.txt` remains a small
+direct-checkout fallback for contributors. Use synthetic values in tests and
 documentation. Never place real passwords, mailbox tokens, OTPs, payment
 values, or one-time handles in fixtures, logs, screenshots, or review
 artifacts.

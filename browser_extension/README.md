@@ -5,12 +5,16 @@ canonical agent-facing interface. This optional Chrome component is only a
 local transport helper for the lower-exposure credential mode; it is not a
 second dashboard or a general form-filling UI.
 
-1. Start the loopback bridge from the repository root:
+1. Install Agent Autofill with `uv tool install .` (or `pipx install .`) from
+   the repository root, then start the loopback bridge:
 
    ```bash
-   PYTHONPATH=. python -m agent_autofill.cli \
+   agent-autofill \
      --db ~/.agent-autofill.sqlite3 fill-server
    ```
+
+   When running directly from an uninstalled checkout, use
+   `./scripts/agent-autofill` in place of `agent-autofill`.
 
 2. Open `chrome://extensions`, enable Developer mode, choose **Load unpacked**,
    and select this `browser_extension/` directory.

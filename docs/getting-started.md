@@ -5,12 +5,19 @@ does not require a mailbox, browser extension, or website credential.
 
 ## 1. Install and initialize
 
-Agent Autofill supports Python 3.11 or newer. From the repository root:
+Agent Autofill supports Python 3.11 or newer. From the repository root, install
+the command with `uv`:
 
 ```bash
-python3 -m pip install -r requirements.txt
-./scripts/agent-autofill --db ~/.agent-autofill.sqlite3 init
+uv tool install .
+agent-autofill --db ~/.agent-autofill.sqlite3 init
 ```
+
+`pipx install .` is an equivalent isolated install. The package exposes the
+`agent-autofill` and `agent-autofill-server` commands, so the normal workflow
+does not require a Python module invocation. If you are intentionally running
+an uninstalled checkout, use `./scripts/agent-autofill` as the development
+fallback.
 
 The database key is held by the operating-system credential store. The SQLite
 file contains encrypted values and safe metadata; connector passwords and OAuth
@@ -19,8 +26,8 @@ payloads stay in the OS store.
 ## 2. Inspect before importing anything
 
 ```bash
-./scripts/agent-autofill --db ~/.agent-autofill.sqlite3 quickstart
-./scripts/agent-autofill --db ~/.agent-autofill.sqlite3 inbox-web
+agent-autofill --db ~/.agent-autofill.sqlite3 quickstart
+agent-autofill --db ~/.agent-autofill.sqlite3 inbox-web
 ```
 
 `quickstart` prints a value-free readiness summary. `inbox-web` starts a
@@ -43,7 +50,7 @@ through the CLI/MCP commands after this check.
 When the inventory looks right, run:
 
 ```bash
-./scripts/agent-autofill --db ~/.agent-autofill.sqlite3 setup
+agent-autofill --db ~/.agent-autofill.sqlite3 setup
 ```
 
 The wizard can help you add reviewed profile fields, import supported Chrome
@@ -63,14 +70,14 @@ excludes passwords, payments, OTPs, and arbitrary autocomplete history.
 ## 4. Check readiness and choose an agent
 
 ```bash
-./scripts/agent-autofill --db ~/.agent-autofill.sqlite3 doctor
-./scripts/agent-autofill --db ~/.agent-autofill.sqlite3 agents
+agent-autofill --db ~/.agent-autofill.sqlite3 doctor
+agent-autofill --db ~/.agent-autofill.sqlite3 agents
 ```
 
 If you need a new authenticated identity, create it once:
 
 ```bash
-./scripts/agent-autofill --db ~/.agent-autofill.sqlite3 agent-create codex
+agent-autofill --db ~/.agent-autofill.sqlite3 agent-create codex
 ```
 
 Keep the one-time token in your local secret manager or process environment.
@@ -85,13 +92,13 @@ guide](agent-autofill.md) has the complete grant reference.
 Use metadata-first commands to see what is available:
 
 ```bash
-./scripts/agent-autofill --db ~/.agent-autofill.sqlite3 \
+agent-autofill --db ~/.agent-autofill.sqlite3 \
   profile list --category identity --limit 20
 
-./scripts/agent-autofill --db ~/.agent-autofill.sqlite3 \
+agent-autofill --db ~/.agent-autofill.sqlite3 \
   credentials list --target-origin https://example.test
 
-./scripts/agent-autofill --db ~/.agent-autofill.sqlite3 \
+agent-autofill --db ~/.agent-autofill.sqlite3 \
   sources
 ```
 
@@ -108,7 +115,7 @@ If a command reports that the OS credential store is unavailable:
 3. Follow the concrete `Fix:` command it prints.
 
 ```bash
-./scripts/agent-autofill --db ~/.agent-autofill.sqlite3 doctor
+agent-autofill --db ~/.agent-autofill.sqlite3 doctor
 ```
 
 Do not move the database key, connector secret, service token, or OAuth

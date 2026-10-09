@@ -5,11 +5,12 @@ value-free JSON projection exists. Set the database path once in a shell:
 
 ```bash
 export AGENT_AUTOFILL_DB="$HOME/.agent-autofill.sqlite3"
-alias af="./scripts/agent-autofill --db $AGENT_AUTOFILL_DB"
+alias af="agent-autofill --db $AGENT_AUTOFILL_DB"
 ```
 
-The examples below use `af`; run `./scripts/agent-autofill --help` to see all
-subcommands.
+The examples below use `af`; run `agent-autofill --help` to see all
+subcommands. The installed console script is the normal entry point. For a
+direct checkout without an install, substitute `./scripts/agent-autofill`.
 
 ## A small command map
 

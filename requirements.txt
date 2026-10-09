@@ -1,2 +1,4 @@
+# Runtime dependencies for direct-checkout development. End users should
+# install the package with `uv tool install .` or `pipx install .` instead.
 cryptography>=42
 keyring>=25

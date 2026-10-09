@@ -56,14 +56,14 @@ and policy.
 First inspect safe metadata:
 
 ```bash
-./scripts/agent-autofill --db ~/.agent-autofill.sqlite3 \
+agent-autofill --db ~/.agent-autofill.sqlite3 \
   credentials list --target-origin https://example.test
 ```
 
 Preview a site grant and choose direct mode:
 
 ```bash
-./scripts/agent-autofill --db ~/.agent-autofill.sqlite3 \
+agent-autofill --db ~/.agent-autofill.sqlite3 \
   grant-site codex https://example.test "account setup" \
   --delivery direct
 ```
@@ -77,7 +77,7 @@ purpose, and expiry. It does not display or persist a password. The eventual
 Preview the same site with the lower-exposure handoff:
 
 ```bash
-./scripts/agent-autofill --db ~/.agent-autofill.sqlite3 \
+agent-autofill --db ~/.agent-autofill.sqlite3 \
   grant-site codex https://example.test "account setup" \
   --delivery extension
 ```
@@ -85,7 +85,7 @@ Preview the same site with the lower-exposure handoff:
 Start the loopback bridge:
 
 ```bash
-./scripts/agent-autofill --db ~/.agent-autofill.sqlite3 fill-server
+agent-autofill --db ~/.agent-autofill.sqlite3 fill-server
 ```
 
 Then load `browser_extension/` as an unpacked extension when the optional bridge

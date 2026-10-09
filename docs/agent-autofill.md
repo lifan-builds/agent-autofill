@@ -34,7 +34,7 @@ require Keychain approval; later broker operations use the single vault item.
 To retry migration for configured connectors:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 keychain migrate
 ```
 
@@ -80,6 +80,16 @@ them as a shortcut during agent-led intake.
 
 ## Setup
 
+Install the command once from the repository root:
+
+```bash
+uv tool install .
+```
+
+`pipx install .` is equivalent. These installs expose `agent-autofill` and
+`agent-autofill-server` on your `PATH`; the checkout launcher is only needed
+when you intentionally run without installing the package.
+
 ### Installed local service connection
 
 Services use the installed broker through a stable lowercase service name. The
@@ -89,7 +99,7 @@ Keychain-paired local service receives trusted read access to all information
 already stored in Agent Autofill:
 
 ```bash
-./scripts/agent-autofill serve --service cpa-phoenix
+agent-autofill serve --service cpa-phoenix
 ```
 
 The broker discovers an existing `~/.agent-autofill.sqlite3`, stores the
@@ -106,7 +116,7 @@ not need a source map. Legacy or remote callers can create the matching
 one-time grant:
 
 ```bash
-./scripts/agent-autofill grant-email service:cpa-phoenix email.otp \
+agent-autofill grant-email service:cpa-phoenix email.otp \
   owner@example.test --origin https://auth.openai.com \
   --purpose cpa-phoenix-revive
 ```
@@ -114,25 +124,19 @@ one-time grant:
 The command resolves the address internally; the opaque source ID need not be
 copied into Phoenix configuration.
 
-Install the two small runtime dependencies first:
-
 ```bash
-python3 -m pip install -r /Users/lfan/Project/agent-autofill/requirements.txt
-```
-
-```bash
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 init
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 setup
 ```
 
 Before starting or resuming setup, inspect the value-free readiness summary:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 quickstart
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 doctor
 ```
 
@@ -155,7 +159,7 @@ in a file or environment variable.
 If setup left the agent identity blank, create one explicitly:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 agent-create codex
 ```
 
@@ -164,19 +168,19 @@ the existing token and does not silently rotate it. Continue with explicit
 grants only when the identity and token are already available:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 grant codex profile.read name \
   --origin example.com --purpose form
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 grant codex credential.use <credential-id> \
   --origin https://example.com --purpose form
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 grant codex credential.read <credential-id> \
   --origin https://example.com --purpose form
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 grant codex financial.read <financial-record-id> \
   --origin https://example.com --purpose form
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 grant codex email.otp personal-mail \
   --origin https://example.test --purpose login
 ```
@@ -213,13 +217,13 @@ Wizard grants expire after 600 seconds. Renew them with the existing
 `grant` command, which remains unchanged; for example:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 grant codex profile.read name \
   --origin https://example.test --purpose form --expires-in 600
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 grant codex email.search personal-mail \
   --expires-in 600
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 grant codex email.otp personal-mail \
   --origin https://example.test --purpose login --expires-in 600
 ```
@@ -232,9 +236,9 @@ arguments. Review the metadata-only proposal before confirming the encrypted
 write:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 profile add legal_name
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 profile edit legal_name
 ```
 
@@ -252,7 +256,7 @@ v10/v11 password format, and seals each password immediately in the encrypted
 broker. Unsupported encryption fails closed and does not create credentials.
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 chrome password-manager \
   --profile-dir "/Users/lfan/Library/Application Support/Google/Chrome/Default" \
   --confirm-import
@@ -272,7 +276,7 @@ The import command also supports a value-free reconciliation preview. Close
 Chrome before reading its profile files:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 chrome password-manager \
   --profile-dir "/Users/lfan/Library/Application Support/Google/Chrome/Default" \
   --preview
@@ -296,7 +300,7 @@ passwords or profile values. A site grant can be previewed and confirmed from
 the CLI:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 grant-site codex \
   https://www.hilton.com "hotel booking" --delivery extension
 ```
@@ -334,7 +338,7 @@ To use a confirmed one-time `credential.use` handle in Chrome, load the
 start the local bridge:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 fill-server
 ```
 
@@ -353,10 +357,10 @@ OAuth2 bearer token in Keychain. Encrypted SQLite stores only connection
 metadata and an opaque Keychain lookup name:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 email-add personal-mail \
   imap.example.test user@example.test --mailbox INBOX
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 email-test personal-mail
 ```
 
@@ -375,10 +379,10 @@ with application type Desktop app and download its JSON. Agent Autofill does not
 bundle or publish a shared client:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 email-add-gmail personal-gmail \
   user@gmail.com --client-secrets /private/path/client-secret.json
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 email-test personal-gmail
 ```
 
@@ -395,7 +399,7 @@ writes mail or sends messages.
 To verify OAuth accounts already configured in Thunderbird, run:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/agent-autofill python3 -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 email-test-thunderbird
 ```
 
@@ -409,7 +413,7 @@ After reviewing the metadata-only proposal, import the verified connectors with
 an explicit confirmation:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/agent-autofill python3 -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 email-import-thunderbird \
   --confirm-import
 ```
@@ -455,14 +459,14 @@ error when that permission is absent.
 To run the local MCP process for a client:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   serve --service cpa-phoenix
 ```
 
 For a human review page, run `inbox-web` and open the printed loopback URL:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 inbox-web
 ```
 
@@ -484,7 +488,7 @@ or a secret manager, not in source control):
 
 ```toml
 [mcp_servers.agent-autofill]
-command = "/Users/lfan/Project/agent-autofill/scripts/agent-autofill"
+command = "agent-autofill"
 args = ["serve", "--service", "cpa-phoenix"]
 ```
 
@@ -519,9 +523,9 @@ path described above; it must not fabricate an origin or grant for this API.
 For local administration, list safe financial metadata or delete one record:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 financial-records list
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 record-delete financial <financial-record-id>
 ```
 
@@ -531,7 +535,7 @@ shell arguments. The proposal shows only masked metadata and the
 record is written to encrypted storage only after an explicit `y` response:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 payment-card-add \
   platinum-card "Travel Platinum" --network amex \
   --expiration-month 05 --expiration-year 2031 \
@@ -553,7 +557,7 @@ service directly, or the normal origin/purpose-scoped `financial.read` grant
 for legacy/remote agents:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 financial-records \
   --kind payment_card --network amex --last4 1007 \
   --expiration-month 05 --expiration-year 2031
@@ -605,7 +609,7 @@ For recipient-scoped verification links, first match the exact configured
 mailbox using safe metadata:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 email-match owner@example.test
 ```
 
@@ -643,6 +647,6 @@ local connection record, deletes its Keychain secret when present, and revokes
 grants scoped to that source:
 
 ```bash
-PYTHONPATH=/Users/lfan/Project/agent-autofill python -m agent_autofill.cli \
+agent-autofill \
   --db /Users/lfan/.agent-autofill.sqlite3 source-remove personal-mail
 ```

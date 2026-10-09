@@ -14,7 +14,8 @@ slice of implementation, and the checks required before expanding scope.
 - Python package/import: `agent_autofill`
 - CLI: `agent-autofill`
 - MCP executable: `agent-autofill-server`
-- Shell launcher: `scripts/agent-autofill`
+- Installed CLI: `agent-autofill`
+- Checkout fallback: `scripts/agent-autofill`
 - MCP token environment variable: `AGENT_AUTOFILL_AGENT_TOKEN`
 
 The initial prototype is local-first and information-only. It currently
@@ -60,7 +61,8 @@ The wheel builds with a clean environment that has the declared `cryptography`,
 `keyring`, and build dependencies. CLI help, CLI database initialization, MCP
 `initialize`, and MCP server advertisement have been smoke-tested. A host
 interpreter without `keyring` cannot start the real encrypted CLI/server;
-install `requirements.txt` rather than weakening the Keychain requirement.
+install the project with `uv tool install .` or `pipx install .` rather than
+weakening the Keychain requirement.
 
 ## Completed milestone: first-run authorized workflow
 
