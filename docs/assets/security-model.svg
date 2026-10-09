@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 610" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 520" role="img" aria-labelledby="title desc">
   <title id="title">Agent Autofill security model</title>
-  <desc id="desc">Local sources flow into an encrypted vault and policy broker. The broker returns selected fields directly to an acting agent or creates a one-time handle for the optional browser extension. The agent or user remains responsible for submission and verification.</desc>
+  <desc id="desc">Local sources flow into an encrypted local vault and policy broker. The broker returns selected fields directly or creates a one-time handle for the optional extension. The acting agent or user decides what happens next.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#f8fbff"/>
@@ -19,84 +19,84 @@
       <stop offset="1" stop-color="#db2777"/>
     </linearGradient>
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
-      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#312e81" flood-opacity=".13"/>
+      <feDropShadow dx="0" dy="7" stdDeviation="9" flood-color="#312e81" flood-opacity=".12"/>
     </filter>
-    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
-      <path d="M0 0L12 6L0 12Z" fill="#64748b"/>
+    <marker id="arrow" markerWidth="11" markerHeight="11" refX="9" refY="5.5" orient="auto">
+      <path d="M0 0L11 5.5L0 11Z" fill="#64748b"/>
     </marker>
     <style>
       .heading { font: 700 22px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; fill: #172554; }
-      .body { font: 500 16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; fill: #334155; }
-      .small { font: 500 14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; fill: #475569; }
-      .white-heading { font: 700 21px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; fill: #fff; }
-      .white-body { font: 500 15px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; fill: #eef2ff; }
+      .subtitle { font: 500 15px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; fill: #475569; }
+      .card-heading { font: 700 20px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; fill: #172554; }
+      .body { font: 500 15px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; fill: #334155; }
+      .small { font: 500 13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; fill: #64748b; }
+      .white-heading { font: 700 19px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; fill: #fff; }
+      .white-body { font: 500 14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; fill: #eef2ff; }
     </style>
   </defs>
 
-  <rect width="1280" height="610" rx="32" fill="url(#bg)"/>
-  <circle cx="58" cy="72" r="3" fill="#818cf8"/>
-  <circle cx="1185" cy="84" r="4" fill="#f472b6"/>
-  <path d="M109 60l4 9 10 1-7 7 2 10-9-5-9 5 2-10-7-7 10-1z" fill="#f59e0b" opacity=".8"/>
-  <path d="M1200 508l4 9 10 1-7 7 2 10-9-5-9 5 2-10-7-7 10-1z" fill="#8b5cf6" opacity=".7"/>
+  <rect width="1280" height="520" rx="32" fill="url(#bg)"/>
+  <circle cx="1190" cy="70" r="4" fill="#f472b6"/>
+  <circle cx="68" cy="76" r="3" fill="#818cf8"/>
 
-  <text x="54" y="52" class="heading">Information stays local until an approved workflow asks for it</text>
-  <text x="54" y="82" class="small">Every arrow is scoped. Every one-time handoff expires. The acting agent owns the next action.</text>
+  <text x="56" y="50" class="heading">Approved information stays local by default</text>
+  <text x="56" y="77" class="subtitle">Scoped requests open one path. The acting agent or user decides what happens next.</text>
 
-  <!-- Source card -->
+  <!-- Local sources -->
   <g filter="url(#shadow)">
-    <rect x="54" y="146" width="216" height="270" rx="22" fill="#fff" stroke="#c7d2fe" stroke-width="2"/>
-    <rect x="54" y="146" width="216" height="12" rx="6" fill="#818cf8"/>
-    <text x="78" y="198" class="heading">Local sources</text>
-    <text x="78" y="232" class="body">✦ Profile fields</text>
-    <text x="78" y="264" class="body">✦ Read-only mail</text>
-    <text x="78" y="296" class="body">✦ Messages metadata</text>
-    <text x="78" y="328" class="body">✦ Chrome metadata</text>
-    <text x="78" y="378" class="small">Provider stores stay read-only.</text>
+    <rect x="56" y="126" width="220" height="220" rx="22" fill="#fff" stroke="#c7d2fe" stroke-width="2"/>
+    <rect x="56" y="126" width="220" height="10" rx="5" fill="#818cf8"/>
+    <text x="80" y="174" class="card-heading">Local sources</text>
+    <text x="80" y="214" class="body">✦ Profile and contact</text>
+    <text x="80" y="245" class="body">✦ Read-only mail</text>
+    <text x="80" y="276" class="body">✦ Messages metadata</text>
+    <text x="80" y="307" class="body">✦ Chrome metadata</text>
+    <text x="80" y="333" class="small">Source stores remain read-only.</text>
   </g>
 
-  <!-- Vault card -->
+  <!-- Encrypted vault -->
   <g filter="url(#shadow)">
-    <rect x="336" y="128" width="252" height="306" rx="22" fill="url(#vault)"/>
-    <path d="M448 186c-23 0-42 18-42 41v16h-8c-8 0-14 6-14 14v58c0 8 6 14 14 14h100c8 0 14-6 14-14v-58c0-8-6-14-14-14h-8v-16c0-23-19-41-42-41zm-24 57v-16c0-13 11-24 24-24s24 11 24 24v16z" fill="#c4b5fd" opacity=".95"/>
-    <text x="364" y="352" class="white-heading">Encrypted local vault</text>
-    <text x="364" y="382" class="white-body">SQLite values + OS credential store</text>
-    <text x="364" y="408" class="white-body">Connector secrets never enter logs.</text>
+    <rect x="344" y="110" width="246" height="260" rx="22" fill="url(#vault)"/>
+    <path d="M467 166c-22 0-40 18-40 40v15h-8c-8 0-14 6-14 14v54c0 8 6 14 14 14h96c8 0 14-6 14-14v-54c0-8-6-14-14-14h-8v-15c0-22-18-40-40-40zm-23 55v-15c0-13 10-23 23-23s23 10 23 23v15z" fill="#c4b5fd" opacity=".95"/>
+    <text x="372" y="307" class="white-heading">Encrypted local vault</text>
+    <text x="372" y="334" class="white-body">SQLite + OS credential store</text>
+    <text x="372" y="357" class="white-body">Secrets stay local.</text>
   </g>
 
-  <!-- Broker card -->
+  <!-- Policy broker -->
   <g filter="url(#shadow)">
-    <rect x="648" y="128" width="252" height="306" rx="22" fill="#fff" stroke="#a5b4fc" stroke-width="2"/>
-    <rect x="648" y="128" width="252" height="12" rx="6" fill="#6366f1"/>
-    <text x="676" y="188" class="heading">Policy broker</text>
-    <text x="676" y="228" class="body">✓ Scope and origin checks</text>
-    <text x="676" y="262" class="body">✓ Value-free metadata first</text>
-    <text x="676" y="296" class="body">✓ One-time reads and grants</text>
-    <text x="676" y="330" class="body">✓ Redacted audit metadata</text>
-    <text x="676" y="382" class="small">No browser control. No submission.</text>
+    <rect x="654" y="110" width="250" height="260" rx="22" fill="#fff" stroke="#a5b4fc" stroke-width="2"/>
+    <rect x="654" y="110" width="250" height="10" rx="5" fill="#6366f1"/>
+    <text x="682" y="170" class="card-heading">Policy broker</text>
+    <text x="682" y="210" class="body">✓ Scope + origin checks</text>
+    <text x="682" y="242" class="body">✓ Metadata first</text>
+    <text x="682" y="274" class="body">✓ One-time reads</text>
+    <text x="682" y="306" class="body">✓ Redacted audit trail</text>
+    <text x="682" y="343" class="small">No browser control or submission.</text>
   </g>
 
-  <!-- Delivery cards -->
+  <!-- Delivery choices -->
   <g filter="url(#shadow)">
-    <rect x="958" y="128" width="268" height="130" rx="22" fill="url(#direct)"/>
-    <text x="986" y="172" class="white-heading">Direct delivery</text>
-    <text x="986" y="205" class="white-body">Approved selected fields only.</text>
-    <text x="986" y="230" class="white-body">The acting agent handles the value.</text>
+    <rect x="968" y="110" width="256" height="104" rx="22" fill="url(#direct)"/>
+    <text x="994" y="150" class="white-heading">Direct delivery</text>
+    <text x="994" y="179" class="white-body">Selected fields only.</text>
+    <text x="994" y="202" class="white-body">Agent handles the value.</text>
   </g>
   <g filter="url(#shadow)">
-    <rect x="958" y="282" width="268" height="152" rx="22" fill="url(#extension)"/>
-    <text x="986" y="326" class="white-heading">Optional extension</text>
-    <text x="986" y="359" class="white-body">One-time, origin-bound handle.</text>
-    <text x="986" y="384" class="white-body">Password stays outside agent input.</text>
-    <text x="986" y="409" class="white-body">Active page only; then it is cleared.</text>
+    <rect x="968" y="232" width="256" height="138" rx="22" fill="url(#extension)"/>
+    <text x="994" y="272" class="white-heading">Optional extension</text>
+    <text x="994" y="301" class="white-body">One-time, origin-bound handle.</text>
+    <text x="994" y="325" class="white-body">Password stays out of input.</text>
+    <text x="994" y="349" class="white-body">Cleared after the active page.</text>
   </g>
 
   <!-- Flow arrows -->
-  <path d="M270 280H324" stroke="#64748b" stroke-width="4" fill="none" marker-end="url(#arrow)"/>
-  <path d="M588 280H636" stroke="#64748b" stroke-width="4" fill="none" marker-end="url(#arrow)"/>
-  <path d="M900 196H946" stroke="#0f766e" stroke-width="4" fill="none" marker-end="url(#arrow)"/>
-  <path d="M900 358H946" stroke="#be185d" stroke-width="4" fill="none" marker-end="url(#arrow)"/>
+  <path d="M276 236H332" stroke="#64748b" stroke-width="4" fill="none" marker-end="url(#arrow)"/>
+  <path d="M590 236H642" stroke="#64748b" stroke-width="4" fill="none" marker-end="url(#arrow)"/>
+  <path d="M904 162H956" stroke="#0f766e" stroke-width="4" fill="none" marker-end="url(#arrow)"/>
+  <path d="M904 301H956" stroke="#be185d" stroke-width="4" fill="none" marker-end="url(#arrow)"/>
 
-  <!-- Footer boundary -->
-  <rect x="54" y="488" width="1172" height="72" rx="18" fill="#fff" stroke="#cbd5e1" stroke-width="2"/>
-  <text x="82" y="531" class="body">✦ Acting agent or user chooses what happens next: review, type, submit, and verify.</text>
+  <!-- Boundary -->
+  <rect x="56" y="414" width="1168" height="60" rx="18" fill="#fff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="84" y="451" class="body">✦ Agent or user acts next: review, type, submit, and verify.</text>
 </svg>

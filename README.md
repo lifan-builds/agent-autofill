@@ -206,18 +206,6 @@ owns the next action and post-action verification.
   <img src="docs/assets/security-model.svg" alt="Security model showing local sources entering an encrypted broker, then direct selected fields or an optional one-time extension handle" width="100%">
 </p>
 
-```mermaid
-flowchart LR
-    S["Local sources\nprofile · mail · Messages\nChrome metadata"] --> V["Encrypted local vault\nSQLite + OS credential store"]
-    V --> P["Policy broker\nscopes · grants · redaction"]
-    P --> D["Direct delivery\nselected fields"]
-    P --> H["One-time handle\norigin-bound"]
-    H --> X["Optional extension\nactive page only"]
-    D --> A["Acting agent or user\nchooses next action"]
-    X --> A
-    A -. "submission + verification" .-> E["External site"]
-```
-
 The broker owns authorization and one-time reads. The inbox shows a value-free
 inventory. The MCP transport exposes the authenticated local tool surface.
 Connector secrets and the database key remain OS-store-backed.

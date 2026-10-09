@@ -41,15 +41,6 @@ when a real task needs them.
   <img src="assets/security-model.svg" alt="Agent Autofill local security model" width="100%">
 </p>
 
-```mermaid
-flowchart TB
-  A["Choose a source"] --> B["Review metadata"]
-  B --> C["Store locally"]
-  C --> D["Choose exposure"]
-  D --> E["Ask for one scoped value"]
-  E --> F["Acting agent or user decides next step"]
-```
-
 The first five steps are Agent Autofill's information path. The dashboard only
 shows the safe inventory; the agent uses the CLI/MCP path for the request. The
 last step is deliberately outside the broker: an agent or user decides whether
