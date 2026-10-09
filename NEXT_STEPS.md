@@ -137,7 +137,10 @@ stop safely. Local administrative writes commit individually, and the skill
 does not claim cryptographic proof of approval or atomic batch rollback.
 
 See [.agents/skills/agent-autofill-chrome-intake/SKILL.md](.agents/skills/agent-autofill-chrome-intake/SKILL.md)
-and the current task's verification report for tested boundaries. Do not
+and [docs/chrome-seed-onboarding.md](docs/chrome-seed-onboarding.md) for the
+user path. The classification rubric is in
+[.agents/skills/agent-autofill-chrome-intake/references/classification-guide.md](.agents/skills/agent-autofill-chrome-intake/references/classification-guide.md).
+See the current task's verification report for tested boundaries. Do not
 interpret synthetic recipe/agent tests as live-provider acceptance.
 
 ## Deferred implementation areas

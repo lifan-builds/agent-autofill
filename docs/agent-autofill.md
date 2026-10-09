@@ -49,6 +49,10 @@ narrower policy.
 
 ## Agent-led Chrome intake
 
+For the complete user path, see [Chrome seed onboarding](chrome-seed-onboarding.md).
+The agent also uses the focused [classification guide](../.agents/skills/agent-autofill-chrome-intake/references/classification-guide.md)
+when Chrome columns, address groups, or currentness are unclear.
+
 For reviewed cold-start data, ask your local agent to use
 [`agent-autofill-chrome-intake`](../.agents/skills/agent-autofill-chrome-intake/SKILL.md):
 

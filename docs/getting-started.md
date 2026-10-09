@@ -51,10 +51,15 @@ When the inventory looks right, run:
 agent-autofill --db ~/.agent-autofill.sqlite3 setup
 ```
 
-The wizard can help you add reviewed profile fields, import supported Chrome
-metadata, configure read-only email or Messages sources, and create an agent
-identity. It shows value-free proposals before writes. Skip any source you do
-not need yet; the local store remains usable.
+The wizard can configure an agent identity, read-only email or Messages
+sources, and the legacy eager Chrome metadata import. Skip any source you do
+not need yet; the local store remains usable. The legacy import is not the
+ambiguity-aware seed flow because it writes imported metadata during setup.
+
+For the recommended ambiguity-aware Chrome seed, use the dedicated
+[Chrome seed onboarding guide](chrome-seed-onboarding.md). It keeps source
+groups intact, asks the agent to consult the classification guide, and holds
+unclear fields for a human answer before the final save review.
 
 For a selected Chrome profile, keep the intake review-first:
 

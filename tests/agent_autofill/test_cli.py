@@ -81,6 +81,27 @@ def test_cli_progressive_onboarding_aliases_and_safe_views_are_available():
     assert parser.parse_args(["access", "--json"]).command == "access"
 
 
+def test_setup_profile_selection_requires_an_explicit_choice(monkeypatch, tmp_path):
+    profiles = [tmp_path / "Default", tmp_path / "Profile 1"]
+    monkeypatch.setattr(cli, "discover_profiles", lambda *_args: profiles)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "2")
+
+    assert cli._select_setup_profile(None) == str(profiles[1])
+
+
+def test_setup_profile_selection_accepts_explicit_path_and_skips_discovery(monkeypatch):
+    monkeypatch.setattr(
+        cli,
+        "discover_profiles",
+        lambda *_args: pytest.fail("explicit profile should not discover profiles"),
+    )
+
+    assert (
+        cli._select_setup_profile("/tmp/selected-chrome-profile")
+        == "/tmp/selected-chrome-profile"
+    )
+
+
 def test_demo_is_memory_only_and_does_not_open_the_user_broker(monkeypatch, capsys):
     monkeypatch.setattr(
         cli,

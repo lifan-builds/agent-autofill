@@ -27,6 +27,10 @@ ask for the same permission.
 
 Read [local-intake.md](references/local-intake.md) before local extraction or
 saving. It contains the supported schema, field mappings, and tested recipes.
+Read [classification-guide.md](references/classification-guide.md) before
+classifying candidates. It defines the default mappings, held cases, and
+grouped questions to ask a human when Chrome's columns or address ownership are
+ambiguous.
 Use only structured names, contact details, and addresses. Do not query
 autocomplete history, passwords, cards, authentication material, sync payloads,
 or unrelated browser files. Never run `chrome import`, `cold_start`, or `setup`
@@ -40,6 +44,11 @@ conversation only; do not create candidate exports or staging records.
 
 ## Curate before asking
 
+- Apply the classification guide before choosing a destination field. Unknown
+  columns, unsplit `name`, conflicting street representations, unresolved
+  ownership, and unclear currentness are held until the human answers a focused
+  question. Never turn a held row into an eligible write because the user
+  approves the batch generally.
 - Keep each source person/address group intact. Normalize inconsequential
   formatting, but retain the source spelling for review and do not invent
   missing names, country codes, address components, or currentness.

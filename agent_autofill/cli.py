@@ -77,9 +77,33 @@ def _print_onboarding_banner() -> None:
         "Private memory for capable agents.",
         "1. Check the encrypted local vault",
         "2. Choose what to remember",
-        "3. Review every access grant",
+        "3. Seed ordinary profile data from a selected Chrome profile",
+        "4. Review every access grant",
+        "Use the agent-led Chrome seed guide for ambiguous fields.",
         "Press Ctrl-C at any prompt to cancel safely.",
     )
+
+
+def _select_setup_profile(explicit_profile: str | None) -> str:
+    """Choose a Chrome profile without silently selecting the first one."""
+
+    if explicit_profile:
+        return explicit_profile
+    profiles = discover_profiles()
+    if profiles:
+        print("Detected Chrome profiles (choose one explicitly; values are not read yet):")
+        for index, profile in enumerate(profiles, start=1):
+            print(f"  {index}. {profile}")
+        choice = input("Chrome profile number or path (blank to skip): ").strip()
+        if not choice:
+            return ""
+        if choice.isdigit():
+            selected = int(choice)
+            if 1 <= selected <= len(profiles):
+                return str(profiles[selected - 1])
+            raise SystemExit("Choose one of the listed Chrome profile numbers")
+        return choice
+    return input("Chrome profile directory (blank to skip): ").strip()
 
 
 def _demo_snapshot() -> dict[str, object]:
@@ -870,6 +894,9 @@ def _parser() -> argparse.ArgumentParser:
             "  %(prog)s demo                  try the UI with synthetic data\n"
             "  %(prog)s data                  see what is stored (metadata only)\n"
             "  %(prog)s access                review agent access and grants\n\n"
+            "Chrome seed:\n"
+            "  %(prog)s chrome profiles       list profiles for explicit selection\n"
+            "  Then ask your local agent to use the Chrome intake guide.\n\n"
             "Use `%(prog)s <command> --help` for examples and options."
         ),
     )
@@ -1129,7 +1156,8 @@ def _parser() -> argparse.ArgumentParser:
         help="guided first-run wizard (aliases: start, onboard)",
         description=(
             "Set up a local vault in small, reviewable steps.\n"
-            "The wizard never prints stored values or connector secrets."
+            "The wizard never prints stored values or connector secrets.\n"
+            "For ambiguity-aware Chrome seeding, use the agent-led intake guide."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
@@ -1700,11 +1728,7 @@ def main(argv=None) -> int:
             print(
                 f"Agent {agent_id} token (save once; it will not be shown again):\n{token}"
             )
-        profile_dir = args.profile_dir or (
-            str(discover_profiles()[0])
-            if discover_profiles()
-            else input("Chrome profile directory (blank to skip): ").strip()
-        )
+        profile_dir = _select_setup_profile(args.profile_dir)
         result = {"autofill_fields": 0, "login_metadata": 0, "passwords": 0}
         if profile_dir:
             csv_path = (

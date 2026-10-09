@@ -120,10 +120,13 @@ agent-autofill --db ~/.agent-autofill.sqlite3 setup
 agent-autofill --db ~/.agent-autofill.sqlite3 doctor
 ```
 
-`setup` is interactive and review-first. `doctor` explains a blocked Keychain,
-source, agent, or grant check and gives the next recovery command. See the
-[first-run guide](docs/getting-started.md) for the expected sequence and
-[troubleshooting](docs/troubleshooting.md) when a host permission is missing.
+`setup` is interactive for identity and connector configuration. For a
+review-first Chrome seed that can ask about ambiguous fields, use the [Chrome
+seed onboarding guide](docs/chrome-seed-onboarding.md). `doctor` explains a
+blocked Keychain, source, agent, or grant check and gives the next recovery
+command. See the [first-run guide](docs/getting-started.md) for the expected
+sequence and [troubleshooting](docs/troubleshooting.md) when a host permission
+is missing.
 
 > [!TIP]
 > If you only want to inspect the product, run `quickstart` and `inbox-web`
@@ -247,6 +250,7 @@ matches the job:
 | I want to… | Read |
 | --- | --- |
 | Install and complete my first safe run | [Getting started](docs/getting-started.md) |
+| Seed ordinary profile data from Chrome | [Chrome seed onboarding](docs/chrome-seed-onboarding.md) |
 | Understand direct versus extension delivery | [Access modes](docs/access-modes.md) |
 | Find the right command | [CLI cookbook](docs/cli.md) |
 | Recover from Keychain, Chrome, or bridge issues | [Troubleshooting](docs/troubleshooting.md) |

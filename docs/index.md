@@ -28,6 +28,7 @@ when a real task needs them.
 | Guide | Use it for | What you will leave with |
 | --- | --- | --- |
 | [Getting started](getting-started.md) | First install and first review | A value-free inventory and a clear next action |
+| [Chrome seed onboarding](chrome-seed-onboarding.md) | Bootstrap profile data from Chrome | A reviewed seed proposal with human-resolved ambiguities |
 | [Access modes](access-modes.md) | Credential and form workflows | A deliberate direct or extension handoff |
 | [CLI cookbook](cli.md) | Daily operation | Safe status, source, grant, and server commands |
 | [Troubleshooting](troubleshooting.md) | Recovery | A diagnosis and an exact retry path |
