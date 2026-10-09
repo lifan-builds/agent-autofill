@@ -33,6 +33,19 @@ _MAX_RECORD_ID_LENGTH = 128
 _MAX_FIELD_ID_LENGTH = 128
 _MAX_TEXT_LENGTH = 4096
 _MAX_SCOPE_ITEMS = 100
+_TRUSTED_LOCAL_READ_OPERATIONS = {
+    "profile.read",
+    "credential.read",
+    "credential.use",
+    "financial.read",
+    "email.search",
+    "email.read",
+    "email.otp",
+    "email.verification_link",
+    "messages.search",
+    "messages.list",
+    "messages.read",
+}
 _FORBIDDEN_TRANSIENT_PARTS = {
     "access_token",
     "auth_code",
@@ -87,10 +100,14 @@ _FORBIDDEN_PROFILE_CATEGORIES = {
     "token",
     "cookie",
 }
+_VERIFICATION_LINK_PATTERN = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+_VERIFICATION_LINK_TRAILING = ".,;:!?)]}>'"
 _SAFE_HINT_KEYS = {
     "account_last4",
     "country",
     "currency",
+    "expiration_month",
+    "expiration_year",
     "institution",
     "last4",
     "network",
@@ -170,6 +187,41 @@ def _contains_raw_financial_number(value: str) -> bool:
             r"(?<![A-Za-z0-9])(?:\d[\s-]*){12,}(?![A-Za-z0-9])", value
         )
     )
+
+
+def _normalize_payment_card_number(value: Any) -> str:
+    """Normalize a payment-card number without ever including it in errors."""
+
+    if not isinstance(value, str):
+        raise BrokerError("card number must be a string")
+    result = re.sub(r"[\s-]+", "", value)
+    if not re.fullmatch(r"\d{12,19}", result):
+        raise BrokerError("card number must contain 12 to 19 digits")
+    return result
+
+
+def _normalize_card_expiration_month(value: Any) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"(?:0?[1-9]|1[0-2])", value):
+        raise BrokerError("expiration month must be 1 to 12")
+    return str(int(value)).zfill(2)
+
+
+def _normalize_card_expiration_year(value: Any) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}", value):
+        raise BrokerError("expiration year must contain four digits")
+    return value
+
+
+def _normalize_card_security_code(value: Any) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"\d{3,4}", value):
+        raise BrokerError("security code must contain 3 or 4 digits")
+    return value
+
+
+def _normalize_additional_security_code(value: Any) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"\d{3}", value):
+        raise BrokerError("additional security code must contain 3 digits")
+    return value
 
 
 def _normal_identifier(value: Any, label: str) -> str:
@@ -425,8 +477,15 @@ def _entry_record_id(entry: dict[str, Any], record_type: str) -> str:
 
 
 def _record_scope_allowed(
-    allowed_origins: list[str], allowed_purposes: list[str], target_origin: str, purpose: str
+    allowed_origins: list[str],
+    allowed_purposes: list[str],
+    target_origin: str,
+    purpose: str,
+    *,
+    trusted_local: bool = False,
 ) -> None:
+    if trusted_local:
+        return
     if allowed_origins and not any(
         _origin_matches(allowed, target_origin) for allowed in allowed_origins
     ):
@@ -603,7 +662,25 @@ class Broker:
             record["created_at"] = existing.get("created_at", record["created_at"])
         self.store.put("credential", record["credential_id"], record)
 
-    def list_credentials(self) -> list[dict]:
+    def list_credentials(
+        self,
+        *,
+        query: str | None = None,
+        target_origin: str | None = None,
+        username_hint: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        """List bounded credential metadata without passwords."""
+
+        if target_origin is not None:
+            return self.match_credentials(
+                target_origin,
+                username_hint=username_hint,
+                limit=limit,
+            )
+        normalized_query = (
+            _normal_text(query, "query").casefold() if query is not None else None
+        )
         result = []
         for row in self.store.db.execute(
             "select key from kv where namespace='credential'"
@@ -611,8 +688,59 @@ class Broker:
             item = self.store.get("credential", row["key"])
             if item:
                 item = self._credential_defaults(row["key"], item)
-                result.append(self._credential_metadata(item))
-        return result
+                metadata = self._credential_metadata(item)
+                if normalized_query is not None:
+                    searchable = " ".join(
+                        str(metadata.get(key, ""))
+                        for key in ("credential_id", "name", "origin", "username")
+                    ).casefold()
+                    if normalized_query not in searchable:
+                        continue
+                result.append(metadata)
+        return result[: _bounded_limit(limit)]
+
+    def match_credentials(
+        self,
+        target_origin: str,
+        username_hint: str | None = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Find credential metadata for one site without exposing secrets."""
+
+        target = _normalize_origin(target_origin, "target_origin")
+        target_host = _origin_hostname(target)
+        hint = (
+            _normal_text(username_hint, "username_hint", required=False).casefold()
+            if username_hint is not None
+            else ""
+        )
+        matches = []
+        for row in self.store.db.execute(
+            "select key from kv where namespace='credential'"
+        ):
+            item = self.store.get("credential", row["key"])
+            if not item:
+                continue
+            item = self._credential_defaults(row["key"], item)
+            try:
+                host = _origin_hostname(item["origin"])
+            except BrokerError:
+                continue
+            if host != target_host:
+                continue
+            username = item.get("username", "")
+            if hint and hint not in username.casefold():
+                continue
+            metadata = self._credential_metadata(item)
+            metadata["match"] = "exact-host"
+            matches.append(metadata)
+        matches.sort(
+            key=lambda item: (
+                item.get("username", "").casefold(),
+                item.get("credential_id", ""),
+            )
+        )
+        return matches[: _bounded_limit(limit)]
 
     @staticmethod
     def _profile_defaults(key: str, item: dict[str, Any]) -> dict[str, Any]:
@@ -817,6 +945,22 @@ class Broker:
                 ):
                     raise BrokerError("matching hint last4 must contain four digits")
                 result[key] = raw_value
+            elif key == "expiration_month":
+                if not isinstance(raw_value, str) or not re.fullmatch(
+                    r"(?:0?[1-9]|1[0-2])", raw_value
+                ):
+                    raise BrokerError(
+                        "matching hint expiration_month must be 1 to 12"
+                    )
+                result[key] = str(int(raw_value)).zfill(2)
+            elif key == "expiration_year":
+                if not isinstance(raw_value, str) or not re.fullmatch(
+                    r"\d{4}", raw_value
+                ):
+                    raise BrokerError(
+                        "matching hint expiration_year must contain four digits"
+                    )
+                result[key] = raw_value
             else:
                 hint_value = _normal_text(
                     raw_value, "matching hint", required=False
@@ -842,6 +986,14 @@ class Broker:
                 digits = re.sub(r"\D", "", raw_value)
                 result[hint_key] = digits[-4:]
                 break
+        if "expiration_month" not in result:
+            month = values.get("expiration_month")
+            if isinstance(month, str) and re.fullmatch(r"(?:0?[1-9]|1[0-2])", month):
+                result["expiration_month"] = str(int(month)).zfill(2)
+        if "expiration_year" not in result:
+            year = values.get("expiration_year")
+            if isinstance(year, str) and re.fullmatch(r"\d{4}", year):
+                result["expiration_year"] = year
         return result
 
     def _financial_defaults(
@@ -978,11 +1130,86 @@ class Broker:
             record["created_at"] = existing.get("created_at", record["created_at"])
         self.store.put("financial", record["record_id"], record)
 
+    def put_payment_card(
+        self,
+        record_id: str,
+        display_name: str,
+        card_number: str,
+        expiration_month: str,
+        expiration_year: str,
+        security_code: str | None = None,
+        additional_security_code: str | None = None,
+        cardholder_name: str | None = None,
+        billing_postal_code: str | None = None,
+        network: str | None = None,
+        allowed_origins: list[str] | None = None,
+        allowed_purposes: list[str] | None = None,
+        provenance: dict[str, Any] | None = None,
+    ) -> None:
+        """Store a typed payment card in the encrypted financial namespace.
+
+        This helper gives local administration a narrow card-shaped API while
+        retaining the generic financial record format used by MCP callers.
+        Sensitive values are accepted only in memory and are sealed by the
+        store immediately; metadata listings expose only safe matching hints.
+        """
+
+        normalized_number = _normalize_payment_card_number(card_number)
+        values: dict[str, str] = {
+            "card_number": normalized_number,
+            "expiration_month": _normalize_card_expiration_month(expiration_month),
+            "expiration_year": _normalize_card_expiration_year(expiration_year),
+        }
+        if security_code is not None and security_code != "":
+            values["security_code"] = _normalize_card_security_code(security_code)
+        if additional_security_code is not None and additional_security_code != "":
+            values["additional_security_code"] = _normalize_additional_security_code(
+                additional_security_code
+            )
+        if cardholder_name is not None and cardholder_name != "":
+            values["cardholder_name"] = _normal_text(
+                cardholder_name, "cardholder name"
+            )
+        if billing_postal_code is not None and billing_postal_code != "":
+            values["billing_postal_code"] = _normal_text(
+                billing_postal_code, "billing postal code"
+            )
+
+        matching_hints = None
+        if network is not None and network != "":
+            matching_hints = {"network": _normal_text(network, "card network")}
+        self.put_financial_record(
+            record_id=record_id,
+            kind="payment_card",
+            display_name=display_name,
+            values=values,
+            matching_hints=matching_hints,
+            allowed_origins=allowed_origins,
+            allowed_purposes=allowed_purposes,
+            provenance=provenance,
+        )
+
     # Keep a concise name for internal callers while exposing the descriptive
     # name in the public broker API and MCP catalog.
     put_financial = put_financial_record
 
-    def list_financial_records(self) -> list[dict[str, Any]]:
+    def list_financial_records(
+        self,
+        *,
+        kind: str | None = None,
+        query: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """List bounded financial metadata without stored values."""
+
+        normalized_kind = (
+            _normal_text(kind, "financial kind").casefold()
+            if kind is not None
+            else None
+        )
+        normalized_query = (
+            _normal_text(query, "query").casefold() if query is not None else None
+        )
         result = []
         for row in self.store.db.execute(
             "select key from kv where namespace='financial'"
@@ -991,24 +1218,70 @@ class Broker:
             if not item:
                 continue
             item = self._financial_defaults(row["key"], item)
-            result.append(
-                {
-                    "record_id": item["record_id"],
-                    "kind": item["kind"],
-                    "display_name": item["display_name"],
-                    "field_ids": sorted(item["values"]),
-                    "matching_hints": dict(item["matching_hints"]),
-                    "allowed_origins": list(item["allowed_origins"]),
-                    "allowed_purposes": list(item["allowed_purposes"]),
-                    "sensitivity": "financial",
-                    "provenance": _safe_provenance(
-                        item.get("provenance"),
-                        default_source="local-financial-vault",
-                    ),
-                    "created_at": item["created_at"],
-                    "updated_at": item["updated_at"],
-                }
-            )
+            metadata = {
+                "record_id": item["record_id"],
+                "kind": item["kind"],
+                "display_name": item["display_name"],
+                "field_ids": sorted(item["values"]),
+                "matching_hints": dict(item["matching_hints"]),
+                "allowed_origins": list(item["allowed_origins"]),
+                "allowed_purposes": list(item["allowed_purposes"]),
+                "sensitivity": "financial",
+                "provenance": _safe_provenance(
+                    item.get("provenance"),
+                    default_source="local-financial-vault",
+                ),
+                "created_at": item["created_at"],
+                "updated_at": item["updated_at"],
+            }
+            if (
+                normalized_kind is not None
+                and metadata["kind"].casefold() != normalized_kind
+            ):
+                continue
+            if normalized_query is not None:
+                searchable = " ".join(
+                    str(metadata.get(key, ""))
+                    for key in ("record_id", "kind", "display_name", "field_ids")
+                ).casefold()
+                if normalized_query not in searchable:
+                    continue
+            result.append(metadata)
+        return result[: _bounded_limit(limit)]
+
+    def match_financial_records(
+        self,
+        *,
+        kind: str | None = None,
+        matching_hints: dict[str, str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return metadata-only financial records matching safe card hints.
+
+        This supports deterministic selection when a wallet contains duplicate
+        cards or multiple expiration dates. It never reads or returns values;
+        callers still need a scoped ``financial.read`` grant before requesting
+        card fields for the selected record.
+        """
+
+        normalized_kind = None
+        if kind is not None:
+            normalized_kind = _normal_text(kind, "financial kind").lower()
+            if normalized_kind not in _FINANCIAL_KINDS:
+                raise BrokerError("financial kind is unsupported")
+        requested = self._matching_hints(
+            normalized_kind or "custom_financial", {}, matching_hints
+        )
+        records = self.list_financial_records()
+        result = []
+        for item in records:
+            if normalized_kind and item["kind"] != normalized_kind:
+                continue
+            available = item.get("matching_hints", {})
+            if all(
+                str(available.get(key, "")).casefold() == str(value).casefold()
+                for key, value in requested.items()
+            ):
+                result.append(item)
         return result
 
     list_financial = list_financial_records
@@ -1162,19 +1435,84 @@ class Broker:
         provenance["purpose"] = purpose
         return provenance
 
+    def request_credential(
+        self,
+        agent_id: str,
+        delivery: str,
+        credential_id: str,
+        field_ids: list[str] | None = None,
+        target_origin: str | None = None,
+        purpose: str | None = None,
+        expires_in: int = 60,
+    ) -> dict[str, Any]:
+        """Read a credential through one explicitly selected delivery mode.
+
+        Direct delivery is the field-selective read path. Extension delivery
+        issues the existing one-time origin-bound handle. Keeping the mode
+        switch here prevents callers from silently falling back to the other
+        exposure boundary when one path is refused.
+        """
+
+        if not isinstance(delivery, str) or delivery not in {"direct", "extension"}:
+            raise BrokerError("delivery must be exactly direct or extension")
+        normalized_id = _normal_identifier(credential_id, "credential_id")
+        if isinstance(expires_in, bool) or not isinstance(expires_in, int):
+            raise BrokerError("expires_in must be an integer")
+        if expires_in < 1 or expires_in > 300:
+            raise BrokerError(
+                "credential handle lifetime must be between 1 and 300 seconds"
+            )
+
+        if delivery == "direct":
+            if not isinstance(field_ids, list) or not field_ids:
+                raise BrokerError("field_ids must contain 1 to 5 fields")
+            if len(field_ids) > 5:
+                raise BrokerError("field_ids must contain 1 to 5 fields")
+            requested = self._requested_fields(
+                field_ids, "field_ids", tuple(_CREDENTIAL_FIELDS)
+            )
+            normalized_target = (
+                _normalize_origin(target_origin, "target_origin")
+                if target_origin is not None
+                else None
+            )
+            normalized_purpose = (
+                _normal_text(purpose, "purpose") if purpose is not None else None
+            )
+            return self.request_credential_fields(
+                agent_id,
+                normalized_id,
+                requested,
+                normalized_target,
+                normalized_purpose,
+            )
+
+        if field_ids is not None:
+            raise BrokerError("field_ids are not accepted for extension delivery")
+        if target_origin is None or purpose is None:
+            raise BrokerError(
+                "target_origin and purpose are required for extension delivery"
+            )
+        normalized_target = _normalize_origin(target_origin, "target_origin")
+        normalized_purpose = _normal_text(purpose, "purpose")
+        return self.request_credential_use(
+            agent_id,
+            normalized_id,
+            normalized_target,
+            normalized_purpose,
+            expires_in,
+        )
+
     def request_credential_fields(
         self,
         agent_id: str,
         credential_id: str,
         field_ids: list[str],
-        target_origin: str,
-        purpose: str,
+        target_origin: str | None = None,
+        purpose: str | None = None,
     ) -> dict[str, Any]:
-        if not target_origin or not purpose:
-            raise BrokerError("target_origin and purpose are required")
         record_id = _normal_identifier(credential_id, "credential_id")
-        target = _normalize_origin(target_origin, "target_origin")
-        purpose = _normal_text(purpose, "purpose")
+        target, purpose = self._read_context(agent_id, target_origin, purpose)
         requested = self._requested_fields(
             field_ids, "field_ids", tuple(_CREDENTIAL_FIELDS)
         )
@@ -1186,7 +1524,11 @@ class Broker:
             raise CredentialUseError("credential not found")
         item = self._credential_defaults(record_id, item)
         _record_scope_allowed(
-            item["allowed_origins"], item["allowed_purposes"], target, purpose
+            item["allowed_origins"],
+            item["allowed_purposes"],
+            target,
+            purpose,
+            trusted_local=self._is_trusted_local(agent_id),
         )
         result = {field_id: item[field_id] for field_id in requested}
         result["provenance"] = self._read_provenance(
@@ -1215,14 +1557,11 @@ class Broker:
         agent_id: str,
         record_id: str,
         field_ids: list[str],
-        target_origin: str,
-        purpose: str,
+        target_origin: str | None = None,
+        purpose: str | None = None,
     ) -> dict[str, Any]:
-        if not target_origin or not purpose:
-            raise BrokerError("target_origin and purpose are required")
         record_id = _normal_identifier(record_id, "record_id")
-        target = _normalize_origin(target_origin, "target_origin")
-        purpose = _normal_text(purpose, "purpose")
+        target, purpose = self._read_context(agent_id, target_origin, purpose)
         self._authorized(agent_id, "financial.read", record_id, target, purpose)
         item = self.store.get("financial", record_id)
         if item is None:
@@ -1233,7 +1572,11 @@ class Broker:
             if field_id not in item["values"]:
                 raise BrokerError(f"unknown financial field: {field_id}")
         _record_scope_allowed(
-            item["allowed_origins"], item["allowed_purposes"], target, purpose
+            item["allowed_origins"],
+            item["allowed_purposes"],
+            target,
+            purpose,
+            trusted_local=self._is_trusted_local(agent_id),
         )
         result = {field_id: item["values"][field_id] for field_id in requested}
         result["provenance"] = self._read_provenance(
@@ -1335,7 +1678,11 @@ class Broker:
         item = self._credential_defaults(credential_id, item)
         try:
             _record_scope_allowed(
-                item["allowed_origins"], item["allowed_purposes"], target, purpose
+                item["allowed_origins"],
+                item["allowed_purposes"],
+                target,
+                purpose,
+                trusted_local=self._is_trusted_local(agent_id),
             )
         except AuthorizationError as exc:
             raise CredentialUseError(str(exc)) from exc
@@ -1379,7 +1726,12 @@ class Broker:
             },
         }
 
-    def consume_credential_handle(self, handle: str, agent_id: str) -> dict:
+    def consume_credential_handle(
+        self,
+        handle: str,
+        agent_id: str,
+        target_origin: str | None = None,
+    ) -> dict:
         key = hashlib.sha256(handle.encode()).hexdigest()
         item = self.store.get("credential-handle", key)
         if (
@@ -1391,6 +1743,18 @@ class Broker:
             raise CredentialUseError(
                 "credential handle is invalid, expired, or already consumed"
             )
+        if target_origin is not None:
+            try:
+                target = _normalize_origin(target_origin, "target_origin")
+            except BrokerError as exc:
+                raise CredentialUseError("target origin is invalid") from exc
+            issued_origin = item.get("target_origin")
+            if not isinstance(issued_origin, str) or not _origin_matches(
+                issued_origin, target
+            ):
+                raise CredentialUseError(
+                    "target origin does not match credential handle"
+                )
         credential = self.store.get("credential", item["credential_id"])
         if credential is None:
             raise CredentialUseError("credential not found")
@@ -1427,6 +1791,65 @@ class Broker:
         self.store.put("grant", secrets.token_hex(12), g.__dict__)
         return g
 
+    def grant_email_recipient(
+        self,
+        agent_id: str,
+        operation: str,
+        recipient: str,
+        target_origin: str | None,
+        purpose: str | None,
+        expires_in: int = 600,
+    ) -> Grant:
+        """Create an email grant from an address without exposing source IDs."""
+
+        if operation not in {
+            "email.search",
+            "email.read",
+            "email.otp",
+            "email.verification_link",
+        }:
+            raise BrokerError("email grant operation is unsupported")
+        account_id = self.resolve_email_account(recipient)
+        return self.grant(
+            agent_id,
+            operation,
+            account_id,
+            target_origin,
+            purpose,
+            expires_in,
+        )
+
+    def grant_email_all(
+        self,
+        agent_id: str,
+        operation: str,
+        target_origin: str | None,
+        purpose: str | None,
+        expires_in: int = 600,
+    ) -> Grant:
+        """Create an explicit wildcard email grant for a service.
+
+        This is intentionally an owner-facing convenience. Runtime callers
+        still identify one recipient, and the broker resolves that recipient
+        to one configured mailbox before reading anything.
+        """
+
+        if operation not in {
+            "email.search",
+            "email.read",
+            "email.otp",
+            "email.verification_link",
+        }:
+            raise BrokerError("email grant operation is unsupported")
+        return self.grant(
+            agent_id,
+            operation,
+            "*",
+            target_origin,
+            purpose,
+            expires_in,
+        )
+
     def create_agent(self, agent_id: str) -> str:
         token = secrets.token_urlsafe(32)
         token_hash = hashlib.sha256(token.encode()).hexdigest()
@@ -1441,6 +1864,57 @@ class Broker:
             },
         )
         return token
+
+    def enable_trusted_local(self, agent_id: str) -> None:
+        """Mark a Keychain-paired local service as read-capable.
+
+        Local services authenticate with a token recovered from the operating
+        system credential store.  That pairing is the owner's installation
+        decision, so requiring a second, expiring grant for every read makes
+        the installed skill unusable.  Keep writes and agent revocation on the
+        existing paths; this flag only removes redundant read grants for the
+        authenticated local service identity.
+        """
+
+        item = self.store.get("agent", agent_id)
+        if item is None:
+            raise AuthorizationError("unknown agent identity")
+        if item.get("revoked", False):
+            raise AuthorizationError("agent identity is revoked")
+        if not item.get("trusted_local", False):
+            item["trusted_local"] = True
+            self.store.put("agent", agent_id, item)
+
+    def _is_trusted_local(self, agent_id: str) -> bool:
+        item = self.store.get("agent", agent_id)
+        return bool(
+            item
+            and item.get("trusted_local", False)
+            and not item.get("revoked", False)
+            and str(agent_id).startswith("service:")
+        )
+
+    def _read_context(
+        self,
+        agent_id: str,
+        target_origin: str | None,
+        purpose: str | None,
+    ) -> tuple[str, str]:
+        """Normalize optional context for trusted local reads.
+
+        Local services already authenticated through Keychain do not need to
+        manufacture a target-form scope just to read a saved value. Keep the
+        context in provenance, while preserving the old required arguments for
+        grant-based and remote agents.
+        """
+
+        if not target_origin or not purpose:
+            if not self._is_trusted_local(agent_id):
+                raise BrokerError("target_origin and purpose are required")
+            return "local://agent-autofill", "local-read"
+        return _normalize_origin(target_origin, "target_origin"), _normal_text(
+            purpose, "purpose"
+        )
 
     def authenticate_agent(self, agent_id: str, token: str | None) -> bool:
         if not token:
@@ -1464,6 +1938,11 @@ class Broker:
                         "agent_id": item["agent_id"],
                         "created_at": item["created_at"],
                         "revoked": item.get("revoked", False),
+                        "access_mode": (
+                            "trusted-local-read"
+                            if item.get("trusted_local", False)
+                            else "grant-required"
+                        ),
                     }
                 )
         return result
@@ -1495,6 +1974,20 @@ class Broker:
     def _authorized(
         self, agent_id, operation, resource, origin=None, purpose=None
     ) -> Grant:
+        if (
+            operation in _TRUSTED_LOCAL_READ_OPERATIONS
+            and self._is_trusted_local(agent_id)
+        ):
+            issued = datetime.now(timezone.utc)
+            return Grant(
+                agent_id,
+                operation,
+                "*",
+                None,
+                None,
+                issued.isoformat(),
+                "9999-12-31T23:59:59+00:00",
+            )
         rows = self.store.db.execute(
             "select value from kv where namespace='grant'"
         ).fetchall()
@@ -1514,8 +2007,33 @@ class Broker:
                 return Grant(**d)
         raise AuthorizationError(f"no active grant for {operation}:{resource}")
 
-    def list_sources(self):
-        return list(self.sources.values())
+    def list_sources(
+        self,
+        *,
+        kind: str | None = None,
+        query: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """List bounded source metadata, optionally narrowed by kind or text."""
+
+        normalized_kind = (
+            _normal_text(kind, "kind").casefold() if kind is not None else None
+        )
+        normalized_query = (
+            _normal_text(query, "query").casefold() if query is not None else None
+        )
+        rows = []
+        for item in self.sources.values():
+            item_kind = str(item.get("kind", "")).casefold()
+            searchable = " ".join(
+                str(item.get(key, "")) for key in ("source_id", "kind", "label")
+            ).casefold()
+            if normalized_kind is not None and item_kind != normalized_kind:
+                continue
+            if normalized_query is not None and normalized_query not in searchable:
+                continue
+            rows.append(dict(item))
+        return rows[: _bounded_limit(limit)]
 
     def _ensure_email_source(self, account_id: str) -> object | None:
         if account_id in self.removed_email_sources:
@@ -1532,7 +2050,23 @@ class Broker:
             raise BrokerError("email source is unavailable; run email-test")
         raise BrokerError("email account is not configured")
 
-    def list_profile_fields(self):
+    def list_profile_fields(
+        self,
+        *,
+        category: str | None = None,
+        query: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """List bounded profile metadata without returning stored values."""
+
+        normalized_category = (
+            _normal_text(category, "category").casefold()
+            if category is not None
+            else None
+        )
+        normalized_query = (
+            _normal_text(query, "query").casefold() if query is not None else None
+        )
         result = []
         for row in self.store.db.execute(
             "select key from kv where namespace='profile'"
@@ -1541,20 +2075,77 @@ class Broker:
             if not item:
                 continue
             item = self._profile_defaults(row["key"], item)
-            result.append(
-                {
-                    key: item[key]
-                    for key in _PROFILE_METADATA_FIELDS
-                    if key in item
-                }
-            )
-        return result
+            metadata = {
+                key: item[key]
+                for key in _PROFILE_METADATA_FIELDS
+                if key in item
+            }
+            if (
+                normalized_category is not None
+                and str(metadata.get("category", "")).casefold()
+                != normalized_category
+            ):
+                continue
+            if normalized_query is not None:
+                searchable = " ".join(
+                    str(metadata.get(key, ""))
+                    for key in ("field_id", "display_name", "category")
+                ).casefold()
+                if normalized_query not in searchable:
+                    continue
+            result.append(metadata)
+        return result[: _bounded_limit(limit)]
 
-    def request_profile_fields(self, agent_id, field_ids, target_origin, purpose):
-        if not target_origin or not purpose:
-            raise BrokerError("target_origin and purpose are required")
-        target = _normalize_origin(target_origin, "target_origin")
-        purpose = _normal_text(purpose, "purpose")
+    def list_profile_groups(self) -> list[dict[str, Any]]:
+        """List metadata-only groups so callers can choose an address set."""
+
+        groups: dict[str, dict[str, Any]] = {}
+        for row in self.list_profile_fields():
+            provenance = row.get("provenance")
+            if not isinstance(provenance, dict):
+                provenance = {}
+            profile_id = provenance.get("source_profile_id")
+            source_key = provenance.get("source_guid") or provenance.get(
+                "source_guid_hash"
+            )
+            if isinstance(profile_id, str) and isinstance(source_key, str):
+                grouping_key = f"{profile_id}\0{source_key}"
+                source = provenance.get("source", "chrome-structured-address")
+            else:
+                grouping_key = f"local\0{row['field_id']}"
+                source = provenance.get("source", "local-profile")
+            digest = hashlib.sha256(grouping_key.encode("utf-8")).hexdigest()[:24]
+            group_id = "profile_group_" + "_".join(
+                digest[index : index + 4] for index in range(0, 24, 4)
+            )
+            group = groups.setdefault(
+                group_id,
+                {
+                    "group_id": group_id,
+                    "source": source,
+                    "source_profile_id": profile_id,
+                    "field_ids": [],
+                    "field_types": [],
+                },
+            )
+            group["field_ids"].append(row["field_id"])
+            field_type = provenance.get("field_type") or row.get("display_name")
+            if isinstance(field_type, str) and field_type not in group["field_types"]:
+                group["field_types"].append(field_type)
+        for group in groups.values():
+            group["field_ids"].sort()
+            group["field_types"].sort()
+            group["field_count"] = len(group["field_ids"])
+        return sorted(groups.values(), key=lambda item: item["group_id"])
+
+    def request_profile_fields(
+        self,
+        agent_id,
+        field_ids,
+        target_origin: str | None = None,
+        purpose: str | None = None,
+    ):
+        target, purpose = self._read_context(agent_id, target_origin, purpose)
         requested = self._requested_fields(
             field_ids, "field_ids", identifiers=True
         )
@@ -1566,7 +2157,11 @@ class Broker:
                 raise BrokerError(f"unknown profile field: {fid}")
             item = self._profile_defaults(fid, item)
             _record_scope_allowed(
-                item["allowed_origins"], item["allowed_purposes"], target, purpose
+                item["allowed_origins"],
+                item["allowed_purposes"],
+                target,
+                purpose,
+                trusted_local=self._is_trusted_local(agent_id),
             )
             out[fid] = {
                 "value": item["value"],
@@ -1610,6 +2205,101 @@ class Broker:
             | {"provenance": {"account_id": account_id, "message_id": m.message_id}}
             for m in rows
         ]
+
+    def resolve_email_account(self, recipient: str) -> str:
+        """Resolve one exact configured mailbox address to its opaque source.
+
+        Clients identify a mailbox by the address they already know.  The
+        broker keeps source IDs private and refuses both fuzzy matches and
+        ambiguous duplicate addresses.
+        """
+
+        matches = self.match_email_sources(recipient)
+        if not matches:
+            raise BrokerError("email recipient is not configured")
+        if len(matches) != 1:
+            raise BrokerError("email recipient is ambiguous")
+        return matches[0]["source_id"]
+
+    def match_email_sources(self, recipient: str) -> list[dict[str, str]]:
+        """Return metadata for exact configured mailbox recipient matches.
+
+        The returned source id and provider label are routing metadata only;
+        connector usernames, tokens, and mailbox contents are never returned.
+        An empty list means the recipient is not configured.  Multiple rows
+        are returned so callers can explain an ambiguous configuration before
+        attempting a scoped read.
+        """
+
+        if not isinstance(recipient, str):
+            raise BrokerError("recipient must be a string")
+        address = recipient.strip().casefold()
+        if (
+            not address
+            or len(address) > 320
+            or address.count("@") != 1
+            or address.startswith("@")
+            or address.endswith("@")
+        ):
+            raise BrokerError("recipient must be an email address")
+
+        configs: dict[str, dict[str, Any]] = {}
+        for row in self.store.db.execute(
+            "select key from kv where namespace='connection'"
+        ):
+            config = self.store.get("connection", row["key"])
+            if not isinstance(config, dict) or config.get("kind") != "imap":
+                continue
+            source_id = config.get("source_id", row["key"])
+            if isinstance(source_id, str):
+                configs[source_id] = config
+
+        matches: dict[str, dict[str, str]] = {}
+        for source_id, source in self.sources.items():
+            if source.get("kind") != "email":
+                continue
+            config = configs.get(source_id, {})
+            username = config.get("username")
+            label = source.get("label")
+            if not (
+                isinstance(username, str)
+                and username.strip().casefold() == address
+            ) and not (
+                isinstance(label, str) and label.strip().casefold() == address
+            ):
+                continue
+            provider = (
+                label.strip()
+                if isinstance(label, str) and label.strip()
+                else str(config.get("provider") or config.get("host") or "email")
+            )
+            matches[source_id] = {
+                "source_id": source_id,
+                "provider": provider,
+                "label": provider,
+                "kind": "email",
+            }
+
+        # A persisted connection can exist before its source metadata is
+        # reconstructed.  Include it only when its kind and exact username
+        # prove the recipient match, while keeping the result value-free.
+        for source_id, config in configs.items():
+            username = config.get("username")
+            if not (
+                isinstance(username, str)
+                and username.strip().casefold() == address
+            ):
+                continue
+            if source_id in matches:
+                continue
+            provider = str(config.get("provider") or config.get("host") or "email")
+            matches[source_id] = {
+                "source_id": source_id,
+                "provider": provider,
+                "label": provider,
+                "kind": "email",
+            }
+        return [matches[key] for key in sorted(matches)]
 
     def get_email_message(self, agent_id, account_id, message_id):
         self._authorized(agent_id, "email.read", account_id)
@@ -1716,6 +2406,121 @@ class Broker:
                 "account_id": account_id,
                 "message_id": m.message_id,
                 "received_at": m.received_at,
+            },
+        }
+
+    def request_auth_code_for_recipient(
+        self,
+        agent_id,
+        recipient,
+        target_origin,
+        purpose,
+        max_age_seconds=300,
+    ):
+        """Return a code for an exact recipient without exposing source IDs."""
+
+        account_id = self.resolve_email_account(recipient)
+        return self.request_auth_code(
+            agent_id,
+            account_id,
+            target_origin,
+            purpose,
+            max_age_seconds,
+        )
+
+    def request_verification_link_for_recipient(
+        self,
+        agent_id: str,
+        recipient: str,
+        target_origin: str,
+        purpose: str,
+        max_age_seconds: int = 300,
+    ) -> dict[str, Any]:
+        """Return one recent, target-origin-bound verification link.
+
+        This is intentionally narrower than email search or message reads:
+        the caller receives only the selected URL and safe provenance.  The
+        message body, sender, subject, connector identity, and link are never
+        sent to an audit or error surface.  A hash-only marker makes the
+        selected link one-time for this mailbox, even if another authorized
+        agent later presents the same message.
+        """
+
+        target = _normalize_origin(target_origin, "target_origin")
+        purpose = _normal_text(purpose, "purpose")
+        try:
+            max_age_seconds = int(max_age_seconds)
+        except (TypeError, ValueError) as exc:
+            raise BrokerError("max_age_seconds must be an integer") from exc
+        if max_age_seconds < 1 or max_age_seconds > 3600:
+            raise BrokerError("max_age_seconds must be between 1 and 3600 seconds")
+
+        account_id = self.resolve_email_account(recipient)
+        self._authorized(
+            agent_id,
+            "email.verification_link",
+            account_id,
+            target,
+            purpose,
+        )
+        self.store.purge_legacy_otp_markers()
+        adapter = self._ensure_email_source(account_id)
+        now = datetime.now(timezone.utc)
+        messages = (
+            adapter.recent(max_age_seconds)
+            if adapter is not None and hasattr(adapter, "recent")
+            else self.email.get(account_id, [])
+        )
+
+        candidates: list[tuple[EmailMessage, str]] = []
+        for message in messages:
+            received_at = datetime.fromisoformat(message.received_at)
+            if received_at.tzinfo is None:
+                received_at = received_at.replace(tzinfo=timezone.utc)
+            age = (now - received_at).total_seconds()
+            if age < 0 or age > max_age_seconds:
+                continue
+            text = " ".join((message.sender, message.subject, message.body))
+            for raw_link in _VERIFICATION_LINK_PATTERN.findall(text):
+                link = raw_link.rstrip(_VERIFICATION_LINK_TRAILING)
+                try:
+                    link_origin = _normalize_origin(link, "verification link")
+                except BrokerError:
+                    continue
+                if _origin_matches(link_origin, target):
+                    candidates.append((message, link))
+
+        if len(candidates) != 1:
+            raise BrokerError(
+                "no unambiguous recent verification link associated with target origin"
+            )
+        message, link = candidates[0]
+        link_digest = hashlib.sha256(link.encode()).hexdigest()
+        consumed_key = hashlib.sha256(
+            f"{account_id}\0{message.message_id}\0{link_digest}".encode()
+        ).hexdigest()
+        if not self.store.put_if_absent(
+            "verification-link-consumed", consumed_key, {"used_at": now_iso()}
+        ):
+            raise BrokerError("verification link already consumed")
+        self.store.audit(
+            agent_id,
+            "email.verification_link",
+            account_id,
+            now_iso(),
+            {
+                "message_id": message.message_id,
+                "target_origin": target,
+                "purpose": purpose,
+            },
+        )
+        return {
+            "url": link,
+            "provenance": {
+                "source": "email",
+                "account_id": account_id,
+                "message_id": message.message_id,
+                "received_at": message.received_at,
             },
         }
 

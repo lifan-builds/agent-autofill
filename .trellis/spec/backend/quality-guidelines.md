@@ -309,6 +309,89 @@ prepared = validate_every_entry_and_grant(entries, target_origin, purpose)
 store.apply_changes(encrypted_records(prepared), [], audits=[metadata_only_audit])
 ```
 
+## Scenario: Explicit First-Run Setup Grants
+
+### 1. Scope / Trigger
+
+Applies to the optional authorization step in setup and its fixture-backed
+CLI-to-server acceptance path.
+
+### 2. Signatures
+
+`agent-autofill --db DB setup [--profile-dir CHROME_PROFILE]` reuses
+`Broker.grant(agent_id, operation, resource_scope, target_origin, purpose,
+expires_in=600)`. It does not change any MCP tool schema.
+
+### 3. Contracts
+
+- Select exact saved profile field IDs and at most one configured email
+  account. Select search and OTP independently; never infer a wildcard grant.
+- Profile/OTP grants require origin and purpose. Search is account-scoped
+  with null origin/purpose; explain this distinction before confirmation.
+- Validate the entire proposal, display operations/resources/scopes and the
+  600-second lifetime without stored values, then ask for explicit confirmation.
+- Skipping creates no grants and does not roll back earlier setup effects.
+  Existing identities retain their tokens; revoked agents are not reactivated.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Blank agent, skipped step, empty selection, declined confirmation | No new grants |
+| Unknown/wildcard resource or missing profile/OTP scope | Safe refusal before any proposed grant is written |
+| Revoked identity | Explain refusal; no new grants or token rotation |
+| Confirmed valid selection | Only selected read grants, each lasting 600 seconds |
+
+### 5. Good / Base / Bad Cases
+
+Good: a new identity imports fixture data, confirms exact grants, and reads via
+a freshly constructed authenticated server. Base: skip authorization and use
+the existing grant command later. Bad: silently grant all imported resources
+or describe account-wide search as restricted to one website.
+
+### 6. Tests Required
+
+`test_cli.py` covers selection, cancellation, preservation, and preview
+redaction. `test_first_run.py` drives CLI setup and the server JSON-lines loop
+using a temporary encrypted database, fake Keychain, and fake IMAP provider;
+it must retain real persistence, connector reconstruction, and authorization.
+Check persisted OTP replay denial, scope/authentication refusals, expiry,
+revocation, and secret-free audits/errors. This is not live-provider or
+installation acceptance.
+
+### 7. Wrong vs Correct
+
+Wrong: grant `email.search` with an origin and imply searches are origin-bound.
+Correct: grant the exact account with null origin/purpose after clearly
+previewing account-wide access; bind the separate `email.otp` grant to the
+explicit origin/purpose.
+
+## Chrome Intake Skill Boundary
+
+`agent-autofill-chrome-intake` is a host-agent instruction workflow, not a new
+broker API. Its documented local recipes read only supported structured
+Chrome address fields in a read-only SQLite transaction. Locked/unsupported
+sources stop; immutable reads and uncoordinated raw database copies are not
+supported intake fallbacks. The eager `cold_start`/setup/`chrome import` paths
+are separate.
+
+The agent resolves ambiguities and presents all proposed records, including
+clear matches, before final approval. Only approved add/update entries use
+the existing local administrative `Broker.put_profile` API with explicit
+scopes and safe provenance. Normal MCP grants remain unchanged; never invent
+a target website or grant privileges to make onboarding fit a form API.
+Per-record persistence can partially succeed; report saved/pending IDs and
+do not claim atomic rollback. Approval is an agent instruction, not a new
+runtime authentication guarantee.
+
+Verify exact executable recipes with synthetic databases, source locks,
+unsupported schemas, grouping, provenance, and failure cases. Independently
+forward-test the skill on realistic synthetic conversations for no writes
+before approval, ambiguous ownership, changed/partial approval, cancellation,
+repeat intake, and source-embedded instructions. Static phrase/heading checks
+and YAML validation alone do not establish those behaviors. Keep all real
+Chrome values out of fixtures and task artifacts.
+
 ## Testing Requirements
 
 - Add or update focused pytest coverage for changed behavior under

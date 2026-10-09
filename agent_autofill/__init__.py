@@ -3,6 +3,7 @@
 from .service import Broker, BrokerError, AuthorizationError, CredentialUseError
 from .imap_adapter import IMAPEmailAdapter
 from .messages_adapter import MacMessagesAdapter
+from .local import LocalConnection, connect_service
 
 __all__ = [
     "Broker",
@@ -11,4 +12,6 @@ __all__ = [
     "CredentialUseError",
     "IMAPEmailAdapter",
     "MacMessagesAdapter",
+    "LocalConnection",
+    "connect_service",
 ]

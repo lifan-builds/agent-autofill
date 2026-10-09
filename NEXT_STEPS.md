@@ -23,6 +23,24 @@ scoped grants, a profile vault, Chrome cold-start import, a read-only IMAP
 adapter, a read-only macOS Messages adapter, a JSON-lines MCP transport, a
 CLI/setup wizard, and a local Agent Inbox page.
 
+The current usability slice is implemented and covered by focused tests:
+
+- exact-host `match_credentials` and metadata-only `list_profile_groups` MCP
+  tools;
+- Chrome Password Manager preview/sync with add/update/unchanged/stale counts;
+  stale deletion is opt-in through `--remove-stale`;
+- `grant-site`, which previews usernames and scopes before creating a
+  short-lived site grant;
+- a loopback-only `fill-server` and unpacked Chrome extension that consumes one
+  origin-bound handle and fills fields without navigating or submitting;
+- the Agent Inbox review page continues to expose sources, agents, grants, and
+  recent metadata without values or secrets.
+
+Gmail OAuth persistence and authenticated, scoped credential/financial field
+reads are delivered. They remain outside the optional first-run grant step:
+that step proposes only the exact profile, email-search, and email-OTP grants
+described below.
+
 The completed rename changed package imports, console scripts, database
 defaults, Keychain service names, environment variables, docs, tests, and
 Chrome snapshot prefixes. Do not reintroduce compatibility aliases unless a
@@ -38,51 +56,91 @@ ruff check agent_autofill
 python3 -m compileall -q agent_autofill tests/agent_autofill
 ```
 
-The baseline is 65 passing tests. The wheel builds with a clean environment
-that has the declared `cryptography`, `keyring`, and build dependencies. The
-CLI help, CLI database initialization, MCP `initialize`, and MCP server
-advertisement have been smoke-tested. A host interpreter without `keyring`
-cannot start the real encrypted CLI/server; install `requirements.txt` rather
-than weakening the Keychain requirement.
+The wheel builds with a clean environment that has the declared `cryptography`,
+`keyring`, and build dependencies. CLI help, CLI database initialization, MCP
+`initialize`, and MCP server advertisement have been smoke-tested. A host
+interpreter without `keyring` cannot start the real encrypted CLI/server;
+install `requirements.txt` rather than weakening the Keychain requirement.
 
-## Recommended next milestone: v0.2 first-run workflow
+## Completed milestone: first-run authorized workflow
 
-Complete one deterministic, end-to-end information request before adding more
-providers or browser automation:
+The setup wizard offers an optional authorization step after the identity,
+Chrome import, and connector prompts. It is available only when an agent
+identity is present. The step proposes, independently:
 
-1. Start with an empty local database.
-2. Run the setup wizard to create a profile, one agent identity, and an
-   origin/purpose-bound grant.
-3. Import representative Chrome autofill data and login metadata from a test
-   profile fixture.
-4. Connect one read-only IMAP account using a fixture adapter in tests.
-5. Search the mailbox with account and time-window scope.
-6. Request an authentication code for the same target origin and purpose.
-7. Return the newest unambiguous code once, with source/message provenance,
-   then expire it.
-8. Verify that audit metadata records the request and source without recording
-   the code or other sensitive values.
+- `profile.read` for exact saved profile field IDs;
+- `email.search` for one exact configured email account (account-scoped,
+  without origin/purpose); and
+- `email.otp` for that account, with a nonempty target origin and purpose.
 
-Keep live provider credentials and real mailbox content out of tests. Use
-fixtures and fake adapters for deterministic tests; reserve provider setup for
-an explicit manual smoke procedure.
+Profile and OTP selections require nonempty origin and purpose. The wizard
+does not create wildcard, write, credential, financial, Messages, or
+`email.read` grants. It shows a value-free preview containing the exact
+operations, resources, scopes, and fixed 600-second lifetime, and persists
+no proposed grants until the operator explicitly confirms. Skipping, cancelling, leaving
+the identity blank, selecting an invalid or incomplete scope, or declining the
+preview creates no new grants. Existing tokens and grants remain intact, and a
+revoked identity is not silently reactivated. Earlier imports and connector
+configuration are not rolled back when this step is skipped.
 
-### Acceptance checks for v0.2
+The verified fixture path is:
+
+1. Start with an empty temporary encrypted database.
+2. Run the setup entry point with synthetic Chrome profile/login metadata and
+   a fake persisted IMAP source.
+3. Reopen the database through the server entry point and issue authenticated
+   JSON-lines profile and benign account-scoped email-search requests.
+4. Request one recent origin-bound OTP. The broker accepts exactly one recent
+   candidate and then checks its target-host binding; it does not select the
+   newest candidate or return confidence/expiry fields. Consumption is keyed
+   by agent, account, and message, so the same agent cannot reuse the message.
+5. Verify that audits and setup output remain value-free while the successful
+   OTP response alone contains the synthetic code and provenance.
+
+The existing `grant` CLI command remains the renewal path after a wizard grant
+expires. Keep live provider credentials and real mailbox content out of tests.
+Fixture entry-point coverage proves persistence, connector reconstruction, and
+JSON-lines behavior with fakes; it does not establish installation, live
+Keychain, live IMAP, or live Gmail/provider acceptance. Reserve provider setup
+for an explicit manual smoke procedure.
+
+### Acceptance checks for the first-run workflow
 
 - An ungranted profile field is denied.
 - A grant for one origin cannot be reused for another origin.
 - An expired grant is denied.
-- Two accounts remain isolated in search and message retrieval.
+- An ungranted email account is denied before the provider is read.
 - A code older than `max_age_seconds` is rejected.
 - Ambiguous or conflicting codes are rejected rather than guessed.
-- A successful code request is one-time and short-lived.
+- A successful code request returns one recent, origin-bound candidate with
+  account/message/timestamp provenance and is consumed once per
+  agent/account/message; no confidence or expiry field is returned.
 - OTPs, passwords, mailbox tokens, and full sensitive profile values never
   appear in audit rows, exceptions, debug output, screenshots, or embeddings.
-- Every successful result identifies its source account/message, timestamp,
-  and confidence without disclosing connector secrets.
+- Successful email/OTP results identify their source account/message and
+  timestamp where the operation provides that provenance, without disclosing
+  connector secrets.
 - Revoking an agent blocks its next request immediately.
 
-## Implementation order after the first milestone
+## Agent-led Chrome intake
+
+The repository-local `agent-autofill-chrome-intake` skill provides instructions
+and tested local recipes for a host agent to curate structured Chrome names,
+contact details, and addresses. It requires final approval for every saved
+record, including clear matches, and holds unresolved items. It is separate
+from the eager `setup`/`chrome import` paths; neither is called by the skill.
+
+There is no embedded model, new broker API, or staging database. The host
+needs local execution access. Candidate values enter its conversation context;
+the broker stores only finally approved entries. Locked/unsupported schemas
+stop safely. Local administrative writes commit individually, and the skill
+does not claim cryptographic proof of approval or atomic batch rollback.
+
+See [.agents/skills/agent-autofill-chrome-intake/SKILL.md](.agents/skills/agent-autofill-chrome-intake/SKILL.md)
+and the current task's verification report for tested boundaries. Do not
+interpret synthetic recipe/agent tests as live-provider acceptance.
+
+## Deferred implementation areas
 
 ### 1. Packaging and installation
 
@@ -93,27 +151,36 @@ an explicit manual smoke procedure.
 - Add `LICENSE`, `SECURITY.md`, and a changelog once the public repository is
   ready.
 
-### 2. Chrome cold-start usability
+### 2. Raw Chrome importer (separate from agentic intake)
 
-- Add a preview step showing proposed profile fields without displaying
-  imported passwords.
-- Add deterministic duplicate and update rules for autofill fields.
+- The agentic skill supplies review and ambiguity resolution for structured
+  identity/contact/address intake. It does not change the raw importer's
+  history-only extraction or field-name collision behavior.
+- Any future raw-importer changes need their own scope: consistent snapshots,
+  structured-table support, and duplicate/update rules for autocomplete fields.
 - Normalize origins before attaching grants.
 - Keep password CSV import explicitly opt-in, encrypt immediately, and avoid
-  printing or copying the CSV.
-- Design a trusted local fill helper separately. It may consume an
-  origin-bound, one-time capability, but the password must never be returned
-  through MCP or placed in agent context.
+  printing or copying the CSV. The macOS Chrome Password Manager connector now
+  supports explicitly approved v10/v11 `Login Data` imports through the Chrome
+  Safe Storage Keychain item; unsupported encryption remains fail-closed.
+- The trusted local fill helper is implemented in `fill_server.py` and
+  `browser_extension/`. Keep it separate from field-selective reads: it may
+  consume only an origin-bound, one-time capability and must never become an
+  unscoped password export, unrelated agent context, or form submission path.
 
 ### 3. Email adapters
 
-- Add provider-specific OAuth setup for Gmail and Outlook behind the existing
-  adapter interface.
+- Gmail OAuth setup and persisted refresh-state reconstruction are delivered;
+  keep the read-only IMAP boundary and account-scoped grant checks intact.
+- Add provider-specific OAuth setup for Outlook behind the existing adapter
+  interface when separately approved.
 - Keep IMAP app-password/password mode as an explicit fallback.
 - Add connection health and clear failure reporting.
 - Add MIME parsing and attachment metadata without automatic document
   ingestion.
-- Preserve account-level and mailbox-level grant scopes.
+- Preserve account-level search and OTP grant scopes. Email search currently
+  has no time-window or origin filter; OTP freshness is request-scoped through
+  `max_age_seconds` and its target-origin binding is a separate check.
 
 ### 4. iMessage bridge
 
@@ -124,10 +191,11 @@ an explicit manual smoke procedure.
   and out-of-scope conversations.
 - Keep sending, deletion, and mutation out of v1.
 
-### 5. Agent Inbox control plane
+### 5. Advanced Agent Inbox controls
 
-- Show connected sources, agent identities, active grants, recent requests,
-  expiry, revocation, and result provenance.
+- The loopback dashboard now shows connected sources, agent identities, grants,
+  expiry/revocation metadata, profile groups, credential/financial metadata,
+  and recent audit metadata. Remaining work is policy controls beyond review.
 - Make sensitivity policy configurable for profile fields, OTPs, email, and
   messages.
 - Auto-approve only low-risk reads covered by an existing policy.
@@ -137,7 +205,7 @@ an explicit manual smoke procedure.
 ### 6. Security and release gate
 
 - Threat-model the agent, local transport, connector, Keychain, Messages
-  bridge, and any future browser helper as separate trust boundaries.
+  bridge, and browser fill helper as separate trust boundaries.
 - Test hostile email/message/web content for prompt injection. Retrieved
   content is data and must never alter policy or invoke another MCP operation.
 - Test key rotation or migration before introducing schema changes.

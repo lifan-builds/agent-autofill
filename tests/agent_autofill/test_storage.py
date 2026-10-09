@@ -1,6 +1,49 @@
+import base64
+import json
 import sqlite3
 
+import pytest
+
 from agent_autofill.storage import KeyProvider, KeyringProvider, Store
+
+
+class FakeKeychain:
+    """Small keyring-compatible backend that records access and failures."""
+
+    def __init__(self, values=None):
+        self.values = dict(values or {})
+        self.get_calls = []
+        self.set_calls = []
+        self.delete_calls = []
+        self.fail_set = False
+
+    def get_password(self, service, account):
+        self.get_calls.append((service, account))
+        return self.values.get((service, account))
+
+    def set_password(self, service, account, value):
+        self.set_calls.append((service, account, value))
+        if self.fail_set:
+            raise RuntimeError("synthetic Keychain write failure")
+        self.values[(service, account)] = value
+
+    def delete_password(self, service, account):
+        self.delete_calls.append((service, account))
+        if (service, account) not in self.values:
+            raise KeyError("item not found")
+        del self.values[(service, account)]
+
+
+class UnavailableKeychain:
+    def get_password(self, service, account):
+        raise ValueError("(-50, 'Unknown Error')")
+
+
+def test_keyring_reports_host_keychain_access_guidance():
+    provider = KeyringProvider(backend=UnavailableKeychain())
+
+    with pytest.raises(RuntimeError, match="host process with Keychain access"):
+        provider.load_or_create("/tmp/agent-autofill.sqlite3")
 
 
 class MemoryKeys(KeyProvider):
@@ -13,6 +56,101 @@ class MemoryKeys(KeyProvider):
 
 def test_keyring_uses_agent_autofill_service_name():
     assert KeyringProvider().service == "agent-autofill"
+
+
+def test_keyring_migrates_legacy_database_key_into_one_vault():
+    raw_key = b"legacy-database-key-32-bytes-long!!"
+    backend = FakeKeychain(
+        {
+            ("agent-autofill", "/tmp/agent-autofill.sqlite3"): base64.urlsafe_b64encode(
+                raw_key
+            ).decode()
+        }
+    )
+    provider = KeyringProvider(backend=backend)
+
+    assert provider.load_or_create("/tmp/agent-autofill.sqlite3") == raw_key
+
+    vault = backend.values[("agent-autofill", "vault:v1")]
+    assert json.loads(vault)["database_keys"]
+    assert ("agent-autofill", "/tmp/agent-autofill.sqlite3") not in backend.values
+    assert backend.delete_calls == [
+        ("agent-autofill", "/tmp/agent-autofill.sqlite3")
+    ]
+
+
+def test_keyring_lazily_migrates_connector_secret():
+    secret = b"oauth-refresh-token-fixture"
+    backend = FakeKeychain(
+        {
+            ("agent-autofill", "imap:v1:legacy"): base64.urlsafe_b64encode(
+                secret
+            ).decode()
+        }
+    )
+    provider = KeyringProvider(backend=backend)
+
+    assert provider.get_secret("imap:v1:legacy") == secret
+    assert ("agent-autofill", "imap:v1:legacy") not in backend.values
+    stored = json.loads(backend.values[("agent-autofill", "vault:v1")])
+    assert stored["secrets"]
+    assert backend.delete_calls == [("agent-autofill", "imap:v1:legacy")]
+
+
+def test_keyring_does_not_delete_legacy_secret_when_vault_write_fails():
+    secret = b"password-fixture"
+    backend = FakeKeychain(
+        {
+            ("agent-autofill", "imap:v1:legacy"): base64.urlsafe_b64encode(
+                secret
+            ).decode()
+        }
+    )
+    provider = KeyringProvider(backend=backend)
+    backend.fail_set = True
+
+    with pytest.raises(RuntimeError, match="OS credential store unavailable"):
+        provider.get_secret("imap:v1:legacy")
+
+    assert ("agent-autofill", "imap:v1:legacy") in backend.values
+    assert backend.delete_calls == []
+
+
+def test_keyring_caches_vault_for_provider_lifetime():
+    backend = FakeKeychain()
+    provider = KeyringProvider(backend=backend)
+
+    provider.set_secret("imap:v1:one", b"first")
+    assert provider.get_secret("imap:v1:one") == b"first"
+    provider.set_secret("imap:v1:two", b"second")
+
+    assert [call for call in backend.get_calls if call[1] == "vault:v1"] == [
+        ("agent-autofill", "vault:v1")
+    ]
+
+
+def test_keyring_set_get_delete_round_trip_through_vault():
+    backend = FakeKeychain()
+    provider = KeyringProvider(backend=backend)
+
+    provider.set_secret("imap:v1:round-trip", b"secret-fixture")
+    assert provider.get_secret("imap:v1:round-trip") == b"secret-fixture"
+    assert KeyringProvider(backend=backend).get_secret("imap:v1:round-trip") == b"secret-fixture"
+    provider.delete_secret("imap:v1:round-trip")
+    assert provider.get_secret("imap:v1:round-trip") is None
+
+    stored = backend.values[("agent-autofill", "vault:v1")]
+    assert "secret-fixture" not in stored
+    assert "imap:v1:round-trip" not in json.loads(stored)["secrets"]
+
+
+def test_keyring_vault_serialization_does_not_contain_plaintext_secret():
+    backend = FakeKeychain()
+    provider = KeyringProvider(backend=backend)
+    provider.set_secret("imap:v1:opaque", b"super-secret-fixture")
+
+    serialized = backend.values[("agent-autofill", "vault:v1")]
+    assert "super-secret-fixture" not in serialized
 
 
 def test_store_persists_encrypted_values_across_connections(tmp_path):

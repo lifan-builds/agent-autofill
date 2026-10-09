@@ -4,9 +4,25 @@ import re
 import secrets
 import sqlite3
 import base64
+import sys
 from cryptography.fernet import Fernet, InvalidToken
 from pathlib import Path
 from typing import Any, Iterable
+
+
+def _credential_store_error_message() -> str:
+    """Return safe recovery guidance for an unavailable OS credential store."""
+
+    if sys.platform == "darwin":
+        return (
+            "OS credential store unavailable: unlock the macOS login Keychain "
+            "and run Agent Autofill in a host process with Keychain access; "
+            "do not move secrets into files or environment variables"
+        )
+    return (
+        "OS credential store unavailable: configure or unlock the operating-system "
+        "credential store, then run Agent Autofill again"
+    )
 
 
 _SECRET_AUDIT_KEY_PARTS = {
@@ -83,54 +99,191 @@ class KeyProvider:
 
 
 class KeyringProvider(KeyProvider):
-    """Use the OS credential store (Keychain on macOS) for the DB key."""
+    """Use one OS credential-store vault for the database and connectors.
 
-    def __init__(self, service: str = "agent-autofill"):
+    Older releases created one Keychain item per database path and connector
+    secret.  The current format keeps those values in one versioned Keychain
+    item and caches it for the lifetime of the process.  Legacy items are read
+    only when needed, copied into the vault, and removed after the copy is
+    durable.  Connector credentials therefore remain OS-store-backed while a
+    normal broker process needs only one Keychain access.
+    """
+
+    _VAULT_ACCOUNT = "vault:v1"
+    _VAULT_VERSION = 1
+
+    def __init__(self, service: str = "agent-autofill", backend=None):
         self.service = service
+        self._backend = backend
+        self._vault: dict | None = None
+
+    def _keyring(self):
+        if self._backend is not None:
+            return self._backend
+        import keyring
+
+        return keyring
+
+    @staticmethod
+    def _encode(value: bytes) -> str:
+        return base64.urlsafe_b64encode(value).decode("ascii")
+
+    @staticmethod
+    def _decode(value: object, label: str) -> bytes:
+        if not isinstance(value, str):
+            raise RuntimeError(f"Keychain vault contains an invalid {label}")
+        try:
+            decoded = base64.urlsafe_b64decode(value.encode("ascii"))
+        except Exception as exc:
+            raise RuntimeError(f"Keychain vault contains an invalid {label}") from exc
+        if not decoded:
+            raise RuntimeError(f"Keychain vault contains an empty {label}")
+        return decoded
+
+    def _empty_vault(self) -> dict:
+        return {"version": self._VAULT_VERSION, "database_keys": {}, "secrets": {}}
+
+    @staticmethod
+    def _copy_vault(vault: dict) -> dict:
+        """Copy the small mutable sections before attempting a Keychain write.
+
+        A failed ``set_password`` must not leave the in-memory cache claiming
+        that a value was persisted.  Keeping this copy explicit also avoids
+        retaining references to dictionaries returned by a test backend.
+        """
+
+        return {
+            "version": vault["version"],
+            "database_keys": dict(vault["database_keys"]),
+            "secrets": dict(vault["secrets"]),
+        }
+
+    def _load_vault(self) -> dict:
+        if self._vault is not None:
+            return self._vault
+        try:
+            serialized = self._keyring().get_password(
+                self.service, self._VAULT_ACCOUNT
+            )
+            if not serialized:
+                vault = self._empty_vault()
+            else:
+                vault = json.loads(serialized)
+                if (
+                    not isinstance(vault, dict)
+                    or vault.get("version") != self._VAULT_VERSION
+                    or not isinstance(vault.get("database_keys"), dict)
+                    or not isinstance(vault.get("secrets"), dict)
+                ):
+                    raise RuntimeError("Keychain vault format is unsupported")
+            self._vault = vault
+            return vault
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(_credential_store_error_message()) from exc
+
+    def _persist_vault(self, vault: dict) -> None:
+        serialized = json.dumps(vault, separators=(",", ":"), sort_keys=True)
+        try:
+            self._keyring().set_password(
+                self.service, self._VAULT_ACCOUNT, serialized
+            )
+        except Exception as exc:
+            raise RuntimeError(_credential_store_error_message()) from exc
+        self._vault = vault
+
+    def _legacy_get(self, name: str) -> bytes | None:
+        if name == self._VAULT_ACCOUNT:
+            return None
+        try:
+            value = self._keyring().get_password(self.service, name)
+            return self._decode(value, "legacy secret") if value else None
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(_credential_store_error_message()) from exc
+
+    def _legacy_delete(self, name: str) -> None:
+        if name == self._VAULT_ACCOUNT:
+            return
+        try:
+            self._keyring().delete_password(self.service, name)
+        except Exception as exc:
+            message = str(exc).lower()
+            if (
+                isinstance(exc, (KeyError, LookupError))
+                or "not found" in message
+                or "no password" in message
+                or "does not exist" in message
+                or "no such" in message
+            ):
+                return
+            raise RuntimeError(_credential_store_error_message()) from exc
 
     def load_or_create(self, name: str) -> bytes:
         try:
-            import keyring
+            vault = self._load_vault()
+            encoded = vault["database_keys"].get(name)
+            if encoded:
+                raw = self._decode(encoded, "database key")
+                if len(raw) < 16:
+                    raise RuntimeError("Keychain vault contains an invalid database key")
+                return raw
 
-            value = keyring.get_password(self.service, name)
-            if value:
-                return base64.urlsafe_b64decode(value.encode())
-            raw = secrets.token_bytes(32)
-            keyring.set_password(
-                self.service, name, base64.urlsafe_b64encode(raw).decode()
-            )
+            legacy = self._legacy_get(name)
+            raw = legacy or secrets.token_bytes(32)
+            updated = self._copy_vault(vault)
+            updated["database_keys"][name] = self._encode(raw)
+            self._persist_vault(updated)
+            if legacy is not None:
+                self._legacy_delete(name)
             return raw
+        except RuntimeError:
+            raise
         except Exception as exc:
-            raise RuntimeError(
-                "OS credential store unavailable. Install requirements.txt and unlock Keychain; test code may pass an explicit key"
-            ) from exc
+            raise RuntimeError(_credential_store_error_message()) from exc
 
     def get_secret(self, name: str) -> bytes | None:
-        try:
-            import keyring
-
-            value = keyring.get_password(self.service, name)
-            return base64.urlsafe_b64decode(value.encode()) if value else None
-        except Exception as exc:
-            raise RuntimeError("OS credential store unavailable") from exc
+        vault = self._load_vault()
+        encoded = vault["secrets"].get(name)
+        if encoded:
+            return self._decode(encoded, "connector secret")
+        legacy = self._legacy_get(name)
+        if legacy is None:
+            return None
+        updated = self._copy_vault(vault)
+        updated["secrets"][name] = self._encode(legacy)
+        self._persist_vault(updated)
+        self._legacy_delete(name)
+        return legacy
 
     def set_secret(self, name: str, value: bytes) -> None:
-        try:
-            import keyring
-
-            keyring.set_password(
-                self.service, name, base64.urlsafe_b64encode(value).decode()
-            )
-        except Exception as exc:
-            raise RuntimeError("OS credential store unavailable") from exc
+        if not isinstance(value, bytes) or not value:
+            raise RuntimeError("connector secret must be nonempty bytes")
+        vault = self._load_vault()
+        updated = self._copy_vault(vault)
+        updated["secrets"][name] = self._encode(value)
+        self._persist_vault(updated)
+        self._legacy_delete(name)
 
     def delete_secret(self, name: str) -> None:
-        try:
-            import keyring
+        vault = self._load_vault()
+        if name in vault["secrets"]:
+            updated = self._copy_vault(vault)
+            del updated["secrets"][name]
+            self._persist_vault(updated)
+        self._legacy_delete(name)
 
-            keyring.delete_password(self.service, name)
-        except Exception as exc:
-            raise RuntimeError("OS credential store unavailable") from exc
+    def migrate_legacy(self, names: Iterable[str]) -> int:
+        """Migrate known connector accounts without returning their values."""
+
+        migrated = 0
+        for name in names:
+            before = self._load_vault()["secrets"].get(name)
+            if self.get_secret(name) is not None and before is None:
+                migrated += 1
+        return migrated
 
 
 class Store:

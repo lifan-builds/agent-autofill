@@ -1,0 +1,39 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light">
+<title>Agent Autofill</title>
+<style>
+  :root { color-scheme: light; --ink:#172033; --muted:#667085; --line:#e4e8f0; --blue:#4f46e5; --blue-soft:#eef2ff; --mint:#047857; --mint-soft:#ecfdf5; --surface:#fff; --canvas:#f7f8fc; }
+  * { box-sizing: border-box; }
+  body { width: 360px; margin: 0; padding: 18px; font: 13px/1.45 system-ui, -apple-system, sans-serif; color:var(--ink); background:var(--canvas); }
+  .header { display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+  .mark { display:grid; place-items:center; width:34px; height:34px; border-radius:11px; background:linear-gradient(135deg,#4f46e5,#0f766e); color:#fff; font-size:18px; box-shadow:0 6px 18px #4f46e533; }
+  h1 { font-size:17px; line-height:1.1; margin:0; letter-spacing:-.02em; }
+  .subtitle { margin:3px 0 0; color:var(--muted); font-size:11px; }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:12px; box-shadow:0 8px 24px #1720330d; }
+  .status-grid { display:grid; gap:6px; margin-bottom:12px; }
+  .status-row { display:flex; align-items:center; gap:7px; padding:8px 9px; border-radius:9px; background:#fafbfe; color:var(--muted); font-size:11px; }
+  .status-row::before { content:'•'; color:#98a2b3; font-size:17px; line-height:0; }
+  .status-row.ok { color:#047857; background:var(--mint-soft); }.status-row.ok::before { color:#10b981; }.status-row.warn { color:#9a6700; background:#fffaf0; }.status-row.error { color:#b42318; background:#fff5f4; }
+  label { display:block; margin:11px 0 5px; font-weight:700; font-size:11px; color:#344054; }
+  input, button { width:100%; font:inherit; }
+  input { padding:9px 10px; border:1px solid #cfd5df; border-radius:9px; background:#fff; color:var(--ink); outline:none; }
+  input:focus { border-color:var(--blue); box-shadow:0 0 0 3px #4f46e51f; }
+  button { margin-top:12px; padding:9px 11px; cursor:pointer; border:0; border-radius:9px; background:var(--blue); color:#fff; font-weight:750; box-shadow:0 5px 14px #4f46e533; }
+  button:hover:not(:disabled) { filter:brightness(.96); transform:translateY(-1px); } button:disabled { cursor:wait; opacity:.55; box-shadow:none; }
+  #status { min-height:1.3em; margin:10px 2px 0; font-size:11px; color:var(--muted); }
+  #status.ok { color:#047857; } #status.warn { color:#9a6700; } #status.error { color:#b42318; }
+  .hint { color:var(--muted); font-size:11px; margin:10px 2px 0; }
+  details { margin-top:12px; } summary { cursor:pointer; color:#344054; font-size:11px; font-weight:750; } .advanced { margin-top:8px; }
+  .boundary { margin:12px 0 0; padding:9px 10px; border-left:3px solid #10b981; border-radius:7px; background:var(--mint-soft); color:#14532d; font-size:11px; }
+</style>
+<div class="header"><div class="mark">✦</div><div><h1>Agent Autofill bridge</h1><p class="subtitle">Optional transport helper · requests stay in the CLI.</p></div></div>
+<div class="card">
+  <div class="status-grid"><div id="origin" class="status-row" role="status">Active origin: checking…</div><div id="bridge" class="status-row" role="status">Bridge: checking…</div></div>
+  <label for="agent">Agent ID</label><input id="agent" autocomplete="off" spellcheck="false">
+  <label for="handle">One-time bridge handle</label><input id="handle" type="password" autocomplete="off" spellcheck="false">
+  <div class="boundary">The approved origin and purpose grant is the consent step. The handle is a scoped, one-time verification handoff, not a reusable link or proof that the site accepted anything. It is never stored here and this extension never submits the page; review and submit yourself.</div>
+  <button id="fill" disabled>Use bridge on current page</button><div id="status" role="status"></div>
+</div>
+<details><summary>Advanced connection settings</summary><div class="advanced"><label for="bridge-url">Loopback bridge URL</label><input id="bridge-url" type="url" autocomplete="off" spellcheck="false"><p class="hint">Only this URL and the agent identifier are remembered. Handles are cleared after every attempt.</p><button id="refresh" type="button">Refresh origin and bridge</button></div></details>
+<script src="popup.js"></script>

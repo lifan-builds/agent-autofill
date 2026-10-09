@@ -12,9 +12,12 @@ from agent_autofill.google_oauth import (
     GoogleOAuthConfigurationError,
     GoogleOAuthTokenError,
     GoogleOAuthTokenProvider,
+    MicrosoftOAuthTokenProvider,
+    MICROSOFT_TOKEN_ENDPOINT,
     authorize_google_desktop,
     build_authorization_url,
     generate_pkce,
+    oauth_provider_from_keychain_secret,
 )
 
 
@@ -245,3 +248,46 @@ def test_exchange_and_refresh_normalize_arbitrary_oauth_errors():
         provider.get_access_token()
     assert "access-token-fixture" not in str(refresh.value)
     assert "refresh-token-fixture" not in str(refresh.value)
+
+
+def test_saved_microsoft_provider_refreshes_only_at_microsoft_and_saves_rotation():
+    saved = []
+    requests = []
+
+    def refresh(endpoint, fields, timeout):
+        requests.append(endpoint)
+        return {
+            "access_token": "fixture-microsoft-access",
+            "refresh_token": "fixture-rotated-refresh",
+            "expires_in": 3600,
+        }
+
+    initial = MicrosoftOAuthTokenProvider("client-id", None, "fixture-initial-refresh")
+    provider = oauth_provider_from_keychain_secret(
+        initial.to_keychain_secret(), http_post=refresh, on_refresh=saved.append
+    )
+    assert provider.get_access_token() == "fixture-microsoft-access"
+    assert requests == [MICROSOFT_TOKEN_ENDPOINT]
+    assert json.loads(saved[0])["refresh_token"] == "fixture-rotated-refresh"
+    assert b"fixture-microsoft-access" not in saved[0]
+    fresh = oauth_provider_from_keychain_secret(saved[0], http_post=refresh)
+    assert fresh.token_endpoint == MICROSOFT_TOKEN_ENDPOINT
+    assert fresh.keychain_payload()["refresh_token"] == "fixture-rotated-refresh"
+
+
+def test_refresh_save_failure_is_sanitized_and_does_not_cache_access():
+    def fail(value):
+        raise RuntimeError("fixture-private-refresh")
+
+    provider = MicrosoftOAuthTokenProvider(
+        "client-id", None, "fixture-original-refresh",
+        http_post=lambda *_: {
+            "access_token": "fixture-private-access",
+            "refresh_token": "fixture-private-refresh",
+        },
+        on_refresh=fail,
+    )
+    with pytest.raises(GoogleOAuthTokenError, match="Keychain") as caught:
+        provider.get_access_token()
+    assert "fixture-private" not in str(caught.value)
+    assert provider.expires_at == 0

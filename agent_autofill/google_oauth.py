@@ -30,6 +30,7 @@ import webbrowser
 
 AUTHORIZATION_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
+MICROSOFT_TOKEN_ENDPOINT = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
 GMAIL_SCOPE = "https://mail.google.com/"
 LOOPBACK_HOST = "127.0.0.1"
 # Desktop clients use the loopback redirect URI at the root path.  Keeping the
@@ -200,17 +201,24 @@ class GoogleOAuthTokenProvider:
     mapping or a JSON string/bytes response.
     """
 
+    # The implementation is also used for other OAuth2 IMAP providers.  Keep
+    # the original Google class and payload shape for compatibility, while
+    # allowing provider-specific subclasses to use their own discriminator.
+    KEYCHAIN_PROVIDER = "google"
+    DEFAULT_TOKEN_ENDPOINT = TOKEN_ENDPOINT
+
     def __init__(
         self,
         client_id: str,
         client_secret: str | None,
         refresh_token: str,
         *,
-        token_endpoint: str = TOKEN_ENDPOINT,
+        token_endpoint: str | None = None,
         http_post: HttpPost | None = None,
         clock: Callable[[], float] | None = None,
         access_token: str | None = None,
         expires_at: float = 0.0,
+        on_refresh: Callable[[bytes], None] | None = None,
     ):
         if not isinstance(client_id, str) or not client_id.strip():
             raise GoogleOAuthConfigurationError("Google OAuth client id is missing")
@@ -221,11 +229,12 @@ class GoogleOAuthTokenProvider:
         self.client_id = client_id
         self.client_secret = client_secret or None
         self._refresh_token = refresh_token
-        self.token_endpoint = token_endpoint
+        self.token_endpoint = token_endpoint or self.DEFAULT_TOKEN_ENDPOINT
         self._http_post = http_post or _post_form
         self._clock = clock or time.time
         self._access_token = access_token
         self._expires_at = float(expires_at)
+        self._on_refresh = on_refresh
 
     @classmethod
     def from_token_response(
@@ -262,8 +271,9 @@ class GoogleOAuthTokenProvider:
         value: bytes | str | Mapping[str, Any],
         *,
         http_post: HttpPost | None = None,
-        token_endpoint: str = TOKEN_ENDPOINT,
+        token_endpoint: str | None = None,
         clock: Callable[[], float] | None = None,
+        on_refresh: Callable[[bytes], None] | None = None,
     ) -> "GoogleOAuthTokenProvider":
         """Reconstruct a provider from the versioned, secret-store payload."""
 
@@ -292,7 +302,10 @@ class GoogleOAuthTokenProvider:
         }
         if set(value) != allowed - {"client_secret"} and set(value) != allowed:
             raise GoogleOAuthConfigurationError("Saved Google OAuth state is unsupported")
-        if value.get("version") != KEYCHAIN_PAYLOAD_VERSION or value.get("provider") != "google":
+        if (
+            value.get("version") != KEYCHAIN_PAYLOAD_VERSION
+            or value.get("provider") != cls.KEYCHAIN_PROVIDER
+        ):
             raise GoogleOAuthConfigurationError("Saved Google OAuth state is unsupported")
         client_id = value.get("client_id")
         client_secret = value.get("client_secret")
@@ -310,6 +323,7 @@ class GoogleOAuthTokenProvider:
             http_post=http_post,
             token_endpoint=token_endpoint,
             clock=clock,
+            on_refresh=on_refresh,
         )
 
     # ``from_secret`` is useful at the server/CLI boundary and preserves the
@@ -320,7 +334,7 @@ class GoogleOAuthTokenProvider:
     def keychain_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "version": KEYCHAIN_PAYLOAD_VERSION,
-            "provider": "google",
+            "provider": self.KEYCHAIN_PROVIDER,
             "client_id": self.client_id,
             "refresh_token": self._refresh_token,
         }
@@ -373,7 +387,15 @@ class GoogleOAuthTokenProvider:
         expires = _expires_in(decoded)
         rotated_refresh = decoded.get("refresh_token")
         if isinstance(rotated_refresh, str) and rotated_refresh:
+            changed = rotated_refresh != self._refresh_token
             self._refresh_token = rotated_refresh
+            if changed and self._on_refresh is not None:
+                try:
+                    self._on_refresh(self.to_keychain_secret())
+                except Exception as exc:
+                    raise GoogleOAuthTokenError(
+                        "Could not save refreshed OAuth state in Keychain"
+                    ) from exc
         self._access_token = token
         self._expires_at = now + expires
         return token
@@ -393,6 +415,62 @@ class GoogleOAuthTokenProvider:
             "<GoogleOAuthTokenProvider client_id="
             f"{self.client_id!r} access_token=<redacted> refresh_token=<redacted>>"
         )
+
+
+class MicrosoftOAuthTokenProvider(GoogleOAuthTokenProvider):
+    """OAuth2 refresh provider for Thunderbird's Microsoft IMAP accounts.
+
+    Microsoft and Google use the same RFC 6749 refresh-token exchange shape
+    for this use case.  The separate class keeps Keychain payloads explicit so
+    a saved Microsoft token can never be reconstructed as a Gmail connector.
+    """
+
+    KEYCHAIN_PROVIDER = "microsoft"
+    DEFAULT_TOKEN_ENDPOINT = MICROSOFT_TOKEN_ENDPOINT
+
+
+def oauth_provider_from_keychain_secret(
+    value: bytes | str | Mapping[str, Any],
+    *,
+    http_post: HttpPost | None = None,
+    token_endpoint: str | None = None,
+    clock: Callable[[], float] | None = None,
+    on_refresh: Callable[[bytes], None] | None = None,
+) -> GoogleOAuthTokenProvider:
+    """Reconstruct a supported OAuth provider from a Keychain payload.
+
+    Only the non-secret provider discriminator is inspected before delegating
+    validation to the concrete provider class.  Unknown providers fail closed.
+    """
+
+    raw: Any = value
+    if isinstance(raw, bytes):
+        try:
+            raw = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise GoogleOAuthConfigurationError("Saved OAuth state is invalid") from exc
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError) as exc:
+            raise GoogleOAuthConfigurationError("Saved OAuth state is invalid") from exc
+    if not isinstance(raw, Mapping):
+        raise GoogleOAuthConfigurationError("Saved OAuth state is invalid")
+    provider_name = raw.get("provider")
+    if not isinstance(provider_name, str):
+        raise GoogleOAuthConfigurationError("Saved OAuth provider is unsupported")
+    provider_type = {
+        "google": GoogleOAuthTokenProvider,
+        "microsoft": MicrosoftOAuthTokenProvider,
+    }.get(provider_name)
+    if provider_type is None:
+        raise GoogleOAuthConfigurationError("Saved OAuth provider is unsupported")
+    kwargs: dict[str, Any] = {
+        "http_post": http_post, "clock": clock, "on_refresh": on_refresh
+    }
+    if token_endpoint is not None:
+        kwargs["token_endpoint"] = token_endpoint
+    return provider_type.from_keychain_secret(value, **kwargs)
 
 
 def generate_pkce() -> tuple[str, str]:
@@ -623,6 +701,7 @@ __all__ = [
     "GoogleOAuthToken",
     "GoogleOAuthTokenError",
     "GoogleOAuthTokenProvider",
+    "MicrosoftOAuthTokenProvider",
     "TOKEN_ENDPOINT",
     "authorize",
     "authorize_google_desktop",
@@ -630,4 +709,5 @@ __all__ = [
     "build_authorization_url",
     "generate_pkce",
     "load_client_secrets",
+    "oauth_provider_from_keychain_secret",
 ]

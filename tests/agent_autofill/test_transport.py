@@ -9,18 +9,34 @@ def test_mcp_tool_catalog_has_information_only_surface():
     names = {tool["name"] for tool in TOOLS}
     assert {
         "request_profile_fields",
+        "list_profile_groups",
+        "match_credentials",
         "search_email",
         "request_auth_code",
+        "request_auth_code_for_recipient",
+        "match_email_sources",
+        "request_verification_link_for_recipient",
         "search_messages",
         "list_financial_records",
+        "match_financial_records",
         "write_records",
         "request_credential_fields",
+        "request_credential",
         "request_financial_fields",
     } <= names
     assert not {"get_password", "send_message", "submit_form"} & names
     for name in {"request_credential_fields", "request_financial_fields"}:
         schema = next(tool["inputSchema"] for tool in TOOLS if tool["name"] == name)
         assert "confirmed" not in schema["properties"]
+    unified = next(tool["inputSchema"] for tool in TOOLS if tool["name"] == "request_credential")
+    assert unified["required"] == ["delivery", "credential_id"]
+    assert unified["properties"]["delivery"]["enum"] == ["direct", "extension"]
+    link_schema = next(
+        tool["inputSchema"]
+        for tool in TOOLS
+        if tool["name"] == "request_verification_link_for_recipient"
+    )
+    assert link_schema["required"] == ["recipient", "target_origin", "purpose"]
 
 
 def test_transport_requires_agent_token_for_data_tools():
@@ -54,6 +70,194 @@ def test_transport_requires_agent_token_for_data_tools():
                 "purpose": "form",
             },
         )
+
+
+def test_bound_local_service_uses_its_keychain_identity_without_request_credentials():
+    from types import SimpleNamespace
+
+    broker = Broker(Store(":memory:", key=b"l" * 32))
+    broker.put_profile("name", "identity", "Name", "Ada")
+    broker.grant("service:cpa-phoenix", "profile.read", "name", "example.com", "form")
+    token = broker.create_agent("service:cpa-phoenix")
+
+    result = _call(
+        broker,
+        "request_profile_fields",
+        {
+            "field_ids": ["name"],
+            "target_origin": "example.com",
+            "purpose": "form",
+        },
+        SimpleNamespace(agent_id="service:cpa-phoenix", token=token),
+    )
+
+    assert result["name"]["value"] == "Ada"
+
+
+def test_transport_matches_credentials_with_auth_and_never_returns_password():
+    broker = Broker(Store(":memory:", key=b"m" * 32))
+    token = broker.create_agent("codex")
+    broker.put_credential(
+        "example-login",
+        "Example",
+        "https://example.test/login",
+        "ada@example.test",
+        "synthetic-password",
+    )
+
+    result = _call(
+        broker,
+        "match_credentials",
+        {
+            "agent_id": "codex",
+            "agent_token": token,
+            "target_origin": "https://example.test/checkout",
+            "username_hint": "ADA",
+        },
+    )
+
+    assert result[0]["credential_id"] == "example-login"
+    assert "password" not in result[0]
+    assert "synthetic-password" not in str(result)
+    with pytest.raises(BrokerError, match="authentication"):
+        _call(
+            broker,
+            "match_credentials",
+            {
+                "agent_id": "codex",
+                "target_origin": "https://example.test",
+            },
+        )
+
+
+def test_transport_dispatches_unified_direct_and_extension_with_authentication():
+    broker = Broker(Store(":memory:", key=b"z" * 32))
+    token = broker.create_agent("codex")
+    broker.put_credential(
+        "example-login",
+        "Example",
+        "https://example.test/login",
+        "ada@example.test",
+        "synthetic-password",
+    )
+    broker.grant("codex", "credential.read", "example-login", "example.test", "form")
+    direct = _call(
+        broker,
+        "request_credential",
+        {
+            "agent_id": "codex",
+            "agent_token": token,
+            "delivery": "direct",
+            "credential_id": "example-login",
+            "field_ids": ["username"],
+            "target_origin": "https://example.test",
+            "purpose": "form",
+        },
+    )
+    assert direct["username"] == "ada@example.test"
+    assert "password" not in direct
+
+    broker.grant("codex", "credential.use", "example-login", "example.test", "form")
+    extension = _call(
+        broker,
+        "request_credential",
+        {
+            "agent_id": "codex",
+            "agent_token": token,
+            "delivery": "extension",
+            "credential_id": "example-login",
+            "target_origin": "https://example.test",
+            "purpose": "form",
+            "expires_in": 45,
+        },
+    )
+    assert extension["expires_in"] == 45
+    assert "password" not in extension
+
+    with pytest.raises(BrokerError, match="authentication"):
+        _call(
+            broker,
+            "request_credential",
+            {
+                "agent_id": "codex",
+                "delivery": "direct",
+                "credential_id": "example-login",
+                "field_ids": ["username"],
+                "target_origin": "https://example.test",
+                "purpose": "form",
+            },
+        )
+
+
+def test_transport_dispatches_email_matching_and_scoped_verification_link():
+    from datetime import datetime, timezone
+    from agent_autofill.models import EmailMessage
+
+    broker = Broker(Store(":memory:", key=b"v" * 32))
+    broker.add_source("mail", "email", "Owner")
+    broker.store.put(
+        "connection",
+        "mail",
+        {"source_id": "mail", "kind": "imap", "username": "owner@example.test"},
+    )
+    broker.email["mail"] = [
+        EmailMessage(
+            "link-1",
+            "mail",
+            "no-reply@auth.example.test",
+            "Verify",
+            "https://auth.example.test/verify?token=synthetic-link-token",
+            datetime.now(timezone.utc).isoformat(),
+        )
+    ]
+    token = broker.create_agent("codex")
+    assert _call(
+        broker,
+        "match_email_sources",
+        {"recipient": "owner@example.test"},
+    )[0]["source_id"] == "mail"
+    broker.grant(
+        "codex",
+        "email.verification_link",
+        "mail",
+        "auth.example.test",
+        "verify",
+    )
+    result = _call(
+        broker,
+        "request_verification_link_for_recipient",
+        {
+            "agent_id": "codex",
+            "agent_token": token,
+            "recipient": "owner@example.test",
+            "target_origin": "https://auth.example.test/finish",
+            "purpose": "verify",
+        },
+    )
+    assert result["url"].startswith("https://auth.example.test/")
+    assert "synthetic-link-token" in result["url"]
+    assert "Verify" not in str(result)
+    with pytest.raises(BrokerError, match="authentication"):
+        _call(
+            broker,
+            "request_verification_link_for_recipient",
+            {
+                "agent_id": "codex",
+                "recipient": "owner@example.test",
+                "target_origin": "auth.example.test",
+                "purpose": "verify",
+            },
+        )
+
+
+def test_profile_groups_are_available_without_token_but_values_are_not():
+    broker = Broker(Store(":memory:", key=b"p" * 32))
+    broker.put_profile("first_name", "identity", "First name", "Ada")
+
+    result = _call(broker, "list_profile_groups", {"agent_id": "unknown"})
+
+    assert result[0]["field_ids"] == ["first_name"]
+    assert "Ada" not in str(result)
 
 
 def test_transport_reads_agent_autofill_token_environment_variable(monkeypatch):

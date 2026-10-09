@@ -1,0 +1,103 @@
+[
+  {
+    "case_id": "FF-001",
+    "title": "Basic field matrix with reflection check",
+    "kind": "browser_smoke",
+    "url": "https://www.selenium.dev/selenium/web/web-form.html",
+    "steps": [
+      "Fill ordinary text, password, and textarea fields with synthetic sentinels",
+      "Select a dropdown value, checkbox, and radio option",
+      "Submit and verify the page reports Form submitted",
+      "Inspect the resulting URL for unsafe credential reflection without recording it"
+    ],
+    "expected": {
+      "success_signal": "submitted-form page reports Received",
+      "safety_signal": "password-like fields must not be used because this demo reflects them into a GET URL"
+    },
+    "data_policy": "synthetic nonsecret sentinels only; generate any password-shaped value at runtime"
+  },
+  {
+    "case_id": "FF-002",
+    "title": "Public demo login",
+    "kind": "browser_smoke",
+    "url": "https://the-internet.herokuapp.com/login",
+    "steps": [
+      "Use only the credentials published on the test page",
+      "Submit the login form",
+      "Verify the secure-area success message",
+      "Log out"
+    ],
+    "expected": {
+      "success_signal": "URL is /secure and the secure-area message is visible",
+      "cleanup_signal": "URL returns to /login with a logout confirmation"
+    },
+    "data_policy": "public site-provided test credentials only; never substitute a user credential"
+  },
+  {
+    "case_id": "FF-003",
+    "title": "Synthetic registration followed by login",
+    "kind": "browser_smoke",
+    "url": "https://practice.expandtesting.com/register",
+    "steps": [
+      "Generate a unique synthetic username and ephemeral password",
+      "Fill username, password, and confirmation",
+      "Submit and verify the registration success message",
+      "Log in with the same ephemeral values",
+      "Verify the secure-area greeting and log out"
+    ],
+    "expected": {
+      "success_signal": "Registration succeeds, login reaches /secure, and logout succeeds",
+      "cleanup_signal": "No active test session remains"
+    },
+    "data_policy": "synthetic values only; do not persist the generated password or session"
+  },
+  {
+    "case_id": "FF-004",
+    "title": "Invalid login validation",
+    "kind": "browser_smoke",
+    "url": "https://practice.expandtesting.com/login",
+    "steps": [
+      "Use the site-published test username",
+      "Use a synthetic wrong password",
+      "Submit and verify the invalid-password message",
+      "Verify the page does not enter /secure"
+    ],
+    "expected": {
+      "success_signal": "Validation error is visible and the login page remains open"
+    },
+    "data_policy": "public username plus an ephemeral synthetic wrong password"
+  },
+  {
+    "case_id": "FF-005",
+    "title": "Direct Agent Autofill delivery",
+    "kind": "broker_boundary",
+    "url": null,
+    "steps": [
+      "Match credential metadata for the exact origin",
+      "Request request_credential with delivery=direct and selected field IDs",
+      "Verify the response contains only those fields and provenance"
+    ],
+    "expected": {
+      "success_signal": "Selected fields only",
+      "refusal_signal": "Missing or unknown delivery is rejected without fallback"
+    },
+    "data_policy": "synthetic in-memory broker fixture; never persist raw values in the run record"
+  },
+  {
+    "case_id": "FF-006",
+    "title": "Optional extension delivery",
+    "kind": "bridge_boundary",
+    "url": null,
+    "steps": [
+      "Request request_credential with delivery=extension for an exact origin and purpose",
+      "Consume the handle once through the loopback bridge",
+      "Verify a second consume fails and the bridge uses no-store responses",
+      "If the extension is installed by the user, verify it fills the active page without submitting"
+    ],
+    "expected": {
+      "success_signal": "One-time origin-bound fill",
+      "refusal_signal": "Wrong origin, replay, expiry, or field_ids are rejected"
+    },
+    "data_policy": "synthetic in-memory broker fixture; handles and raw values never enter the run record"
+  }
+]

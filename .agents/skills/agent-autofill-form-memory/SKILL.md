@@ -9,8 +9,9 @@ Use this skill when an agent is preparing or reviewing a form and has either:
 
 - stable values the user supplied or explicitly verified and may want to reuse;
 - a need to compare those values with Agent Autofill records; or
-- an authenticated, scoped need for selected saved values for the consuming
-  agent's own form workflow.
+  - an authenticated need for selected saved values for the consuming agent's
+    own form workflow. Keychain-paired local services are trusted for reads;
+    remote or legacy agents may use explicit scopes.
 
 Agent Autofill is an information layer. The consuming agent supplies the form
 labels, target origin, purpose, and values it obtained from the user or its
@@ -83,7 +84,7 @@ read or write call.
    rejected, ambiguous, or unverified rows. MCP transport authentication runs
    first; the broker then requires the matching type-specific write grant for
    every entry, validates the complete batch, and commits it atomically. Never
-   weaken a missing grant or scope. Include the complete approved replacement
+   weaken a missing write grant or scope. Include the complete approved replacement
    entry for every update; an omitted credential field defaults empty and an
    omitted financial value is removed. Send only the accepted entry fields
    from `record-contracts.md`; proposal-only action, preview, confidence,
@@ -94,9 +95,10 @@ read or write call.
 
 ## Retrieval boundary
 
-Once transport authentication, the matching active read grant, and the
-record's origin/purpose scope pass, selected reads do not need a second chat
-approval. Use `request_profile_fields` for ordinary profile values,
+Once transport authentication passes, selected reads do not need a second chat
+approval for a Keychain-paired local service. Legacy or remote agents also
+need their matching active read grant and record scope. Use
+`request_profile_fields` for ordinary profile values,
 `request_credential_fields` for selected credential fields, and
 `request_financial_fields` for selected financial fields. Ask only for fields
 the consuming agent needs.

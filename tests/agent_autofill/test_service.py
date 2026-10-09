@@ -1,6 +1,11 @@
 from datetime import datetime, timedelta, timezone
 import pytest
-from agent_autofill.service import Broker, AuthorizationError, BrokerError
+from agent_autofill.service import (
+    AuthorizationError,
+    Broker,
+    BrokerError,
+    CredentialUseError,
+)
 from agent_autofill.models import EmailMessage, TextMessage
 from agent_autofill.storage import Store
 
@@ -56,6 +61,244 @@ def test_email_and_message_are_scoped():
     assert len(b.search_messages("codex", "chat1", "hello")) == 1
     with pytest.raises(AuthorizationError):
         b.search_messages("other", "chat1", "hello")
+
+
+def test_email_recipient_resolution_is_exact_and_source_ids_stay_internal():
+    b = Broker(Store(":memory:", key=b"r" * 32))
+    b.add_source("opaque-mailbox", "email", "Personal")
+    b.store.put(
+        "connection",
+        "opaque-mailbox",
+        {
+            "source_id": "opaque-mailbox",
+            "kind": "imap",
+            "username": "Owner@Example.test",
+        },
+    )
+    assert b.resolve_email_account("owner@example.test") == "opaque-mailbox"
+    with pytest.raises(BrokerError, match="not configured"):
+        b.resolve_email_account("other@example.test")
+
+
+def test_match_email_sources_returns_exact_value_free_metadata():
+    b = Broker(Store(":memory:", key=b"s" * 32))
+    b.add_source("opaque-mailbox", "email", "Personal")
+    b.store.put(
+        "connection",
+        "opaque-mailbox",
+        {
+            "source_id": "opaque-mailbox",
+            "kind": "imap",
+            "username": "Owner@Example.test",
+            "host": "imap.example.test",
+            "secret_name": "do-not-return",
+        },
+    )
+
+    matches = b.match_email_sources("owner@example.test")
+
+    assert matches == [
+        {
+            "source_id": "opaque-mailbox",
+            "provider": "Personal",
+            "label": "Personal",
+            "kind": "email",
+        }
+    ]
+    assert "Owner@Example.test" not in str(matches)
+    assert "do-not-return" not in str(matches)
+    assert b.match_email_sources("other@example.test") == []
+
+
+def test_email_recipient_resolution_rejects_duplicate_addresses():
+    b = Broker(Store(":memory:", key=b"q" * 32))
+    for source_id in ("mail-a", "mail-b"):
+        b.add_source(source_id, "email", source_id)
+        b.store.put(
+            "connection",
+            source_id,
+            {"source_id": source_id, "kind": "imap", "username": "same@example.test"},
+        )
+    with pytest.raises(BrokerError, match="ambiguous"):
+        b.resolve_email_account("same@example.test")
+
+
+def test_request_auth_code_for_recipient_keeps_scope_and_resolves_source():
+    b = Broker(Store(":memory:", key=b"o" * 32))
+    b.add_source("opaque-mailbox", "email", "Owner")
+    b.store.put(
+        "connection",
+        "opaque-mailbox",
+        {"source_id": "opaque-mailbox", "kind": "imap", "username": "owner@example.test"},
+    )
+    b.email["opaque-mailbox"] = [
+        EmailMessage(
+            "m1",
+            "opaque-mailbox",
+            "no-reply@auth.openai.com",
+            "OpenAI login",
+            "https://auth.openai.com code 123456",
+            datetime.now(timezone.utc).isoformat(),
+        )
+    ]
+    b.grant("service:cpa-phoenix", "email.otp", "opaque-mailbox", "https://auth.openai.com", "cpa-phoenix-revive")
+    token = b.create_agent("service:cpa-phoenix")
+    assert b.authenticate_agent("service:cpa-phoenix", token)
+    result = b.request_auth_code_for_recipient(
+        "service:cpa-phoenix",
+        "OWNER@EXAMPLE.TEST",
+        "https://auth.openai.com",
+        "cpa-phoenix-revive",
+    )
+    assert result["code"] == "123456"
+    assert result["provenance"]["account_id"] == "opaque-mailbox"
+
+
+def test_request_verification_link_for_recipient_is_scoped_one_time_and_redacted():
+    b = Broker(Store(":memory:", key=b"w" * 32))
+    b.add_source("opaque-mailbox", "email", "Owner")
+    b.store.put(
+        "connection",
+        "opaque-mailbox",
+        {
+            "source_id": "opaque-mailbox",
+            "kind": "imap",
+            "username": "owner@example.test",
+        },
+    )
+    link = "https://auth.example.test/verify?token=synthetic-link-token"
+    body = f"Click this verification link: {link}. Do not share this message."
+    b.email["opaque-mailbox"] = [
+        EmailMessage(
+            "verification-1",
+            "opaque-mailbox",
+            "no-reply@auth.example.test",
+            "Verify your account",
+            body,
+            datetime.now(timezone.utc).isoformat(),
+        )
+    ]
+    b.grant(
+        "codex",
+        "email.verification_link",
+        "opaque-mailbox",
+        "https://auth.example.test",
+        "verify",
+    )
+
+    result = b.request_verification_link_for_recipient(
+        "codex",
+        "OWNER@EXAMPLE.TEST",
+        "https://auth.example.test/finish",
+        "verify",
+    )
+
+    assert result["url"] == link
+    assert result["provenance"]["message_id"] == "verification-1"
+    assert body not in str(result)
+    audits = b.store.audits()
+    assert link not in str(audits)
+    with pytest.raises(BrokerError, match="already consumed"):
+        b.request_verification_link_for_recipient(
+            "codex",
+            "owner@example.test",
+            "https://auth.example.test",
+            "verify",
+        )
+
+
+def test_request_verification_link_refuses_wrong_origin_ambiguity_and_expiry():
+    b = Broker(Store(":memory:", key=b"k" * 32))
+    b.add_source("mail", "email", "Owner")
+    b.store.put(
+        "connection",
+        "mail",
+        {"source_id": "mail", "kind": "imap", "username": "owner@example.test"},
+    )
+    received = datetime.now(timezone.utc).isoformat()
+    b.email["mail"] = [
+        EmailMessage(
+            "verification-2",
+            "mail",
+            "no-reply@auth.example.test",
+            "Verify",
+            "https://evil.example/verify?token=wrong",
+            received,
+        )
+    ]
+    b.grant(
+        "codex",
+        "email.verification_link",
+        "mail",
+        "auth.example.test",
+        "verify",
+    )
+    with pytest.raises(BrokerError, match="not bound|no unambiguous"):
+        b.request_verification_link_for_recipient(
+            "codex", "owner@example.test", "auth.example.test", "verify"
+        )
+    with pytest.raises(BrokerError, match="between 1 and 3600"):
+        b.request_verification_link_for_recipient(
+            "codex",
+            "owner@example.test",
+            "auth.example.test",
+            "verify",
+            max_age_seconds=0,
+        )
+
+
+def test_verification_link_does_not_reuse_an_otp_grant():
+    b = Broker(Store(":memory:", key=b"v" * 32))
+    b.add_source("mail", "email", "Owner")
+    b.store.put(
+        "connection",
+        "mail",
+        {"source_id": "mail", "kind": "imap", "username": "owner@example.test"},
+    )
+    b.email["mail"] = [
+        EmailMessage(
+            "verification-3",
+            "mail",
+            "no-reply@auth.example.test",
+            "Verify",
+            "https://auth.example.test/verify?token=synthetic",
+            datetime.now(timezone.utc).isoformat(),
+        )
+    ]
+    b.grant("codex", "email.otp", "mail", "auth.example.test", "verify")
+    with pytest.raises(AuthorizationError):
+        b.request_verification_link_for_recipient(
+            "codex", "owner@example.test", "auth.example.test", "verify"
+        )
+
+
+def test_grant_email_recipient_hides_opaque_source_id_from_owner_cli_flow():
+    b = Broker(Store(":memory:", key=b"e" * 32))
+    b.add_source("opaque-mailbox", "email", "Owner")
+    b.store.put(
+        "connection",
+        "opaque-mailbox",
+        {"source_id": "opaque-mailbox", "kind": "imap", "username": "owner@example.test"},
+    )
+    grant = b.grant_email_recipient(
+        "service:cpa-phoenix",
+        "email.otp",
+        "owner@example.test",
+        "https://auth.openai.com",
+        "cpa-phoenix-revive",
+    )
+    assert grant.resource_scope == "opaque-mailbox"
+
+
+def test_grant_email_all_creates_explicit_wildcard_for_owner_choice():
+    b = Broker(Store(":memory:", key=b"a" * 32))
+    grant = b.grant_email_all(
+        "service:cpa-phoenix",
+        "email.otp",
+        "https://auth.openai.com",
+        "cpa-phoenix-revive",
+    )
+    assert grant.resource_scope == "*"
 
 
 def test_otp_is_separate_and_not_logged():
@@ -166,6 +409,220 @@ def test_credential_use_returns_handle_without_password_and_handle_is_one_time()
     assert consumed["password"] == "secret"
     with pytest.raises(BrokerError):
         b.consume_credential_handle(out["handle"], "codex")
+
+
+def test_credential_handle_origin_is_checked_before_consumption():
+    b = setup()
+    b.put_credential("c1", "Example", "https://example.com/login", "ada", "secret")
+    b.grant("codex", "credential.use", "c1", "https://example.com", "form")
+    out = b.request_credential_use("codex", "c1", "https://example.com", "form")
+
+    with pytest.raises(CredentialUseError, match="target origin"):
+        b.consume_credential_handle(out["handle"], "codex", "https://evil.test")
+
+    consumed = b.consume_credential_handle(
+        out["handle"], "codex", "https://example.com/checkout"
+    )
+    assert consumed["password"] == "secret"
+
+
+def test_unified_credential_direct_returns_only_selected_fields_and_provenance():
+    b = Broker(Store(":memory:", key=b"d" * 32))
+    b.put_credential(
+        "c1", "Example", "https://example.com/login", "ada", "synthetic-password"
+    )
+    b.grant("codex", "credential.read", "c1", "https://example.com", "form")
+
+    result = b.request_credential(
+        "codex",
+        "direct",
+        "c1",
+        ["username"],
+        "https://example.com/checkout",
+        "form",
+    )
+
+    assert result["username"] == "ada"
+    assert "password" not in result
+    assert result["provenance"]["credential_id"] == "c1"
+    assert "synthetic-password" not in str(result)
+
+
+def test_unified_credential_extension_issues_existing_handle_metadata_only():
+    b = Broker(Store(":memory:", key=b"x" * 32))
+    b.put_credential(
+        "c1", "Example", "https://example.com/login", "ada", "synthetic-password"
+    )
+    b.grant("codex", "credential.use", "c1", "https://example.com", "form")
+
+    result = b.request_credential(
+        "codex",
+        "extension",
+        "c1",
+        target_origin="https://example.com/checkout",
+        purpose="form",
+        expires_in=30,
+    )
+
+    assert set(result) == {"handle", "username", "origin", "expires_in", "provenance"}
+    assert result["expires_in"] == 30
+    assert "password" not in result
+    assert "synthetic-password" not in str(result)
+
+
+def test_unified_credential_validates_mode_selection_before_delegation():
+    b = Broker(Store(":memory:", key=b"v" * 32))
+    b.put_credential(
+        "c1", "Example", "https://example.com/login", "ada", "synthetic-password"
+    )
+
+    with pytest.raises(BrokerError, match="exactly direct or extension"):
+        b.request_credential("codex", "automatic", "c1", ["username"])
+    with pytest.raises(BrokerError, match="1 to 5"):
+        b.request_credential(
+            "codex", "direct", "c1", ["name", "origin", "username", "password", "note", "extra"]
+        )
+    with pytest.raises(BrokerError, match="not accepted"):
+        b.request_credential(
+            "codex", "extension", "c1", [], "https://example.com", "form"
+        )
+    with pytest.raises(BrokerError, match="between 1 and 300"):
+        b.request_credential(
+            "codex",
+            "extension",
+            "c1",
+            target_origin="https://example.com",
+            purpose="form",
+            expires_in=301,
+        )
+
+
+def test_unified_credential_extension_keeps_grant_origin_expiry_and_replay_boundaries():
+    b = Broker(Store(":memory:", key=b"y" * 32))
+    b.put_credential(
+        "c1", "Example", "https://example.com/login", "ada", "synthetic-password"
+    )
+    with pytest.raises(AuthorizationError):
+        b.request_credential(
+            "codex",
+            "extension",
+            "c1",
+            target_origin="https://example.com",
+            purpose="form",
+        )
+
+    b.grant("codex", "credential.use", "c1", "https://example.com", "form")
+    with pytest.raises(AuthorizationError):
+        b.request_credential(
+            "codex",
+            "extension",
+            "c1",
+            target_origin="https://evil.example",
+            purpose="form",
+        )
+    handle = b.request_credential(
+        "codex",
+        "extension",
+        "c1",
+        target_origin="https://example.com",
+        purpose="form",
+    )
+    b.consume_credential_handle(handle["handle"], "codex", "https://example.com")
+    with pytest.raises(CredentialUseError, match="invalid, expired, or already consumed"):
+        b.consume_credential_handle(handle["handle"], "codex", "https://example.com")
+
+
+def test_match_credentials_uses_exact_host_and_username_hint_without_password():
+    b = Broker(Store(":memory:", key=b"c" * 32))
+    b.put_credential(
+        "example-ada",
+        "Example",
+        "https://example.com/login",
+        "ada@example.com",
+        "synthetic-password",
+    )
+    b.put_credential(
+        "example-bob",
+        "Example",
+        "https://example.com/login",
+        "bob@example.com",
+        "other-password",
+    )
+    b.put_credential(
+        "subdomain-ada",
+        "Subdomain",
+        "https://login.example.com",
+        "ada@example.com",
+        "sub-password",
+    )
+
+    matches = b.match_credentials("https://example.com/checkout", "ADA@EXAMPLE")
+
+    assert [item["credential_id"] for item in matches] == ["example-ada"]
+    assert matches[0]["match"] == "exact-host"
+    assert "password" not in matches[0]
+    assert "synthetic-password" not in str(matches)
+
+
+def test_profile_groups_are_metadata_only_and_local_profiles_are_fallback_groups():
+    b = Broker(Store(":memory:", key=b"g" * 32))
+    provenance = {
+        "source": "chrome-structured-address",
+        "source_profile_id": "chrome-profile-fixture",
+        "source_guid_hash": "guid-fixture",
+        "field_type": "streetAddress",
+    }
+    b.put_profile("street", "address", "Street", "123 Secret St", provenance=provenance)
+    b.put_profile(
+        "city",
+        "address",
+        "City",
+        "Secretville",
+        provenance={**provenance, "field_type": "addressLevel2"},
+    )
+    b.put_profile("nickname", "identity", "Nickname", "Ada")
+
+    groups = b.list_profile_groups()
+    chrome_group = next(item for item in groups if item["field_count"] == 2)
+    local_group = next(item for item in groups if item["field_count"] == 1)
+
+    assert chrome_group["source"] == "chrome-structured-address"
+    assert chrome_group["source_profile_id"] == "chrome-profile-fixture"
+    assert chrome_group["field_ids"] == ["city", "street"]
+    assert set(chrome_group["field_types"]) == {"addressLevel2", "streetAddress"}
+    assert local_group["source"] == "local-profile"
+    assert "Secret St" not in str(groups)
+    assert "Secretville" not in str(groups)
+
+
+def test_metadata_list_filters_are_bounded_and_value_free():
+    b = Broker(Store(":memory:", key=b"f" * 32))
+    b.put_profile("first_name", "identity", "First name", "Ada")
+    b.put_profile("street", "address", "Street", "123 Secret St")
+    b.put_credential(
+        "example-login",
+        "Example",
+        "https://example.test/login",
+        "ada@example.test",
+        "synthetic-password",
+    )
+    b.put_financial_record(
+        "card",
+        "payment_card",
+        "Travel card",
+        {"card_number": "4111111111111111", "expiration_year": "2031"},
+    )
+
+    identity = b.list_profile_fields(category="identity", limit=1)
+    assert [item["field_id"] for item in identity] == ["first_name"]
+    assert "Ada" not in str(identity)
+    assert [item["credential_id"] for item in b.list_credentials(target_origin="https://example.test")] == [
+        "example-login"
+    ]
+    assert "synthetic-password" not in str(b.list_credentials(query="example"))
+    cards = b.list_financial_records(kind="payment_card", query="travel", limit=1)
+    assert [item["record_id"] for item in cards] == ["card"]
+    assert "4111111111111111" not in str(cards)
 
 
 def test_source_removal_revokes_local_route():
@@ -354,6 +811,97 @@ def test_write_records_is_atomic_scoped_and_metadata_only():
     )
     assert updated["records"][0]["status"] == "updated"
     assert broker.list_financial_records()[0]["matching_hints"]["last4"] == "4444"
+
+
+def test_put_payment_card_normalizes_and_keeps_values_out_of_metadata():
+    broker = Broker(Store(":memory:", key=b"p" * 32))
+
+    broker.put_payment_card(
+        "platinum-card",
+        "Travel Platinum",
+        "4111 1111-1111 1111",
+        "5",
+        "2031",
+        security_code="123",
+        additional_security_code="719",
+        cardholder_name="Ada Lovelace",
+        billing_postal_code="98101",
+        network="Visa",
+        allowed_origins=["https://www.example.test"],
+        allowed_purposes=["hotel booking"],
+    )
+
+    metadata = broker.match_financial_records(
+        kind="payment_card",
+        matching_hints={
+            "network": "visa",
+            "last4": "1111",
+            "expiration_month": "05",
+            "expiration_year": "2031",
+        },
+    )
+    assert metadata[0]["record_id"] == "platinum-card"
+    assert "values" not in metadata[0]
+    assert "4111111111111111" not in str(metadata)
+    raw = str(broker.store.db.execute("select value from kv").fetchall())
+    assert "4111111111111111" not in raw
+
+    broker.grant(
+        "codex",
+        "financial.read",
+        "platinum-card",
+        "https://www.example.test",
+        "hotel booking",
+    )
+    fields = broker.request_financial_fields(
+        "codex",
+        "platinum-card",
+        [
+            "card_number",
+            "security_code",
+            "additional_security_code",
+            "expiration_month",
+        ],
+        "https://www.example.test/checkout",
+        "hotel booking",
+    )
+    assert fields["card_number"] == "4111111111111111"
+    assert fields["security_code"] == "123"
+    assert fields["additional_security_code"] == "719"
+    assert fields["expiration_month"] == "05"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("card_number", "too-short", "card number"),
+        ("expiration_month", "13", "expiration month"),
+        ("expiration_year", "31", "expiration year"),
+        ("security_code", "12", "security code"),
+        ("additional_security_code", "1234", "additional security code"),
+    ],
+)
+def test_put_payment_card_rejects_malformed_sensitive_fields(field, value, message):
+    broker = Broker(Store(":memory:", key=b"q" * 32))
+    kwargs = {
+        "record_id": "card",
+        "display_name": "Card",
+        "card_number": "4111111111111111",
+        "expiration_month": "05",
+        "expiration_year": "2031",
+    }
+    if field == "card_number":
+        kwargs["card_number"] = value
+    elif field == "expiration_month":
+        kwargs["expiration_month"] = value
+    elif field == "expiration_year":
+        kwargs["expiration_year"] = value
+    else:
+        kwargs[field] = value
+
+    with pytest.raises(BrokerError, match=message):
+        broker.put_payment_card(**kwargs)
+    assert broker.list_financial_records() == []
 
 
 def test_write_records_rejects_confirmation_transient_fields_and_rolls_back():
@@ -611,8 +1159,42 @@ def test_sensitive_read_refusals_and_audits_do_not_expose_values():
         "codex", "primary-card", ["card_number"], "example.com", "form"
     )
     assert result["card_number"] == "4111111111111111"
-    assert "4111111111111111" not in str(broker.store.audits())
-    assert "123" not in str(broker.store.audits())
+    audit_metadata = [entry["metadata"] for entry in broker.store.audits()]
+    assert "4111111111111111" not in str(audit_metadata)
+    assert "123" not in str(audit_metadata)
+
+
+def test_financial_metadata_matching_disambiguates_expiration_without_values():
+    broker = Broker(Store(":memory:", key=b"m" * 32))
+    for record_id, month, year in (
+        ("amex-1007-old", "05", "2027"),
+        ("amex-1007-current", "05", "2031"),
+    ):
+        broker.put_financial_record(
+            record_id,
+            "payment_card",
+            "Amex Business Platinum",
+            {
+                "card_number": "371378000000007",
+                "expiration_month": month,
+                "expiration_year": year,
+                "security_code": "1234",
+            },
+            matching_hints={"network": "amex", "last4": "1007"},
+        )
+
+    matches = broker.match_financial_records(
+        kind="payment_card",
+        matching_hints={
+            "network": "amex",
+            "last4": "1007",
+            "expiration_month": "05",
+            "expiration_year": "2031",
+        },
+    )
+    assert [item["record_id"] for item in matches] == ["amex-1007-current"]
+    assert "values" not in matches[0]
+    assert "371378000000007" not in str(matches[0])
 
 
 def test_legacy_credential_defaults_preserve_reads_and_one_time_handles():

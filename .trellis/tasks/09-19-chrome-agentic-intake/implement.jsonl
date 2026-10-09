@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Existing security contracts and verification boundaries"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Read-only source and encrypted persistence conventions"}
+{"file": ".trellis/tasks/09-19-chrome-agentic-intake/prd.md", "reason": "User-confirmed architecture and proposed acceptance criteria"}
+{"file": ".trellis/tasks/09-19-chrome-agentic-intake/design.md", "reason": "Instructions-only delivery and local administrative boundary"}
