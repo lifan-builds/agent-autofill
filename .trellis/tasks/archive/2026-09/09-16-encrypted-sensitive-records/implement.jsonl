@@ -1,7 +1,0 @@
-{"file":".trellis/spec/backend/index.md","reason":"Backend pre-development routing and required guidelines"}
-{"file":".trellis/spec/backend/directory-structure.md","reason":"Service, storage, CLI, and transport ownership boundaries"}
-{"file":".trellis/spec/backend/database-guidelines.md","reason":"Encrypted namespaces, transactions, compatibility, and deletion rules"}
-{"file":".trellis/spec/backend/error-handling.md","reason":"Safe validation and refusal behavior for sensitive operations"}
-{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Password, financial-value, audit, and protocol redaction contract"}
-{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Authentication, grants, scoped reads, provenance, and security tests"}
-{"file":".trellis/tasks/09-16-persistent-email-and-form-suggestions/research/current-code.md","reason":"Existing credential, grant, storage, and MCP implementation evidence"}

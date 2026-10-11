@@ -1,4 +1,0 @@
-{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Review redaction and transient response handling"}
-{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Review scoped MCP access and information-only boundaries"}
-{"file":".trellis/tasks/09-16-persistent-email-and-form-suggestions/research/current-code.md","reason":"Compare broker and profile behavior with the evidenced baseline"}
-{"file":".trellis/tasks/09-16-persistent-email-and-form-suggestions/research/codex-skills.md","reason":"Review skill discovery, focus, and validation against official guidance"}

@@ -1,8 +1,0 @@
-{"file":".trellis/spec/backend/index.md","reason":"Backend pre-development routing and required guidelines"}
-{"file":".trellis/spec/backend/directory-structure.md","reason":"CLI, adapter, service, transport, and storage ownership boundaries"}
-{"file":".trellis/spec/backend/database-guidelines.md","reason":"Keychain, encrypted SQLite, compatibility, and OTP persistence rules"}
-{"file":".trellis/spec/backend/error-handling.md","reason":"Safe CLI, provider, broker, and MCP failure behavior"}
-{"file":".trellis/spec/backend/logging-guidelines.md","reason":"OTP, connector-secret, audit, and protocol redaction contract"}
-{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Authentication, grant, provenance, testing, and information-only requirements"}
-{"file":".trellis/tasks/09-16-persistent-email-and-form-suggestions/research/current-code.md","reason":"Existing IMAP persistence and OTP implementation evidence"}
-{"file":".trellis/tasks/09-16-persistent-email-otp/research/google-oauth.md","reason":"Official Google installed-app and Gmail XOAUTH2 contracts"}
