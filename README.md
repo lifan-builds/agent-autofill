@@ -40,12 +40,27 @@ accepted an action.
 
 <table>
 <tr>
-<td width="25%"><strong>✦ Private memory</strong><br>Useful information stays on the user's machine.</td>
+<td width="25%"><strong>✦ Private memory</strong><br>Reusable records are stored on the user's machine.</td>
 <td width="25%"><strong>✦ Selectable exposure</strong><br>Choose how much an agent receives for each workflow.</td>
 <td width="25%"><strong>✦ Reviewable access</strong><br>See what is stored and which grants are active.</td>
 <td width="25%"><strong>✦ Compounding usefulness</strong><br>Approved details make the next task easier.</td>
 </tr>
 </table>
+
+## Watch the product tour
+
+[![Watch the 33-second Agent Autofill tour](docs/assets/agent-autofill-tour.jpg)](https://github.com/lifan-builds/agent-autofill/blob/main/docs/assets/agent-autofill-tour.mp4)
+
+**Chrome remembers your details. Your agent can reuse the ones you approve.**
+This illustrated tour uses synthetic data and original music. It shows the
+intended agent-assisted workflow, not a recording of a live browser session.
+[Watch or download the MP4](https://github.com/lifan-builds/agent-autofill/raw/refs/heads/main/docs/assets/agent-autofill-tour.mp4)
+and read [what each scene means](docs/product-tour.md).
+
+Agent Autofill stores records locally. Selected values returned to a cloud
+agent enter that provider's context. The agent chooses relevant fields and
+handles browser actions; the broker does not submit forms. Chrome intake needs
+local execution, and inbox code retrieval needs a configured source.
 
 ## Project goals
 
@@ -61,7 +76,7 @@ The north-star slogan is simple:
 
 The three product promises behind it:
 
-- **Private memory:** useful information stays on the user's machine.
+- **Private memory:** reusable records are stored on the user's machine.
 - **Selectable exposure:** users choose how much an agent can receive for each workflow.
 - **Compounding usefulness:** every approved detail makes the next task easier.
 
