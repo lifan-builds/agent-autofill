@@ -46,9 +46,9 @@ claims.
 
 ## Media provenance
 
-The public cut uses the selected editorial visuals with original instrumental
-music composed in code, without sampled songs or voice narration. It excludes
-the ElevenLabs free-plan narration used in the earlier private v6 preview.
+The public cut uses the selected editorial visuals with AI narration from
+ElevenLabs and original instrumental music composed in code, without sampled
+songs. The narration is reused with the maintainer's separate permission.
 The visible font is Space Grotesk, licensed under SIL Open Font License 1.1;
 Georgia uses the renderer's installed system font. No font files are distributed
 with this MP4. All illustrated names and codes are synthetic.

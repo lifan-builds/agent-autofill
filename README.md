@@ -52,7 +52,7 @@ accepted an action.
 [![Watch the 33-second Agent Autofill tour](docs/assets/agent-autofill-tour.jpg)](https://github.com/lifan-builds/agent-autofill/blob/main/docs/assets/agent-autofill-tour.mp4)
 
 **Chrome remembers your details. Your agent can reuse the ones you approve.**
-This illustrated tour uses synthetic data and original music. It shows the
+This illustrated tour uses synthetic data, AI narration, and original music. It shows the
 intended agent-assisted workflow, not a recording of a live browser session.
 [Watch or download the MP4](https://github.com/lifan-builds/agent-autofill/raw/refs/heads/main/docs/assets/agent-autofill-tour.mp4)
 and read [what each scene means](docs/product-tour.md).
