@@ -9,12 +9,12 @@ metadata listings, audits, or diagnostics.
 import csv
 import hashlib
 import hmac
+import platform
+import re
 import shutil
 import sqlite3
 import subprocess
 import tempfile
-import platform
-import re
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -32,6 +32,53 @@ class ChromeImportError(RuntimeError):
 _CHROME_SAFE_STORAGE_SERVICE = "Chrome Safe Storage"
 _CHROME_SAFE_STORAGE_ACCOUNT = "Chrome"
 _CHROME_PASSWORD_PREFIXES = (b"v10", b"v11")
+
+
+def default_profile(root: str | Path | None = None) -> Path:
+    """Resolve Chrome's single supported profile: ``Default``.
+
+    ``root`` may be either the Chrome user-data directory or an explicit
+    ``Default`` directory.  A named secondary profile is rejected instead of
+    being silently used.  This keeps onboarding deterministic and prevents a
+    profile containing another person's data from being imported by accident.
+    """
+
+    if root is not None:
+        candidate = Path(root).expanduser()
+        if candidate.name == "Default":
+            profile = candidate
+        else:
+            if candidate.name.startswith("Profile "):
+                raise ChromeImportError(
+                    "Only Chrome's Default profile is supported; select the Default profile"
+                )
+            profile = candidate / "Default"
+    elif platform.system() == "Darwin":
+        profile = Path.home() / "Library/Application Support/Google/Chrome/Default"
+    elif platform.system() == "Windows":
+        profile = Path.home() / "AppData/Local/Google/Chrome/User Data/Default"
+    else:
+        profile = Path.home() / ".config/google-chrome/Default"
+        if not profile.is_dir():
+            profile = Path.home() / ".config/chromium/Default"
+    if not profile.is_dir():
+        raise ChromeImportError(
+            "Chrome Default profile was not found; open Chrome once and retry"
+        )
+    return profile
+
+
+def _require_default_profile(profile_dir: str | Path) -> Path:
+    """Validate an explicit profile path before touching any Chrome data."""
+
+    profile = Path(profile_dir).expanduser()
+    if not (profile.name == "Default" or re.fullmatch(r"Profile \d+", profile.name)):
+        raise ChromeImportError(
+            "Only Chrome's Default or numbered Profile directories are supported; select Default or Profile N"
+        )
+    if not profile.is_dir():
+        raise ChromeImportError(f"Chrome Default profile directory not found: {profile}")
+    return profile
 
 
 def _opaque_hash_id(*parts: str) -> str:
@@ -69,12 +116,16 @@ def discover_profiles(root: str | Path | None = None) -> list[Path]:
 def _snapshot(path: Path):
     if not path.exists():
         raise ChromeImportError(f"Chrome data file not found: {path}")
-    tmp = tempfile.NamedTemporaryFile(
+    with tempfile.NamedTemporaryFile(
         prefix="agent-autofill-chrome-", suffix=".db", delete=False
-    )
-    tmp.close()
-    shutil.copy2(path, tmp.name)
-    return Path(tmp.name)
+    ) as tmp:
+        snapshot = Path(tmp.name)
+    try:
+        shutil.copy2(path, snapshot)
+    except OSError:
+        snapshot.unlink(missing_ok=True)
+        raise
+    return snapshot
 
 
 def _columns(db, table: str) -> set[str]:
@@ -82,10 +133,12 @@ def _columns(db, table: str) -> set[str]:
 
 
 def read_autofill(profile_dir: str | Path) -> list[dict]:
-    data_path = Path(profile_dir) / "Web Data"
+    profile_dir = _require_default_profile(profile_dir)
+    data_path = profile_dir / "Web Data"
     if not data_path.exists():
         return []
     snapshot = _snapshot(data_path)
+    db = None
     try:
         db = sqlite3.connect(snapshot)
         if "autofill" not in {
@@ -105,17 +158,19 @@ def read_autofill(profile_dir: str | Path) -> list[dict]:
         ]
     finally:
         try:
-            db.close()
-        except Exception:
-            pass
-        snapshot.unlink(missing_ok=True)
+            if db is not None:
+                db.close()
+        finally:
+            snapshot.unlink(missing_ok=True)
 
 
 def read_login_metadata(profile_dir: str | Path) -> list[dict]:
-    data_path = Path(profile_dir) / "Login Data"
+    profile_dir = _require_default_profile(profile_dir)
+    data_path = profile_dir / "Login Data"
     if not data_path.exists():
         return []
     snapshot = _snapshot(data_path)
+    db = None
     try:
         db = sqlite3.connect(snapshot)
         tables = {
@@ -140,10 +195,10 @@ def read_login_metadata(profile_dir: str | Path) -> list[dict]:
         ]
     finally:
         try:
-            db.close()
-        except Exception:
-            pass
-        snapshot.unlink(missing_ok=True)
+            if db is not None:
+                db.close()
+        finally:
+            snapshot.unlink(missing_ok=True)
 
 
 def _macos_safe_storage_password() -> str:
@@ -254,7 +309,7 @@ def _read_chrome_passwords(
     rows because they contain a plaintext password.
     """
 
-    profile_path = Path(profile_dir)
+    profile_path = _require_default_profile(profile_dir)
     data_paths = [
         profile_path / "Login Data",
         profile_path / "Login Data For Account",
@@ -299,7 +354,7 @@ def _read_chrome_passwords(
                 try:
                     parsed = urlparse(origin_url)
                     hostname = parsed.hostname
-                    parsed.port
+                    _ = parsed.port
                 except ValueError:
                     continue
                 if parsed.scheme not in {"http", "https"} or not hostname:
@@ -498,9 +553,15 @@ def sync_chrome_password_manager(
 
 
 def import_autofill(profile_dir: str | Path, broker: Broker) -> int:
+    profile_dir = _require_default_profile(profile_dir)
     count = 0
     for item in read_autofill(profile_dir):
-        field_id = "autofill:" + hashlib.sha256(item["name"].encode()).hexdigest()[:20]
+        # Keep the historical identifier stable.  Only hashes that happen to
+        # contain a long digit run need chunking for the broker's financial
+        # number guard.
+        digest = hashlib.sha256(item["name"].encode()).hexdigest()[:20]
+        suffix = digest if not re.search(r"\d{8,}", digest) else _opaque_hash_id(item["name"])
+        field_id = "autofill:" + suffix
         broker.put_profile(
             field_id,
             "chrome-autofill",
@@ -513,6 +574,7 @@ def import_autofill(profile_dir: str | Path, broker: Broker) -> int:
 
 
 def import_login_metadata(profile_dir: str | Path, broker: Broker) -> int:
+    profile_dir = _require_default_profile(profile_dir)
     count = 0
     for item in read_login_metadata(profile_dir):
         key = hashlib.sha256(
@@ -547,8 +609,7 @@ def import_password_csv(csv_path: str | Path, broker: Broker) -> int:
 def cold_start(
     profile_dir: str | Path, broker: Broker, password_csv: str | Path | None = None
 ) -> dict:
-    if not Path(profile_dir).is_dir():
-        raise ChromeImportError(f"Chrome profile directory not found: {profile_dir}")
+    profile_dir = _require_default_profile(profile_dir)
     result = {
         "autofill_fields": import_autofill(profile_dir, broker),
         "login_metadata": import_login_metadata(profile_dir, broker),

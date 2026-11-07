@@ -59,5 +59,5 @@ mypy agent_autofill
 Use synthetic values in tests. Never place real passwords, mailbox tokens,
 OTPs, payment values, or one-time handles in fixtures, docs, logs, or review
 artifacts. See the [operator guide](../docs/agent-autofill.md) for setup and
-the [backend specs](../.trellis/spec/backend/index.md) for implementation
+the repository [agent guidance](../AGENTS.md) for implementation
 contracts.

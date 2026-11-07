@@ -7,9 +7,23 @@ const bridgeStatus = document.getElementById("bridge");
 const status = document.getElementById("status");
 const fillButton = document.getElementById("fill");
 const refreshButton = document.getElementById("refresh");
+const requestsInput = document.getElementById("requests");
+const detail = document.getElementById("request-detail");
+let pendingRequests = [];
 
 let pageState = {tabId: null, origin: null, supported: false};
 let bridgeReady = false;
+let filling = false;
+
+function selectedRequest() {
+  return requestsInput.value === "" ? null : pendingRequests[Number(requestsInput.value)];
+}
+
+function updateFillButton() {
+  const request = selectedRequest();
+  const hasRequest = Boolean(request || (handleInput.value.trim() && agentInput.value.trim()));
+  fillButton.disabled = filling || !bridgeReady || !pageState.supported || !hasRequest;
+}
 
 function setStatus(message, kind = "") {
   status.className = kind ? `status-message ${kind}` : "status-message";
@@ -162,7 +176,7 @@ async function checkBridge() {
       "warn",
     );
   }
-  fillButton.disabled = !bridgeReady || !pageState.supported;
+  updateFillButton();
   return bridgeReady;
 }
 
@@ -189,29 +203,61 @@ async function refreshState() {
   }
 }
 
-function fillLoginForm(username, password) {
-  const user = document.querySelector(
-    'input[autocomplete="username"], input[type="email"], input[name*="user" i], input[id*="user" i]'
-  );
-  const pass = document.querySelector('input[type="password"]');
-  const setValue = (element, value) => {
-    if (!element) return false;
-    const setter = Object.getOwnPropertyDescriptor(
-      HTMLInputElement.prototype,
-      "value",
-    ).set;
-    setter.call(element, value);
-    element.dispatchEvent(new Event("input", {bubbles: true}));
-    element.dispatchEvent(new Event("change", {bubbles: true}));
-    return true;
-  };
-  return {
-    usernameFilled: setValue(user, username),
-    passwordFilled: setValue(pass, password),
-  };
+async function pageCheck(tabId, origin, action = "check", username, password) {
+  const result = await chrome.scripting.executeScript({
+    target: {tabId}, func: loginPage, args: [action, origin, username ?? null, password ?? null],
+  });
+  return {state: result?.[0]?.result?.state, documentId: result?.[0]?.documentId};
 }
 
-agentInput.addEventListener("input", savePreferences);
+async function refreshRequests() {
+  pendingRequests = [];
+  requestsInput.replaceChildren(new Option("Select an approved request", ""));
+  detail.textContent = "";
+  await refreshState();
+  if (!bridgeReady || !pageState.supported) return;
+  try {
+    const {pairingToken} = await chrome.storage.session.get("pairingToken");
+    if (!pairingToken) { detail.textContent = "Pair this browser session, or use a handle manually."; return; }
+    const response = await fetchWithTimeout(`${normalizeBridgeUrl(bridgeInput.value)}/v1/pending`, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({pairing_token: pairingToken, target_origin: pageState.origin}),
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || "Could not load approved requests.");
+    pendingRequests = body.requests || [];
+    pendingRequests.forEach((request, index) => {
+      requestsInput.add(new Option(`${request.label} · ${request.agent_id} · ${request.purpose}`, String(index)));
+    });
+    detail.textContent = pendingRequests.length ? "Choose the account and purpose you approved." : "No current requests for this site. Ask your agent to request extension delivery, then refresh.";
+  } catch (error) { setStatus(recoveryMessage(error, "Refresh requests failed."), "error"); }
+  finally { updateFillButton(); }
+}
+
+document.getElementById("refresh-requests").addEventListener("click", refreshRequests);
+requestsInput.addEventListener("change", () => {
+  const request = pendingRequests[Number(requestsInput.value)];
+  detail.textContent = requestsInput.value !== "" && request
+    ? `${request.target_origin} · ${request.purpose} · one use · expires ${new Date(request.expires_at).toLocaleTimeString()}` : "";
+  updateFillButton();
+});
+document.getElementById("pair").addEventListener("click", async () => {
+  const token = [...crypto.getRandomValues(new Uint8Array(32))].map(x => x.toString(16).padStart(2, "0")).join("");
+  await chrome.storage.session.set({pairingToken: token});
+  document.getElementById("pairing-code").value = token;
+  document.getElementById("pair-command").textContent = `Run agent-autofill pair-browser --agent-id YOUR_AGENT_ID --extension-id ${chrome.runtime.id}, then paste the code into its hidden prompt.`;
+});
+document.getElementById("forget-pairing").addEventListener("click", async () => {
+  await chrome.storage.session.remove("pairingToken");
+  document.getElementById("pairing-code").value = "";
+  pendingRequests = [];
+  requestsInput.replaceChildren(new Option("Browser pairing forgotten", ""));
+  detail.textContent = "";
+  updateFillButton();
+});
+
+agentInput.addEventListener("input", () => { savePreferences(); updateFillButton(); });
+handleInput.addEventListener("input", updateFillButton);
 bridgeInput.addEventListener("change", () => {
   savePreferences();
   void refreshState();
@@ -219,19 +265,28 @@ bridgeInput.addEventListener("change", () => {
 refreshButton.addEventListener("click", () => void refreshState());
 
 fillButton.addEventListener("click", async () => {
-  const handle = handleInput.value;
-  const agentId = agentInput.value.trim();
-  handleInput.value = "";
+  if (filling) return;
+  const selected = selectedRequest();
+  const handle = selected?.handle || handleInput.value;
+  const agentId = selected?.agent_id || agentInput.value.trim();
+  let consumptionStarted = false;
   if (!handle || !agentId) {
-    setStatus("Enter the agent ID and one-time handle.", "warn");
+    setStatus("Choose an approved request, or enter an agent ID and one-time handle under the manual option.", "warn");
     return;
   }
   savePreferences();
+  filling = true;
   fillButton.disabled = true;
   setStatus("Checking the active origin before consuming the handle…");
   try {
     pageState = await activeTabState();
     renderOrigin();
+    if (selected && selected.target_origin !== pageState.origin) {
+      throw new Error("The selected request belongs to another site. Refresh requests. No handle was consumed.");
+    }
+    if (selected && (!Number.isFinite(Date.parse(selected.expires_at)) || Date.parse(selected.expires_at) <= Date.now())) {
+      throw new Error("This request expired. Ask your agent for a new request, then refresh. No fields were filled.");
+    }
     if (!pageState.supported) {
       throw new Error("Open the supported HTTPS page before consuming the handle.");
     }
@@ -239,6 +294,32 @@ fillButton.addEventListener("click", async () => {
       throw new Error("The loopback bridge is unavailable; no handle was consumed.");
     }
     const bridgeUrl = normalizeBridgeUrl(bridgeInput.value);
+    const checkedPage = {...pageState};
+    const preflight = await pageCheck(checkedPage.tabId, checkedPage.origin);
+    if (!preflight.documentId) {
+      throw new Error("The browser could not identify this document. Update Chrome and retry. No handle was consumed.");
+    }
+    if (preflight.state === "username") {
+      if (selected?.username) {
+        const result = await chrome.scripting.executeScript({
+          target: {tabId: checkedPage.tabId, documentIds: [preflight.documentId]},
+          func: loginPage, args: ["username", checkedPage.origin, selected.username, null],
+        });
+        if (result?.[0]?.result?.state !== "username_filled") throw new Error("The page changed. Refresh before trying again.");
+        setStatus("Username filled. Continue on the site, then refresh here for the password step. No handle was consumed.", "ok");
+      } else {
+        setStatus("Enter your username and continue on the site, then try the password step. No handle was consumed.", "warn");
+      }
+      return;
+    }
+    if (preflight.state !== "password") {
+      throw new Error(`Login fields are ${preflight.state || "unavailable"}. Open a single existing-account login form and retry. No handle was consumed.`);
+    }
+    const currentPage = await activeTabState();
+    if (currentPage.tabId !== checkedPage.tabId || currentPage.origin !== checkedPage.origin) {
+      throw new Error("The active page changed. Refresh requests. No handle was consumed.");
+    }
+    consumptionStarted = true;
     const response = await fetchWithTimeout(`${bridgeUrl}/v1/consume`, {
       method: "POST",
       mode: "cors",
@@ -258,16 +339,16 @@ fillButton.addEventListener("click", async () => {
       throw new Error("The bridge response did not contain fill data; request a fresh handle.");
     }
     const result = await chrome.scripting.executeScript({
-      target: {tabId: pageState.tabId},
-      func: fillLoginForm,
-      args: [body.username, body.password],
+      target: {tabId: checkedPage.tabId, documentIds: [preflight.documentId]},
+      func: loginPage,
+      args: ["fill", checkedPage.origin, body.username, body.password],
     });
     const filled = result?.[0]?.result;
     setStatus(
-      filled?.usernameFilled && filled?.passwordFilled
-        ? "Username and password filled. Review the page before submitting."
-        : "Handle consumed, but one or more login fields were not found.",
-      filled?.usernameFilled && filled?.passwordFilled ? "ok" : "warn",
+      filled?.state === "filled"
+        ? "Login filled. Review the page before submitting."
+        : "The page changed after delivery. Request a fresh handoff and retry; nothing was submitted.",
+      filled?.state === "filled" ? "ok" : "warn",
     );
   } catch (error) {
     setStatus(
@@ -275,14 +356,19 @@ fillButton.addEventListener("click", async () => {
       "error",
     );
   } finally {
-    // The handle is transient even when bridge, origin, or field detection
-    // fails. It is never persisted in local storage.
-    handleInput.value = "";
-    fillButton.disabled = !bridgeReady || !pageState.supported;
+    // Keep an unused handle in this popup for recoverable preflight failures only.
+    if (consumptionStarted) {
+      handleInput.value = "";
+      pendingRequests = [];
+      requestsInput.replaceChildren(new Option("Refresh for a new request", ""));
+      detail.textContent = "";
+    }
+    filling = false;
+    updateFillButton();
   }
 });
 
 void (async () => {
   await loadPreferences();
-  await refreshState();
+  await refreshRequests();
 })();

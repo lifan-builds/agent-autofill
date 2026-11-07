@@ -7,9 +7,11 @@ from cryptography.hazmat.primitives import hashes, padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
+from agent_autofill import chrome
 from agent_autofill.chrome import (
     ChromeImportError,
     cold_start,
+    default_profile,
     import_chrome_password_manager,
     preview_chrome_password_manager,
     sync_chrome_password_manager,
@@ -37,6 +39,53 @@ def _profile(tmp_path: Path) -> Path:
     db.commit()
     db.close()
     return profile
+
+
+def test_default_profile_resolver_never_falls_back_to_secondary_profile(tmp_path):
+    root = tmp_path / "Chrome"
+    (root / "Default").mkdir(parents=True)
+    (root / "Profile 1").mkdir()
+    assert default_profile(root) == root / "Default"
+    with pytest.raises(ChromeImportError, match="Default profile"):
+        default_profile(root / "Profile 1")
+
+
+def test_default_profile_resolver_reports_missing_default(tmp_path):
+    with pytest.raises(ChromeImportError, match="Default profile was not found"):
+        default_profile(tmp_path / "Chrome")
+
+
+def test_explicit_numbered_profile_supported_for_cold_start_and_password_sync(tmp_path):
+    profile = tmp_path / "Profile 1"
+    profile.mkdir()
+    db = sqlite3.connect(profile / "Web Data")
+    db.execute("create table autofill (name text, value text, count integer)")
+    db.execute("insert into autofill values ('First name','Grace',2)")
+    db.commit()
+    db.close()
+    encrypted = _encrypt_chrome_password("profile1-password", "safe-key")
+    db = sqlite3.connect(profile / "Login Data")
+    db.execute(
+        "create table logins (origin_url text, action_url text, username_value text, password_value blob, date_last_used integer)"
+    )
+    db.execute(
+        "insert into logins values ('https://work.example.com','https://work.example.com/login','grace',?,0)",
+        (encrypted,),
+    )
+    db.commit()
+    db.close()
+
+    broker = Broker(Store(":memory:", key=b"m" * 32))
+    assert cold_start(profile, broker) == {
+        "autofill_fields": 1,
+        "login_metadata": 1,
+        "passwords": 0,
+    }
+    sync = sync_chrome_password_manager(
+        profile, broker, approved=True, safe_storage_password="safe-key"
+    )
+    assert sync["added"] == 1
+    assert broker.list_credentials()[0]["origin"] == "https://work.example.com"
 
 
 def test_chrome_cold_start_imports_forms_and_only_login_metadata(tmp_path):
@@ -93,6 +142,36 @@ def test_cold_start_allows_profile_without_optional_chrome_databases(tmp_path):
         "login_metadata": 0,
         "passwords": 0,
     }
+
+
+def test_snapshot_removes_partial_copy_on_failure(tmp_path, monkeypatch):
+    source = tmp_path / "source.db"
+    source.write_bytes(b"synthetic-data")
+    monkeypatch.setattr(chrome.tempfile, "tempdir", str(tmp_path))
+
+    def fail_copy(_source, destination):
+        destination.write_bytes(b"partial-synthetic-data")
+        raise OSError("synthetic copy failure")
+
+    monkeypatch.setattr(chrome.shutil, "copy2", fail_copy)
+    with pytest.raises(OSError, match="synthetic copy failure"):
+        chrome._snapshot(source)
+    assert not list(tmp_path.glob("agent-autofill-chrome-*.db"))
+    assert source.read_bytes() == b"synthetic-data"
+
+
+@pytest.mark.parametrize("reader", [chrome.read_autofill, chrome.read_login_metadata])
+def test_snapshot_removed_when_database_cannot_open(tmp_path, monkeypatch, reader):
+    profile = _profile(tmp_path)
+    monkeypatch.setattr(chrome.tempfile, "tempdir", str(tmp_path))
+
+    def fail_connect(_path):
+        raise sqlite3.OperationalError("synthetic open failure")
+
+    monkeypatch.setattr(chrome.sqlite3, "connect", fail_connect)
+    with pytest.raises(sqlite3.OperationalError, match="synthetic open failure"):
+        reader(profile)
+    assert not list(tmp_path.glob("agent-autofill-chrome-*.db"))
 
 
 def _encrypt_chrome_password(password: str, safe_storage_password: str) -> bytes:

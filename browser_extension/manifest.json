@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Agent Autofill Local Fill",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Fill a user-approved one-time Agent Autofill credential handle without submitting the page.",
   "action": {"default_popup": "popup.html"},
   "permissions": ["activeTab", "scripting", "storage"],

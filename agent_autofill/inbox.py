@@ -8,16 +8,17 @@ for troubleshooting.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+import json
+from datetime import UTC, datetime, timedelta
 from html import escape
 from http.server import BaseHTTPRequestHandler, HTTPServer
-import json
 
+from .form_policy import get_form_submission_policy
 from .service import Broker
 
 
 def _grant_counts(grants: list[dict]) -> dict[str, int]:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     result = {"active": 0, "revoked": 0, "expired": 0, "expiring_24h": 0}
     for grant in grants:
         if grant.get("revoked"):
@@ -26,7 +27,7 @@ def _grant_counts(grants: list[dict]) -> dict[str, int]:
         try:
             expires_at = datetime.fromisoformat(str(grant.get("expires_at")))
             if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=timezone.utc)
+                expires_at = expires_at.replace(tzinfo=UTC)
         except (TypeError, ValueError):
             result["expired"] += 1
             continue
@@ -89,45 +90,45 @@ def _attention_items(
     grants: list[dict],
 ) -> list[str]:
     attention: list[str] = []
-    if not sources:
-        attention.append("No local sources are configured. Run quickstart or setup to connect one.")
     for source in source_overview:
         if source["status"] == "needs attention":
             attention.append(f"{source['label']}: {source['detail']}.")
-    if not profile_fields:
-        attention.append("No profile fields are stored. Add one with profile add when needed.")
-    if not credentials:
-        attention.append("No website credentials are stored. Add them only through an approved local flow.")
-    if not financial_records:
-        attention.append("No financial metadata is stored. This is optional for ordinary profile fills.")
-    if not agents:
+    if not any(not agent.get("revoked") for agent in agents):
         attention.append("No agent identity is configured. Create one before pairing a consumer.")
-    revoked_agents = sum(bool(agent.get("revoked")) for agent in agents)
-    if revoked_agents:
-        attention.append(f"{revoked_agents} agent identity(ies) are revoked; review the agent list.")
-    counts = _grant_counts(grants)
-    if counts["revoked"] or counts["expired"]:
-        attention.append(
-            f"Review {counts['revoked']} revoked and {counts['expired']} expired grant(s)."
-        )
-    if counts["expiring_24h"]:
-        attention.append(
-            f"{counts['expiring_24h']} grant(s) expire within 24 hours; renew only if still needed."
-        )
     return attention
 
 
 def build_html(broker: Broker) -> str:
     """Render the metadata-only Agent Inbox page."""
 
-    sources = broker.list_sources()
+    sources = list(broker.sources.values())
     profile_fields = broker.list_profile_fields()
     profile_groups = broker.list_profile_groups()
     credentials = broker.list_credentials()
     financial_records = broker.list_financial_records()
+    record_counts = {
+        "Sources": len(sources),
+        "Profile fields": broker.store.count("profile"),
+        "Context records": broker.store.count("context"),
+        "Credentials": broker.store.count("credential"),
+        "Financial records": broker.store.count("financial"),
+    }
+    from .context_memory import ContextMemory
+
+    context_memory = ContextMemory(broker)
+    context_rows = [
+        {"kind": row["kind"], "revision": row["revision"],
+         "fields": len(row["field_ids"]),
+         "status": "Current evidence" if context_memory._fresh(row) else "Review changed evidence"}
+        for row in context_memory._rows()
+    ]
+    context_counts = {kind: sum(row["kind"] == kind for row in context_rows)
+                      for kind in ("bundle", "document", "preference", "observation")}
+    context_review_count = sum(row["status"] == "Review changed evidence" for row in context_rows)
     agents = broker.list_agents()
     grants = broker.list_grants()
     recent_audit = broker.store.audits()[-50:]
+    submission_policy = get_form_submission_policy(broker)
     source_overview = _source_overview(broker, sources)
     grant_counts = _grant_counts(grants)
     attention = _attention_items(
@@ -140,14 +141,18 @@ def build_html(broker: Broker) -> str:
         grants,
     )
     summary = {
+        "record_counts": record_counts,
+        "metadata_preview_limit": 100,
         "sources": sources,
         "profile_fields": profile_fields,
         "profile_groups": profile_groups,
+        "context_counts": context_counts,
         "credentials": credentials,
         "financial_records": financial_records,
         "agents": agents,
         "grants": grants,
         "recent_audit": recent_audit,
+        "form_submission": submission_policy.to_dict(),
     }
 
     def cell(value: object) -> str:
@@ -156,7 +161,14 @@ def build_html(broker: Broker) -> str:
         return escape(str(value))
 
     def table(title: str, rows: list[dict], columns: tuple[str, ...]) -> str:
-        heading = f"<h3>{escape(title)} <small>{len(rows)}</small></h3>"
+        total = record_counts.get(title, len(rows))
+        heading = f"<h3>{escape(title)} <small>{total}</small></h3>"
+        if total > len(rows):
+            heading += (
+                f'<p class="muted">Showing {len(rows)} of {total}. '
+                'Use the CLI list command with <code>--offset 100</code> '
+                'to continue; this page is a preview.</p>'
+            )
         if not rows:
             return f"<section>{heading}<p class=empty>None configured.</p></section>"
         headers = "".join(f"<th>{escape(column)}</th>" for column in columns)
@@ -199,7 +211,7 @@ def build_html(broker: Broker) -> str:
 
     source_lines = [f"{item['label']} — {item['status']}" for item in source_overview]
     profile_lines = [
-        f"{item.get('group_id', 'Profile group')} · {item.get('field_count', 0)} fields"
+        f"{', '.join(item.get('field_types', [])[:2]) or 'Profile group'} · {item.get('field_count', 0)} fields"
         for item in profile_groups
     ]
     field_lines = [
@@ -225,10 +237,10 @@ def build_html(broker: Broker) -> str:
             overview_card(
                 "Profile groups", "✦", len(profile_groups), "Saved identity and address groups", "violet", profile_lines
             ),
-            overview_card("Profile fields", "⌁", len(profile_fields), "Saved profile metadata", "blue", field_lines),
-            overview_card("Credentials", "▣", len(credentials), "Website credential metadata", "amber", credential_lines),
+            overview_card("Profile fields", "⌁", record_counts["Profile fields"], "Saved profile metadata", "blue", field_lines),
+            overview_card("Credentials", "▣", record_counts["Credentials"], "Website credential metadata", "amber", credential_lines),
             overview_card(
-                "Financial metadata", "◇", len(financial_records), "Payment and financial record metadata", "rose", financial_lines
+                "Financial metadata", "◇", record_counts["Financial records"], "Payment and financial record metadata", "rose", financial_lines
             ),
             overview_card("Agents", "◎", len(agents), "Configured local consumers", "blue", agent_lines),
             overview_card(
@@ -259,7 +271,7 @@ def build_html(broker: Broker) -> str:
         ".trust-pill{display:inline-flex;align-items:center;gap:.45rem;border:1px solid #b7c0ff;background:#fff;padding:.55rem .75rem;"
         "border-radius:999px;color:#3e51c6;font-size:.78rem;font-weight:750;white-space:nowrap;box-shadow:0 5px 18px #dfe4ff}"
         ".spark{font-size:1rem}.hero{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(230px,1fr);gap:1rem;margin:1.6rem 0 2rem}"
-        ".hero-panel,.section-panel,.overview-card,details{background:rgba(255,255,255,.9);border:1px solid rgba(215,221,235,.85);border-radius:18px;"
+        ".hero-panel,.hero-stat,.section-panel,.overview-card,details{background:rgba(255,255,255,.9);border:1px solid rgba(215,221,235,.85);border-radius:18px;"
         "box-shadow:0 12px 35px rgba(54,67,105,.08)}.hero-panel{padding:1.35rem 1.45rem;position:relative;overflow:hidden}"
         ".hero-panel:after{content:\"✦\";position:absolute;right:1.5rem;top:-.8rem;color:#dbe0ff;font-size:7rem;line-height:1}"
         ".hero-panel h2{font-size:1.5rem;margin-bottom:.35rem}.hero-panel p{max-width:38rem;color:var(--muted);margin-bottom:1rem}"
@@ -274,23 +286,36 @@ def build_html(broker: Broker) -> str:
         ".card-icon{display:grid;place-items:center;width:2rem;height:2rem;border-radius:10px;font-size:1.1rem;font-weight:800}.card-count{display:block;font-size:2rem;letter-spacing:-.06em;line-height:1}.overview-card p{margin:.3rem 0 0;color:var(--muted);font-size:.8rem}.overview-card ul{margin:.7rem 0 0;padding-left:1rem}.compact{font-size:.76rem;color:#4f5b70}.compact li{margin:.15rem 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tone-blue .card-icon{background:var(--blue-soft);color:var(--blue)}.tone-mint .card-icon{background:var(--mint-soft);color:var(--mint)}.tone-violet .card-icon{background:var(--violet-soft);color:var(--violet)}.tone-amber .card-icon{background:var(--amber-soft);color:var(--amber)}.tone-rose .card-icon{background:var(--rose-soft);color:var(--rose)}"
         ".section-panel{padding:1.15rem 1.25rem;margin-top:1rem}.attention{border-left:4px solid #d38a16;background:linear-gradient(105deg,#fffaf0,#fff)}.attention ul{margin:.25rem 0 0;padding-left:1.25rem}.attention li{margin:.35rem 0;color:#5f4a22}.attention .empty{margin:0}.boundary{border-left:4px solid var(--blue);background:linear-gradient(105deg,#f7f8ff,#fff)}"
         ".delivery-options{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:.8rem}.delivery-option{border:1px solid var(--line);border-radius:14px;padding:1rem;background:#fbfcff;position:relative}.delivery-option:before{content:\"\";display:block;width:2.2rem;height:3px;border-radius:3px;background:var(--blue);margin-bottom:.75rem}.delivery-option.extension:before{background:var(--mint)}.delivery-option strong{font-size:.95rem}.delivery-option p{margin:.35rem 0 0;color:var(--muted);font-size:.82rem}.delivery-option .tag{margin-top:.75rem}"
+        ".matching-flow{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.75rem}.matching-step{border:1px solid var(--line);border-radius:14px;padding:.9rem;background:#fbfcff}.matching-step strong{display:block;font-size:.86rem}.matching-step p{margin:.3rem 0 0;color:var(--muted);font-size:.78rem}.matching-step .tag{margin-top:.65rem}"
         ".steps{display:grid;grid-template-columns:repeat(3,1fr);gap:.75rem;margin-top:1rem}.step{display:flex;gap:.7rem;align-items:flex-start}.step-number{flex:none;display:grid;place-items:center;width:1.55rem;height:1.55rem;border-radius:50%;background:var(--blue-soft);color:var(--blue);font-size:.75rem;font-weight:800}.step strong{display:block;font-size:.82rem}.step span{display:block;color:var(--muted);font-size:.76rem;margin-top:.15rem}.advanced-title{margin-top:2rem}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:1rem}.scroll{overflow:auto}table{border-collapse:collapse;width:100%;font-size:.82rem}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(--line);padding:.5rem}th{color:var(--muted);font-weight:700;white-space:nowrap}td{max-width:280px;word-break:break-word}details{margin-top:1rem;padding:1rem 1.15rem}summary{cursor:pointer;font-weight:750;list-style:none}summary::-webkit-details-marker{display:none}summary:before{content:\"＋\";display:inline-block;margin-right:.45rem;color:var(--blue)}details[open] summary:before{content:\"−\"}pre{white-space:pre-wrap;overflow:auto;max-height:26rem;margin:.8rem 0 0;padding:.85rem;background:#f6f8fc;border-radius:10px;color:#4d5870;font-size:.75rem}"
-        "@media(max-width:700px){body{padding:1.5rem .85rem 3rem}.page-header{display:block}.trust-pill{margin-top:1rem}.hero{grid-template-columns:1fr}.steps{grid-template-columns:1fr}.grid{grid-template-columns:1fr}}"
+        "nav{display:flex;flex-wrap:wrap;gap:.65rem;margin:1.25rem 0}a{color:#3e51c6;text-underline-offset:3px}a:focus-visible,summary:focus-visible{outline:3px solid #5367e8;outline-offset:4px}code{overflow-wrap:anywhere}.section-panel{margin-bottom:1rem}.delivery-options{grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr))}"
+        "@media(max-width:700px){.hero-panel:after{display:none}body{padding:1.5rem .85rem 3rem}.page-header{display:block}.trust-pill{margin-top:1rem}.hero{grid-template-columns:1fr}.steps{grid-template-columns:1fr}.grid{grid-template-columns:1fr}}"
         "</style></head><body>"
         '<header class="page-header"><div><div class="eyebrow">✦ Private local workspace</div><h1>Agent Inbox</h1><p class="subtitle">A read-only dashboard for what is stored and what needs attention. Agent workflows stay in the CLI.</p></div><div class="trust-pill"><span class="spark">✧</span> Values stay hidden in this view</div></header>'
         '<div class="hero"><section class="hero-panel"><div class="eyebrow">A calmer way to review autofill</div><h2>Everything important, at a glance.</h2><p>Metadata is organized into small, reviewable cards. Passwords, tokens, card numbers, and one-time codes are intentionally never rendered here. Use the CLI when an agent needs information.</p><div class="hero-tags"><span class="tag green">● Loopback only</span><span class="tag">▣ Encrypted vault</span><span class="tag purple">✦ CLI is the agent surface</span></div></section>'
-        f'<section class="hero-stat"><span class="stat-label">Ready to review</span><strong>{len(sources) + len(profile_fields) + len(credentials) + len(financial_records)}</strong><p>safe metadata records across your local vault</p></section></div>'
+        f'<section class="hero-stat"><span class="stat-label">Saved records</span><strong>{sum(record_counts.values())}</strong><p>records across your local vault</p></section></div>'
+        f'<section class="section-panel attention"><h2>Needs attention</h2>{list_items(attention)}</section>'
+        '<nav aria-label="Dashboard sections"><a href="#inventory">Stored data</a> · <a href="#next-task">Next task</a> · <a href="#access">Agent access</a> · <a href="/">Refresh dashboard</a></nav>'
+        '<div id="inventory"></div>'
         '<div class="section-kicker"><h2>What is stored</h2><p>Counts and labels only · no secret values</p></div>'
         f'<div class="cards">{cards}</div>'
-        f'<section class="section-panel attention"><h2>Needs attention</h2>{list_items(attention)}</section>'
+        '<details><summary>How record matching works</summary><section class="section-panel"><div class="section-kicker"><h2>LLM-guided record matching</h2><p>Rank · clarify · remember</p></div><p class="muted">The CLI gives the acting agent a value-free candidate table. It tries the best record, asks one focused question only when meaning is unclear, and remembers choices you explicitly approve for the next form.</p><div class="matching-flow"><div class="matching-step"><strong>1 · Rank</strong><p>Metadata and learned mappings put the strongest record first.</p><span class="tag purple">Value-free table</span></div><div class="matching-step"><strong>2 · Clarify</strong><p>The agent uses page context, then asks the returned question if needed.</p><span class="tag">Human when unclear</span></div><div class="matching-step"><strong>3 · Remember</strong><p>Confirmed choices store only IDs, scope, and outcome.</p><span class="tag green">Improves next time</span></div></div></section></details>'
+        '<section class="section-panel" id="context-memory"><h2>Information with context</h2>'
+        f'<p>Groups: <strong>{context_counts["bundle"]}</strong> · Supporting notes: <strong>{context_counts["document"]}</strong> · Confirmed preferences: <strong>{context_counts["preference"]}</strong> · Task observations: <strong>{context_counts["observation"]}</strong></p>'
+        f'<p>Context records needing review after changed evidence: <strong>{context_review_count}</strong>.</p>'
+        '<p>Your agent can organize supporting notes automatically. Changing facts, identity relationships or defaults needs your confirmation. A one-time choice stays one-time.</p>'
+        '<p>Ask your agent: “Show the address groups relevant to this delivery.” It checks access before showing context and asks when meaning is unclear. Changed evidence retires old notes until reviewed. Note bodies stay off this metadata dashboard.</p></section>'
+        '<section class="section-panel" id="next-task"><h2>Choose your next task</h2><p>Use a saved address: <code>agent-autofill doctor --task profile</code>. Fill a login: <code>agent-autofill doctor --task login</code>. Check email: <code>agent-autofill doctor --task email</code>.</p><p>Start with one field or account. Mail, Messages, and financial records are optional. Try <code>agent-autofill demo</code> for a synthetic read, handoff, and revocation walkthrough.</p></section>'
+        '<section class="section-panel" id="access"><h2>Who can access what?</h2><p><strong>trusted-local-read</strong> means ongoing read access until revoked. It is broader than approval for one task. <strong>grant-required</strong> means only operations covered by a matching active grant. Review each agent and its grants below.</p><p>Stop future reads with <code>agent-autofill revoke-agent AGENT_ID</code>. This does not log out website sessions or recall information already delivered. Expired grants and revoked agents are history, not setup failures.</p></section>'
         '<section class="section-panel"><div class="section-kicker"><h2>Agent workflow</h2><p>This dashboard explains policy; the CLI performs the information work.</p></div><div class="delivery-options">'
         '<div class="delivery-option"><strong>Direct CLI delivery</strong><p>The authenticated acting agent requests approved fields through the CLI/MCP path. It owns navigation, submission, and any follow-up verification.</p><span class="tag">Agent sees approved fields</span></div>'
         '<div class="delivery-option extension"><strong>Optional bridge delivery</strong><p>The CLI can request a one-time, origin-bound handle for the local extension bridge. The password stays out of agent input.</p><span class="tag green">Transport helper only</span></div>'
         '</div><div class="steps"><div class="step"><span class="step-number">1</span><div><strong>Review here</strong><span>Check stored metadata and attention items.</span></div></div><div class="step"><span class="step-number">2</span><div><strong>Use the CLI</strong><span>Match, grant, and request the exact information.</span></div></div><div class="step"><span class="step-number">3</span><div><strong>Act elsewhere</strong><span>The acting agent decides what happens next.</span></div></div></div></section>'
-        '<section class="section-panel boundary"><h2>Consent and verification boundary</h2><p class="muted">The exact-origin and purpose grant preview is the consent gate. The extension handle is a scoped, one-time verification handoff, not a reusable link or proof that the site accepted anything. Agent Autofill does not navigate, submit, or verify the result after delivery; review the page and submit it yourself.</p></section>'
+        f'<section class="section-panel boundary"><h2>Consent and verification boundary</h2><p class="muted">The exact-origin and purpose grant preview is the consent gate. The extension handle is a scoped, one-time verification handoff, not a reusable link or proof that the site accepted anything. The broker does not navigate, submit, or verify the result after delivery; the acting agent owns browser submission and must obtain a fresh confirmation immediately before clicking. Financial information always requires it. Current policy: <strong>{escape(submission_policy.confirmation)}</strong>.</p></section>'
         '<h2 class="advanced-title">Advanced details</h2>'
         "<details><summary>Metadata tables</summary><div class=grid>"
         + table("Sources", sources, ("source_id", "kind", "label"))
+        + table("Context records", context_rows[:100], ("kind", "revision", "fields", "status"))
         + table("Agents", agents, ("agent_id", "created_at", "access_mode", "revoked"))
         + table(
             "Grants",
@@ -340,6 +365,7 @@ def build_html(broker: Broker) -> str:
         "<details><summary>Machine-readable metadata</summary><pre>"
         + raw
         + "</pre></details>"
+        "</body></html>"
     )
 
 
@@ -355,6 +381,7 @@ def serve(broker: Broker, host: str = "127.0.0.1", port: int = 8765) -> None:
             payload = build_html(broker).encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)

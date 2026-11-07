@@ -8,22 +8,21 @@ existing OS credential-store vault.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import os
-from pathlib import Path
 import re
+from dataclasses import dataclass
+from pathlib import Path
 
 from .service import Broker
 from .storage import KeyringProvider, Store
-
 
 _SERVICE_NAME_RE = re.compile(r"^[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*$")
 
 
 def normalize_service_name(value: str) -> str:
     if not isinstance(value, str):
-        raise ValueError("service name must be a string")
+        raise ValueError("service name must be a string")  # noqa: TRY004 - consistent public validation error
     name = value.strip().lower()
     if not name or len(name) > 96 or not _SERVICE_NAME_RE.fullmatch(name):
         raise ValueError("service name must use lowercase letters, digits, dots, dashes, or underscores")

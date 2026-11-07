@@ -1,12 +1,16 @@
-from datetime import datetime, timedelta, timezone
+import sqlite3
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
+
 import pytest
+
+from agent_autofill.models import EmailMessage, TextMessage
 from agent_autofill.service import (
     AuthorizationError,
     Broker,
     BrokerError,
     CredentialUseError,
 )
-from agent_autofill.models import EmailMessage, TextMessage
 from agent_autofill.storage import Store
 
 
@@ -28,12 +32,12 @@ def setup():
             "no-reply@example.com",
             "Login code for example.com",
             "Your code is 123456",
-            datetime.now(timezone.utc).isoformat(),
+            datetime.now(UTC).isoformat(),
         )
     ]
     b.texts = [
         TextMessage(
-            "t1", "chat1", "+1", "hello", datetime.now(timezone.utc).isoformat()
+            "t1", "chat1", "+1", "hello", datetime.now(UTC).isoformat()
         )
     ]
     return b
@@ -61,6 +65,122 @@ def test_email_and_message_are_scoped():
     assert len(b.search_messages("codex", "chat1", "hello")) == 1
     with pytest.raises(AuthorizationError):
         b.search_messages("other", "chat1", "hello")
+
+
+def test_trusted_local_agent_reads_arbitrary_configured_mailbox_messages():
+    b = Broker(Store(":memory:", key=b"l" * 32))
+    b.add_source("mail", "email", "Owner")
+    b.email["mail"] = [
+        EmailMessage(
+            "receipt",
+            "mail",
+            "billing@unrelated.example",
+            "Your receipt",
+            "Order details are in this message.",
+            datetime.now(UTC).isoformat(),
+        )
+    ]
+    b.create_agent("service:reader")
+    b.enable_trusted_local("service:reader")
+
+    result = b.search_email("service:reader", "mail", "receipt")
+    assert result[0]["message_id"] == "receipt"
+    assert b.get_email_message("service:reader", "mail", "receipt")["body"]
+
+
+def test_trusted_local_otp_can_use_mailbox_read_policy_without_origin_matching():
+    b = Broker(Store(":memory:", key=b"m" * 32))
+    b.add_source("mail", "email", "Owner")
+    b.email["mail"] = [
+        EmailMessage(
+            "code",
+            "mail",
+            "noreply@unrelated.example",
+            "Sign-in code",
+            "Your sign-in code is 654321",
+            datetime.now(UTC).isoformat(),
+        )
+    ]
+    b.create_agent("service:reader")
+    b.enable_trusted_local("service:reader")
+
+    result = b.request_auth_code(
+        "service:reader",
+        "mail",
+        origin_policy="mailbox-read",
+    )
+
+    assert result["code"] == "654321"
+    assert result["provenance"]["message_id"] == "code"
+    audit_text = str(b.store.audits())
+    assert "654321" not in audit_text
+    assert "Sign-in code" not in audit_text
+    assert "noreply@unrelated.example" not in audit_text
+
+
+def test_otp_rejects_removed_strict_origin_policy():
+    b = setup()
+    b.grant("codex", "email.otp", "mail1", "example.com", "login")
+    with pytest.raises(BrokerError, match="mailbox-read"):
+        b.request_auth_code(
+            "codex", "mail1", "example.com", "login", origin_policy="strict"
+        )
+
+
+def test_mailbox_read_otp_keeps_newest_ambiguity_freshness_and_one_time_guards():
+    b = Broker(Store(":memory:", key=b"n" * 32))
+    b.add_source("mail", "email", "Owner")
+    b.create_agent("service:reader")
+    b.enable_trusted_local("service:reader")
+    now = datetime.now(UTC)
+    b.email["mail"] = [
+        EmailMessage(
+            "old",
+            "mail",
+            "noreply@unrelated.example",
+            "Sign-in code",
+            "Your code is 111111",
+            (now - timedelta(seconds=301)).isoformat(),
+        ),
+        EmailMessage(
+            "new",
+            "mail",
+            "noreply@unrelated.example",
+            "Sign-in code",
+            "Your code is 222222",
+            now.isoformat(),
+        ),
+    ]
+    result = b.request_auth_code(
+        "service:reader", "mail", max_age_seconds=300, origin_policy="mailbox-read"
+    )
+    assert result["code"] == "222222"
+    with pytest.raises(BrokerError, match="already consumed"):
+        b.request_auth_code(
+            "service:reader", "mail", max_age_seconds=300, origin_policy="mailbox-read"
+        )
+
+    b.email["mail"] = [
+        EmailMessage(
+            "ambiguous-a", "mail", "sender", "Code", "Your code is 333333", now.isoformat()
+        ),
+        EmailMessage(
+            "ambiguous-b", "mail", "sender", "Code", "Your code is 444444", now.isoformat()
+        ),
+    ]
+    with pytest.raises(BrokerError, match="unambiguous"):
+        b.request_auth_code(
+            "service:reader", "mail", max_age_seconds=300, origin_policy="mailbox-read"
+        )
+
+
+def test_otp_consumption_is_global_to_the_configured_mailbox_message():
+    b = setup()
+    b.grant("first", "email.otp", "mail1", "example.com", "login")
+    b.grant("second", "email.otp", "mail1", "example.com", "login")
+    b.request_auth_code("first", "mail1", "example.com", "login")
+    with pytest.raises(BrokerError, match="already consumed"):
+        b.request_auth_code("second", "mail1", "example.com", "login")
 
 
 def test_email_recipient_resolution_is_exact_and_source_ids_stay_internal():
@@ -123,6 +243,19 @@ def test_email_recipient_resolution_rejects_duplicate_addresses():
         b.resolve_email_account("same@example.test")
 
 
+def test_email_recipient_resolution_does_not_treat_display_label_as_address():
+    b = Broker(Store(":memory:", key=b"l" * 32))
+    b.add_source("mail", "email", "owner@example.test")
+    b.store.put(
+        "connection",
+        "mail",
+        {"source_id": "mail", "kind": "imap", "username": "actual@example.test"},
+    )
+
+    assert b.match_email_sources("owner@example.test") == []
+    assert b.match_email_sources("actual@example.test")[0]["source_id"] == "mail"
+
+
 def test_request_auth_code_for_recipient_keeps_scope_and_resolves_source():
     b = Broker(Store(":memory:", key=b"o" * 32))
     b.add_source("opaque-mailbox", "email", "Owner")
@@ -138,7 +271,7 @@ def test_request_auth_code_for_recipient_keeps_scope_and_resolves_source():
             "no-reply@auth.openai.com",
             "OpenAI login",
             "https://auth.openai.com code 123456",
-            datetime.now(timezone.utc).isoformat(),
+            datetime.now(UTC).isoformat(),
         )
     ]
     b.grant("service:cpa-phoenix", "email.otp", "opaque-mailbox", "https://auth.openai.com", "cpa-phoenix-revive")
@@ -152,6 +285,40 @@ def test_request_auth_code_for_recipient_keeps_scope_and_resolves_source():
     )
     assert result["code"] == "123456"
     assert result["provenance"]["account_id"] == "opaque-mailbox"
+
+
+@pytest.mark.parametrize("sender_host", ["tm.openai.com", "tm1.openai.com"])
+def test_otp_accepts_provider_sender_sibling_subdomain(sender_host):
+    b = Broker(Store(":memory:", key=b"t" * 32))
+    b.add_source("opaque-mailbox", "email", "Owner")
+    b.store.put(
+        "connection",
+        "opaque-mailbox",
+        {"source_id": "opaque-mailbox", "kind": "imap", "username": "owner@example.test"},
+    )
+    b.email["opaque-mailbox"] = [
+        EmailMessage(
+            "openai-login",
+            "opaque-mailbox",
+            f"ChatGPT <noreply@{sender_host}>",
+            "Your temporary ChatGPT login code",
+            "Your temporary ChatGPT login code is 123456. https://cdn.openai.com/template.png",
+            datetime.now(UTC).isoformat(),
+        )
+    ]
+    b.grant(
+        "service:cpa-phoenix",
+        "email.otp",
+        "opaque-mailbox",
+        "https://auth.openai.com",
+        "cpa-phoenix-revive",
+    )
+    assert b.request_auth_code(
+        "service:cpa-phoenix",
+        "opaque-mailbox",
+        "https://auth.openai.com",
+        "cpa-phoenix-revive",
+    )["code"] == "123456"
 
 
 def test_request_verification_link_for_recipient_is_scoped_one_time_and_redacted():
@@ -175,7 +342,7 @@ def test_request_verification_link_for_recipient_is_scoped_one_time_and_redacted
             "no-reply@auth.example.test",
             "Verify your account",
             body,
-            datetime.now(timezone.utc).isoformat(),
+            datetime.now(UTC).isoformat(),
         )
     ]
     b.grant(
@@ -215,7 +382,7 @@ def test_request_verification_link_refuses_wrong_origin_ambiguity_and_expiry():
         "mail",
         {"source_id": "mail", "kind": "imap", "username": "owner@example.test"},
     )
-    received = datetime.now(timezone.utc).isoformat()
+    received = datetime.now(UTC).isoformat()
     b.email["mail"] = [
         EmailMessage(
             "verification-2",
@@ -262,7 +429,7 @@ def test_verification_link_does_not_reuse_an_otp_grant():
             "no-reply@auth.example.test",
             "Verify",
             "https://auth.example.test/verify?token=synthetic",
-            datetime.now(timezone.utc).isoformat(),
+            datetime.now(UTC).isoformat(),
         )
     ]
     b.grant("codex", "email.otp", "mail", "auth.example.test", "verify")
@@ -320,21 +487,97 @@ def test_otp_is_separate_and_not_logged():
     assert "123456" not in str(rows)
 
 
-def test_otp_ambiguity_rejected():
+def test_otp_prefers_newest_message():
     b = setup()
     b.email["mail1"].append(
         EmailMessage(
             "m2",
             "mail1",
-            "x",
-            "x",
-            "code 654321",
-            datetime.now(timezone.utc).isoformat(),
+            "no-reply@example.com",
+            "Login code for example.com",
+            "Your code is 654321",
+            datetime.now(UTC).isoformat(),
         )
     )
     b.grant("codex", "email.otp", "mail1", "example.com", "login")
-    with pytest.raises(BrokerError):
+    assert b.request_auth_code("codex", "mail1", "example.com", "login")["code"] == "654321"
+
+
+def test_otp_rejects_multiple_codes_in_newest_message():
+    b = setup()
+    b.email["mail1"] = [
+        EmailMessage(
+            "m1",
+            "mail1",
+            "no-reply@example.com",
+            "Login",
+            "Your code is 123456 and your code is 654321",
+            datetime.now(UTC).isoformat(),
+        )
+    ]
+    b.grant("codex", "email.otp", "mail1", "example.com", "login")
+    with pytest.raises(BrokerError, match="unambiguous"):
         b.request_auth_code("codex", "mail1", "example.com", "login")
+
+
+def test_otp_mailbox_read_uses_newest_message_regardless_of_domain():
+    b = setup()
+    b.email["mail1"].append(
+        EmailMessage("other", "mail1", "noreply@other.test", "Login",
+                     "Your code is 654321", datetime.now(UTC).isoformat())
+    )
+    b.grant("codex", "email.otp", "mail1", "example.com", "login")
+    assert b.request_auth_code("codex", "mail1", "example.com", "login", origin_policy="mailbox-read")["code"] == "654321"
+
+
+def test_otp_same_timestamp_messages_are_ambiguous():
+    b = setup()
+    b.email["mail1"].append(
+        EmailMessage("m2", "mail1", "noreply@example.com", "Login",
+                     "Your code is 654321", b.email["mail1"][0].received_at)
+    )
+    b.grant("codex", "email.otp", "mail1", "example.com", "login")
+    with pytest.raises(BrokerError, match="unambiguous"):
+        b.request_auth_code("codex", "mail1", "example.com", "login")
+
+
+def test_otp_consumed_newest_message_does_not_fall_back():
+    b = setup()
+    b.email["mail1"].append(
+        EmailMessage("m2", "mail1", "noreply@example.com", "Login",
+                     "Your code is 654321", datetime.now(UTC).isoformat())
+    )
+    b.grant("codex", "email.otp", "mail1", "example.com", "login")
+    assert b.request_auth_code("codex", "mail1", "example.com", "login")["code"] == "654321"
+    with pytest.raises(BrokerError, match="already consumed"):
+        b.request_auth_code("codex", "mail1", "example.com", "login")
+
+
+def test_otp_mailbox_read_does_not_require_sender_domain_match():
+    b = setup()
+    b.email["mail1"] = [
+        EmailMessage("m1", "mail1", "noreply@evil.co.uk", "Login",
+                     "Your code is 654321", datetime.now(UTC).isoformat())
+    ]
+    b.grant("codex", "email.otp", "mail1", "example.co.uk", "login")
+    assert b.request_auth_code("codex", "mail1", "example.co.uk", "login", origin_policy="mailbox-read")["code"] == "654321"
+
+
+def test_otp_prefers_labeled_code_over_unrelated_numbers():
+    b = setup()
+    b.email["mail1"] = [
+        EmailMessage(
+            "labeled",
+            "mail1",
+            "no-reply@example.com",
+            "Your verification code",
+            "Reference 20261011, message 123456789. Your verification code is 654321.\n"
+            "Support phone 5555555555.",
+            datetime.now(UTC).isoformat(),
+        )
+    ]
+    b.grant("codex", "email.otp", "mail1", "https://example.com", "login")
+    assert b.request_auth_code("codex", "mail1", "https://example.com", "login")["code"] == "654321"
 
 
 def test_otp_is_one_time_and_agent_revocation_is_immediate():
@@ -360,7 +603,7 @@ def test_otp_consumption_is_shared_across_broker_instances(tmp_path):
         "no-reply@example.com",
         "Login code for example.com",
         "Your code is 123456",
-        datetime.now(timezone.utc).isoformat(),
+        datetime.now(UTC).isoformat(),
     )
     for broker in (first, second):
         broker.add_source("mail1", "email", "Personal")
@@ -373,11 +616,11 @@ def test_otp_consumption_is_shared_across_broker_instances(tmp_path):
         second.request_auth_code("codex", "mail1", "example.com", "login")
 
 
-def test_otp_requires_target_origin_binding():
+def test_otp_does_not_require_target_origin_binding():
     b = setup()
-    b.grant("codex", "email.otp", "mail1", "evil.example", "login")
-    with pytest.raises(BrokerError):
-        b.request_auth_code("codex", "mail1", "evil.example", "login")
+    b.grant("codex", "email.otp", "mail1", None, None)
+    result = b.request_auth_code("codex", "mail1", origin_policy="mailbox-read")
+    assert result["code"] == "123456"
 
 
 def test_audit_storage_does_not_expose_search_terms():
@@ -424,6 +667,34 @@ def test_credential_handle_origin_is_checked_before_consumption():
         out["handle"], "codex", "https://example.com/checkout"
     )
     assert consumed["password"] == "secret"
+
+
+def test_credential_handle_is_consumed_once_under_concurrent_readers(tmp_path):
+    path = tmp_path / "credential-handle.sqlite"
+    key = b"h" * 32
+    initial = Broker(Store(path, key=key))
+    initial.put_credential(
+        "c1", "Example", "https://example.com/login", "ada", "secret"
+    )
+    initial.grant("codex", "credential.use", "c1", "https://example.com", "form")
+    handle = initial.request_credential_use("codex", "c1", "https://example.com", "form")
+    initial.store.db.close()
+
+    def consume():
+        broker = Broker(Store(path, key=key))
+        try:
+            return broker.consume_credential_handle(handle["handle"], "codex")
+        except CredentialUseError as exc:
+            return str(exc)
+        finally:
+            broker.store.db.close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: consume(), range(2)))
+
+    assert sum(isinstance(result, dict) for result in results) == 1
+    assert sum(isinstance(result, str) for result in results) == 1
+    assert any("already consumed" in result for result in results if isinstance(result, str))
 
 
 def test_unified_credential_direct_returns_only_selected_fields_and_provenance():
@@ -595,6 +866,257 @@ def test_profile_groups_are_metadata_only_and_local_profiles_are_fallback_groups
     assert "Secretville" not in str(groups)
 
 
+def test_form_matching_normalizes_required_markers_and_reports_safe_gaps():
+    b = Broker(Store(":memory:", key=b"m" * 32))
+    b.put_profile("email", "contact", "Email address", "ada@example.test")
+    b.put_profile("first_name", "identity", "First name", "Ada")
+    result = b.match_form_fields(
+        [
+            {"field_id": "email-input", "label": "Email ✱", "required": True},
+            {"field_id": "code", "label": "Verification code ✱", "required": True},
+            {"field_id": "username", "label": "Username ✱", "required": True},
+            {"field_id": "destination", "label": "Destination city ✱", "required": True},
+            {"field_id": "company", "label": "Current company ✱", "required": True},
+            {"field_id": "overlay", "label": "Email", "obscured": True},
+            {"field_id": "invalid", "label": "Phone", "validation_error": True},
+        ]
+    )
+    assert result[0]["status"] == "matched"
+    assert result[0]["normalized_label"] == "email"
+    assert result[0]["confidence"] == "high"
+    assert result[0]["llm_guidance"]["action"] == "use_top_candidate"
+    assert result[0]["candidate_rows"] == result[0]["candidates"]
+    assert result[1]["status"] == "transient"
+    assert result[2]["status"] == "credential"
+    assert result[3]["status"] == "task_specific"
+    assert result[4]["status"] == "missing"
+    assert result[5]["status"] == "obstructed"
+    assert result[6]["status"] == "validation_error"
+    for row in result:
+        assert "candidate_rows" in row
+        assert "confidence" in row
+        assert "llm_guidance" in row
+        if row["status"] != "missing":
+            assert row["question"] is None
+    assert "ada@example.test" not in str(result)
+
+
+def test_llm_guidance_asks_once_for_a_missing_record_without_values():
+    b = Broker(Store(":memory:", key=b"q" * 32))
+    result = b.match_form_fields(
+        [{"field_id": "company", "label": "Current company", "required": True}]
+    )[0]
+
+    assert result["status"] == "missing"
+    assert result["confidence"] == "none"
+    assert result["question"] == (
+        'What should I use for "Current company"? You can save it for next time.'
+    )
+    assert result["llm_guidance"]["action"] == "ask_for_missing_value"
+    assert result["candidate_rows"] == []
+    assert "value" not in result
+
+
+def test_form_matching_uses_chrome_field_types_and_separates_consent():
+    b = Broker(Store(":memory:", key=b"c" * 32))
+    chrome = {
+        "source": "chrome-structured-address",
+        "source_profile_id": "chrome-profile",
+        "source_guid_hash": "group-a",
+    }
+    b.put_profile("email_a", "chrome-address", "Chrome email", "a@example.test", provenance={**chrome, "field_type": "email"})
+    b.put_profile("email_b", "chrome-address", "Chrome email", "b@example.test", provenance={**chrome, "source_guid_hash": "group-b", "field_type": "email"})
+    b.put_profile("first", "chrome-address", "Chrome first_name", "Ada", provenance={**chrome, "field_type": "first_name"})
+    b.put_profile("last", "chrome-address", "Chrome last_name", "Lovelace", provenance={**chrome, "field_type": "last_name"})
+    b.put_profile("country", "chrome-address", "Chrome country", "US", provenance={**chrome, "field_type": "country"})
+
+    result = b.match_form_fields(
+        [
+            {"field_id": "work-email", "label": "Work email"},
+            {"field_id": "country-region", "label": "Country/Region"},
+            {"field_id": "contact", "label": "Phone number or email"},
+            {"field_id": "legal", "label": "Legal name"},
+            {"field_id": "company", "label": "Company"},
+            {"field_id": "marketing", "label": "Marketing consent"},
+        ]
+    )
+
+    assert [item["status"] for item in result] == [
+        "ambiguous",
+        "matched",
+        "ambiguous",
+        "ambiguous",
+        "missing",
+        "consent",
+    ]
+    assert "Chrome profile groups" in result[0]["reason"]
+    assert "country" in result[1]["candidates"][0]["display_name"]
+    assert "Ada" not in str(result)
+
+
+def test_form_matching_handles_shipping_language_and_explicit_hints():
+    b = Broker(Store(":memory:", key=b"s" * 32))
+    result = b.match_form_fields(
+        [
+            {
+                "field_id": "origin",
+                "label": "What ZIP Code are you mailing from?",
+                "required": True,
+            },
+            {
+                "field_id": "destination",
+                "label": "What ZIP Code are you mailing to?",
+                "required": True,
+                "task_specific": True,
+                "name": "Destination",
+                "autocomplete": "postal-code",
+            },
+            {
+                "field_id": "marketing",
+                "label": "Yes, I'd like product news",
+                "consent": True,
+            },
+        ]
+    )
+
+    assert result[0]["status"] == "task_specific"
+    assert result[1]["status"] == "task_specific"
+    assert result[1]["classification_basis"] == "explicit_hint"
+    assert result[1]["locator_hints"] == {
+        "name": "Destination",
+        "autocomplete": "postal-code",
+    }
+    assert result[2]["status"] == "consent"
+    assert result[2]["classification_basis"] == "explicit_hint"
+
+
+def test_form_matching_marks_page_defaults_without_treating_them_as_profile_values():
+    b = Broker(Store(":memory:", key=b"d" * 32))
+    result = b.match_form_fields(
+        [
+            {
+                "field_id": "shipping-date",
+                "label": "What's the Date you plan to mail the item?",
+                "required": True,
+                "page_default": True,
+            }
+        ]
+    )
+
+    assert result[0]["status"] == "task_specific"
+    assert result[0]["value_state"] == "page_default"
+    assert "value" not in result[0]
+
+
+def test_ambiguous_mapping_is_agent_decision_and_feedback_teaches_future_matches():
+    b = Broker(Store(":memory:", key=b"l" * 32))
+    common = {
+        "source": "chrome-structured-address",
+        "source_profile_id": "chrome-profile",
+        "field_type": "email",
+    }
+    b.put_profile(
+        "email_home",
+        "chrome-address",
+        "Chrome email",
+        "home@example.test",
+        provenance={**common, "source_guid_hash": "home"},
+    )
+    b.put_profile(
+        "email_work",
+        "chrome-address",
+        "Chrome email",
+        "work@example.test",
+        provenance={**common, "source_guid_hash": "work"},
+    )
+
+    first = b.match_form_fields(
+        [{"field_id": "email", "label": "Work email"}],
+        target_origin="https://example.test",
+        purpose="account signup",
+    )[0]
+    assert first["status"] == "ambiguous"
+    assert first["decision"] == "agent_judgment"
+    assert first["submission_confirmation"] == "required_before_submit"
+    assert first["confidence"] == "low"
+    assert first["question"] == 'Which saved record should I use for "Work email"?'
+    assert first["llm_guidance"]["action"] == "choose_best_candidate_or_ask"
+    assert [row["rank"] for row in first["candidate_rows"]] == [1, 2]
+    assert all("home@example.test" not in str(row) for row in first["candidate_rows"])
+    work = next(item for item in first["candidates"] if item["field_id"] == "email_work")
+    assert "home@example.test" not in str(first)
+
+    stored = b.record_form_mapping_feedback(
+        "local-agent",
+        target_origin="https://example.test",
+        purpose="account signup",
+        field_label="Work email",
+        selected_field_ids=["email_work"],
+        group_id=work["group_id"],
+        outcome="corrected",
+        confirmed=True,
+    )
+    assert stored["status"] == "stored"
+    learned = b.match_form_fields(
+        [{"field_id": "email", "label": "Work email"}],
+        target_origin="https://example.test",
+        purpose="account signup",
+    )[0]
+    assert learned["status"] == "matched"
+    assert learned["selection_basis"] == "learned_mapping"
+    assert learned["candidates"][0]["field_id"] == "email_work"
+    assert learned["llm_guidance"]["learning"] == "already_learned"
+
+
+def test_mapping_feedback_requires_confirmation_and_rejects_sensitive_labels():
+    b = Broker(Store(":memory:", key=b"n" * 32))
+    b.put_profile("email", "contact", "Email", "ada@example.test")
+    with pytest.raises(BrokerError, match="confirmed"):
+        b.record_form_mapping_feedback(
+            "local-agent",
+            "https://example.test",
+            "signup",
+            "Email",
+            ["email"],
+        )
+    with pytest.raises(BrokerError, match="secret or financial"):
+        b.record_form_mapping_feedback(
+            "local-agent",
+            "https://example.test",
+            "signup",
+            "Card number",
+            ["email"],
+            confirmed=True,
+        )
+
+
+def test_profile_group_scope_prevents_combining_address_groups():
+    b = Broker(Store(":memory:", key=b"s" * 32))
+    provenance = {
+        "source": "chrome-structured-address",
+        "source_profile_id": "chrome-profile",
+        "source_guid_hash": "home-guid",
+        "field_type": "streetAddress",
+    }
+    b.put_profile("home_street", "address", "Home street", "home value", provenance=provenance)
+    b.put_profile(
+        "work_street",
+        "address",
+        "Work street",
+        "work value",
+        provenance={**provenance, "source_guid_hash": "work-guid"},
+    )
+    group = next(item for item in b.list_profile_groups() if item["field_count"] == 1)
+    with pytest.raises(BrokerError, match="outside profile group"):
+        b.request_profile_fields(
+            "local-agent",
+            ["home_street", "work_street"],
+            "example.test",
+            "form",
+            group_id=group["group_id"],
+        )
+
+
 def test_metadata_list_filters_are_bounded_and_value_free():
     b = Broker(Store(":memory:", key=b"f" * 32))
     b.put_profile("first_name", "identity", "First name", "Ada")
@@ -644,17 +1166,15 @@ def test_source_removal_blocks_new_wildcard_grants_from_using_memory_mail():
 
 
 @pytest.mark.parametrize(
-    "binding_text, should_match",
+    "binding_text",
     [
-        ("Visit https://example.com/login to finish", True),
-        ("Sender: no-reply@example.com", True),
-        ("Visit https://notexample.com/login to finish", False),
-        ("Visit https://example.com.evil/login to finish", False),
+        "Visit https://example.com/login to finish",
+        "Sender: no-reply@example.com",
+        "Visit https://notexample.com/login to finish",
+        "Visit https://example.com.evil/login to finish",
     ],
 )
-def test_otp_hostname_binding_requires_exact_token_boundaries(
-    binding_text, should_match
-):
+def test_otp_mailbox_read_ignores_hostname_tokens(binding_text):
     b = setup()
     b.email["mail1"] = [
         EmailMessage(
@@ -663,17 +1183,13 @@ def test_otp_hostname_binding_requires_exact_token_boundaries(
             "no-reply@sender.test",
             "Authentication code",
             f"{binding_text}; your code is 123456",
-            datetime.now(timezone.utc).isoformat(),
+            datetime.now(UTC).isoformat(),
         )
     ]
     b.grant("codex", "email.otp", "mail1", "https://example.com", "login")
-    if should_match:
-        assert b.request_auth_code(
-            "codex", "mail1", "https://example.com", "login"
-        )["code"] == "123456"
-    else:
-        with pytest.raises(BrokerError, match="not bound"):
-            b.request_auth_code("codex", "mail1", "https://example.com", "login")
+    assert b.request_auth_code(
+        "codex", "mail1", "https://example.com", "login", origin_policy="mailbox-read"
+    )["code"] == "123456"
 
 
 def test_source_removal_tombstones_unavailable_source_against_memory_fallback():
@@ -683,6 +1199,27 @@ def test_source_removal_tombstones_unavailable_source_against_memory_fallback():
     b.grant("codex", "email.search", "*", None, None)
     with pytest.raises(BrokerError, match="not configured"):
         b.search_email("codex", "mail1", "login")
+
+
+def test_source_removal_rolls_back_source_and_grant_together():
+    b = setup()
+    b.grant("codex", "email.search", "mail1", None, None)
+    b.store.db.execute(
+        """
+        create trigger fail_source_removal after insert on kv
+        when NEW.namespace = 'grant'
+        begin select raise(ABORT, 'fixture source removal failure'); end;
+        """
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="fixture source removal failure"):
+        b.remove_source("mail1")
+
+    assert b.list_sources()
+    assert any(
+        grant["resource_scope"] == "mail1" and not grant["revoked"]
+        for grant in b.list_grants()
+    )
 
 
 def _record_broker():
@@ -710,7 +1247,7 @@ def _expire_grants(broker, agent_id):
         grant = broker.store._open(row["value"])
         if grant["agent_id"] == agent_id:
             grant["expires_at"] = (
-                datetime.now(timezone.utc) - timedelta(seconds=1)
+                datetime.now(UTC) - timedelta(seconds=1)
             ).isoformat()
             broker.store.put("grant", row["key"], grant)
 
@@ -1238,3 +1775,25 @@ def test_legacy_credential_defaults_preserve_reads_and_one_time_handles():
         for grant in broker.list_grants()
         if grant["resource_scope"] == "legacy-login"
     )
+
+
+def test_matching_and_provenance_hints_support_value_free_search():
+    broker = Broker(Store(":memory:", key=b"h" * 32))
+    broker.put_financial_record(
+        "corp-card",
+        "payment_card",
+        "Corporate Visa",
+        {"card_number": "4111111111112222", "expiration_month": "08", "expiration_year": "2030"},
+        matching_hints={"network": "Visa", "hint": "Use for work SaaS subscriptions"},
+    )
+    broker.put_credential(
+        "aws-staging",
+        "AWS Console",
+        "https://signin.aws.amazon.com",
+        "ops@example.com",
+        "synthetic-secret",
+        provenance={"source": "local", "hint": "Staging environment root"},
+    )
+    assert len(broker.list_financial_records(query="SaaS subscriptions")) == 1
+    assert len(broker.match_financial_records(matching_hints={"hint": "Use for work SaaS subscriptions"})) == 1
+    assert len(broker.list_credentials(query="Staging environment")) == 1

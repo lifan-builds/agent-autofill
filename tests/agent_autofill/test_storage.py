@@ -54,6 +54,16 @@ class MemoryKeys(KeyProvider):
         return self.values.setdefault(name, b"z" * 32)
 
 
+def test_existing_key_read_never_creates_or_migrates_keychain_entries():
+    raw = b"r" * 32
+    backend = FakeKeychain({("agent-autofill", "database"): base64.urlsafe_b64encode(raw).decode()})
+    provider = KeyringProvider(backend=backend)
+    assert provider.load_existing("database") == raw
+    with pytest.raises(RuntimeError, match="unavailable"):
+        provider.load_existing("missing")
+    assert backend.set_calls == backend.delete_calls == []
+
+
 def test_keyring_uses_agent_autofill_service_name():
     assert KeyringProvider().service == "agent-autofill"
 
@@ -116,7 +126,7 @@ def test_keyring_does_not_delete_legacy_secret_when_vault_write_fails():
     assert backend.delete_calls == []
 
 
-def test_keyring_caches_vault_for_provider_lifetime():
+def test_keyring_refreshes_vault_before_each_mutation():
     backend = FakeKeychain()
     provider = KeyringProvider(backend=backend)
 
@@ -125,8 +135,24 @@ def test_keyring_caches_vault_for_provider_lifetime():
     provider.set_secret("imap:v1:two", b"second")
 
     assert [call for call in backend.get_calls if call[1] == "vault:v1"] == [
-        ("agent-autofill", "vault:v1")
+        ("agent-autofill", "vault:v1"),
+        ("agent-autofill", "vault:v1"),
     ]
+
+
+def test_keyring_merges_updates_from_two_provider_instances():
+    backend = FakeKeychain()
+    first = KeyringProvider(backend=backend)
+    second = KeyringProvider(backend=backend)
+    first._load_vault()
+    second._load_vault()
+
+    first.set_secret("imap:v1:one", b"first")
+    second.set_secret("imap:v1:two", b"second")
+
+    reopened = KeyringProvider(backend=backend)
+    assert reopened.get_secret("imap:v1:one") == b"first"
+    assert reopened.get_secret("imap:v1:two") == b"second"
 
 
 def test_keyring_set_get_delete_round_trip_through_vault():
@@ -232,7 +258,6 @@ def test_store_apply_changes_rolls_back_puts_and_deletes_on_failure():
         )
     except sqlite3.IntegrityError as exc:
         assert "synthetic database failure" in str(exc)
-        pass
     else:
         raise AssertionError("apply_changes should propagate the injected failure")
 

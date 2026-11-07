@@ -1,16 +1,16 @@
 import json
+from typing import ClassVar
 
 import pytest
 
+from agent_autofill import cli
+from agent_autofill.service import Broker
+from agent_autofill.storage import Store
 from agent_autofill.thunderbird import (
     list_accounts,
     parse_prefs,
     verify_profile,
 )
-from agent_autofill import cli
-from agent_autofill.service import Broker
-from agent_autofill.storage import Store
-
 
 PREFS = '''
 user_pref("mail.accountmanager.accounts", "account1,account2,account3");
@@ -45,7 +45,7 @@ class FakeNSS:
 
 
 class FakeAdapter:
-    instances = []
+    instances: ClassVar[list["FakeAdapter"]] = []
 
     def __init__(self, *args):
         self.args = args

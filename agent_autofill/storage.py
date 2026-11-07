@@ -1,13 +1,23 @@
+import base64
+import hashlib
 import json
 import os
 import re
 import secrets
 import sqlite3
-import base64
 import sys
-from cryptography.fernet import Fernet, InvalidToken
+import tempfile
+from collections.abc import Iterable
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
+
+from cryptography.fernet import Fernet, InvalidToken
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - the supported host is macOS/Unix.
+    fcntl = None  # type: ignore[assignment]
 
 
 def _credential_store_error_message() -> str:
@@ -23,6 +33,48 @@ def _credential_store_error_message() -> str:
         "OS credential store unavailable: configure or unlock the operating-system "
         "credential store, then run Agent Autofill again"
     )
+
+
+class CredentialStoreError(RuntimeError):
+    """Safe OS failure category; never include a backend's secret-bearing text."""
+
+    def __init__(self, error: Exception):
+        self.code = "credential_store_unavailable"
+        self.os_status = None
+        self.next_action = _credential_store_error_message()
+        message = self.next_action
+        current: BaseException | None = error
+        seen = set()
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            status = next((arg for arg in current.args if type(arg) is int), None)
+            if sys.platform == "darwin" and status in {-25293, -25308, -128}:
+                self.os_status = status
+                break
+            current = current.__cause__ or current.__context__
+        if self.os_status == -25293:
+            self.code = "keychain_auth_failed"
+            message = "macOS Keychain authentication failed (OSStatus -25293) for this process"
+            self.next_action = (
+                "Run `agent-autofill doctor` in an interactive Terminal using the same "
+                "installation. Check the agent-autofill vault item's Access Control and "
+                "the Python executable's signing identity. This error alone does not "
+                "mean the Keychain is locked or the executable is unsigned. If Apple's "
+                "`security show-keychain-info ~/Library/Keychains/login.keychain-db` "
+                "also fails, see the macOS authentication recovery steps in troubleshooting."
+            )
+        elif self.os_status == -25308:
+            self.code = "keychain_interaction_unavailable"
+            message = "macOS Keychain interaction is unavailable (OSStatus -25308)"
+            self.next_action = (
+                "Unlock the login Keychain and run `agent-autofill doctor` from an "
+                "interactive logged-in macOS session where a permission prompt can appear."
+            )
+        elif self.os_status == -128:
+            self.code = "keychain_request_cancelled"
+            message = "The macOS Keychain request was cancelled (OSStatus -128)"
+            self.next_action = "Retry when ready to respond to the macOS Keychain prompt."
+        super().__init__(message if message == self.next_action else f"{message}. {self.next_action}")
 
 
 _SECRET_AUDIT_KEY_PARTS = {
@@ -117,6 +169,21 @@ class KeyringProvider(KeyProvider):
         self._backend = backend
         self._vault: dict | None = None
 
+    @contextmanager
+    def _vault_lock(self):
+        """Serialize vault read-modify-write operations across local processes."""
+
+        lock_name = hashlib.sha256(self.service.encode("utf-8")).hexdigest()[:24]
+        lock_path = Path(tempfile.gettempdir()) / f"agent-autofill-keyring-{lock_name}.lock"
+        with lock_path.open("a+") as handle:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
     def _keyring(self):
         if self._backend is not None:
             return self._backend
@@ -131,7 +198,7 @@ class KeyringProvider(KeyProvider):
     @staticmethod
     def _decode(value: object, label: str) -> bytes:
         if not isinstance(value, str):
-            raise RuntimeError(f"Keychain vault contains an invalid {label}")
+            raise RuntimeError(f"Keychain vault contains an invalid {label}")  # noqa: TRY004 - vault corruption boundary
         try:
             decoded = base64.urlsafe_b64decode(value.encode("ascii"))
         except Exception as exc:
@@ -158,8 +225,8 @@ class KeyringProvider(KeyProvider):
             "secrets": dict(vault["secrets"]),
         }
 
-    def _load_vault(self) -> dict:
-        if self._vault is not None:
+    def _load_vault(self, *, force: bool = False) -> dict:
+        if self._vault is not None and not force:
             return self._vault
         try:
             serialized = self._keyring().get_password(
@@ -181,7 +248,7 @@ class KeyringProvider(KeyProvider):
         except RuntimeError:
             raise
         except Exception as exc:
-            raise RuntimeError(_credential_store_error_message()) from exc
+            raise CredentialStoreError(exc) from exc
 
     def _persist_vault(self, vault: dict) -> None:
         serialized = json.dumps(vault, separators=(",", ":"), sort_keys=True)
@@ -190,7 +257,7 @@ class KeyringProvider(KeyProvider):
                 self.service, self._VAULT_ACCOUNT, serialized
             )
         except Exception as exc:
-            raise RuntimeError(_credential_store_error_message()) from exc
+            raise CredentialStoreError(exc) from exc
         self._vault = vault
 
     def _legacy_get(self, name: str) -> bytes | None:
@@ -202,7 +269,7 @@ class KeyringProvider(KeyProvider):
         except RuntimeError:
             raise
         except Exception as exc:
-            raise RuntimeError(_credential_store_error_message()) from exc
+            raise CredentialStoreError(exc) from exc
 
     def _legacy_delete(self, name: str) -> None:
         if name == self._VAULT_ACCOUNT:
@@ -219,61 +286,78 @@ class KeyringProvider(KeyProvider):
                 or "no such" in message
             ):
                 return
-            raise RuntimeError(_credential_store_error_message()) from exc
+            raise CredentialStoreError(exc) from exc
+
+    def load_existing(self, name: str) -> bytes:
+        """Read a database key without creating or migrating any credentials."""
+        vault = self._load_vault(force=True)
+        encoded = vault["database_keys"].get(name)
+        raw = self._decode(encoded, "database key") if encoded else self._legacy_get(name)
+        if not raw or len(raw) < 16:
+            raise RuntimeError("existing database key unavailable")
+        return raw
 
     def load_or_create(self, name: str) -> bytes:
         try:
-            vault = self._load_vault()
-            encoded = vault["database_keys"].get(name)
-            if encoded:
-                raw = self._decode(encoded, "database key")
-                if len(raw) < 16:
-                    raise RuntimeError("Keychain vault contains an invalid database key")
-                return raw
+            with self._vault_lock():
+                vault = self._load_vault(force=True)
+                encoded = vault["database_keys"].get(name)
+                if encoded:
+                    raw = self._decode(encoded, "database key")
+                    if len(raw) < 16:
+                        raise RuntimeError("Keychain vault contains an invalid database key")
+                    return raw
 
-            legacy = self._legacy_get(name)
-            raw = legacy or secrets.token_bytes(32)
-            updated = self._copy_vault(vault)
-            updated["database_keys"][name] = self._encode(raw)
-            self._persist_vault(updated)
-            if legacy is not None:
-                self._legacy_delete(name)
-            return raw
+                legacy = self._legacy_get(name)
+                raw = legacy or secrets.token_bytes(32)
+                updated = self._copy_vault(vault)
+                updated["database_keys"][name] = self._encode(raw)
+                self._persist_vault(updated)
+                if legacy is not None:
+                    self._legacy_delete(name)
+                return raw
         except RuntimeError:
             raise
         except Exception as exc:
-            raise RuntimeError(_credential_store_error_message()) from exc
+            raise CredentialStoreError(exc) from exc
 
     def get_secret(self, name: str) -> bytes | None:
         vault = self._load_vault()
         encoded = vault["secrets"].get(name)
         if encoded:
             return self._decode(encoded, "connector secret")
-        legacy = self._legacy_get(name)
-        if legacy is None:
-            return None
-        updated = self._copy_vault(vault)
-        updated["secrets"][name] = self._encode(legacy)
-        self._persist_vault(updated)
-        self._legacy_delete(name)
-        return legacy
+        with self._vault_lock():
+            vault = self._load_vault(force=True)
+            encoded = vault["secrets"].get(name)
+            if encoded:
+                return self._decode(encoded, "connector secret")
+            legacy = self._legacy_get(name)
+            if legacy is None:
+                return None
+            updated = self._copy_vault(vault)
+            updated["secrets"][name] = self._encode(legacy)
+            self._persist_vault(updated)
+            self._legacy_delete(name)
+            return legacy
 
     def set_secret(self, name: str, value: bytes) -> None:
         if not isinstance(value, bytes) or not value:
             raise RuntimeError("connector secret must be nonempty bytes")
-        vault = self._load_vault()
-        updated = self._copy_vault(vault)
-        updated["secrets"][name] = self._encode(value)
-        self._persist_vault(updated)
-        self._legacy_delete(name)
+        with self._vault_lock():
+            vault = self._load_vault(force=True)
+            updated = self._copy_vault(vault)
+            updated["secrets"][name] = self._encode(value)
+            self._persist_vault(updated)
+            self._legacy_delete(name)
 
     def delete_secret(self, name: str) -> None:
-        vault = self._load_vault()
-        if name in vault["secrets"]:
-            updated = self._copy_vault(vault)
-            del updated["secrets"][name]
-            self._persist_vault(updated)
-        self._legacy_delete(name)
+        with self._vault_lock():
+            vault = self._load_vault(force=True)
+            if name in vault["secrets"]:
+                updated = self._copy_vault(vault)
+                del updated["secrets"][name]
+                self._persist_vault(updated)
+            self._legacy_delete(name)
 
     def migrate_legacy(self, names: Iterable[str]) -> int:
         """Migrate known connector accounts without returning their values."""
@@ -329,6 +413,12 @@ class Store:
         raw = json.dumps(value, separators=(",", ":")).encode()
         return self.cipher.encrypt(raw).decode()
 
+    def count(self, namespace: str) -> int:
+        """Count saved records without decrypting their values."""
+        return self.db.execute(
+            "select count(*) from kv where namespace=?", (namespace,)
+        ).fetchone()[0]
+
     def _open(self, envelope: str) -> Any:
         try:
             return json.loads(self.cipher.decrypt(envelope.encode()))
@@ -358,6 +448,9 @@ class Store:
         records: Iterable[tuple[str, str, Any]],
         deletes: Iterable[tuple[str, str]],
         audits: Iterable[tuple[str, str, str, str, dict[str, Any]]] | None = None,
+        *,
+        expected: Iterable[tuple[str, str, Any]] = (),
+        cascade_field_references: bool = False,
     ) -> None:
         """Apply encrypted puts and deletes in one SQLite transaction.
 
@@ -384,6 +477,23 @@ class Store:
             for agent_id, operation, resource, created_at, metadata in (audits or [])
         ]
         try:
+            self.db.execute("begin immediate")
+            for namespace, key, value in expected:
+                if self.get(namespace, key) != value:
+                    raise ValueError("record changed; review the current revision")
+            if cascade_field_references:
+                forgotten = {key for namespace, key in delete_keys if namespace == "profile"}
+                dependents = []
+                for namespace in ("context", "context-history", "form-mapping"):
+                    for row in self.db.execute("select key,value from kv where namespace=?", (namespace,)):
+                        dependents.append((namespace, row["key"], self._open(row["value"])))
+                removed_bundles = {item["id"] for namespace, _, item in dependents
+                                   if namespace == "context" and item.get("kind") == "bundle"
+                                   and forgotten.intersection(item.get("field_ids", []))}
+                for namespace, key, item in dependents:
+                    if (forgotten.intersection(item.get("field_ids", []))
+                            or removed_bundles.intersection(item.get("bundle_versions", {}))):
+                        delete_keys.append((namespace, key))
             if sealed:
                 self.db.executemany(
                     "insert or replace into kv values (?,?,?)", sealed
@@ -401,11 +511,6 @@ class Store:
         except Exception:
             self.db.rollback()
             raise
-
-    def delete_many(self, records: Iterable[tuple[str, str]]) -> None:
-        """Delete a group of namespace/key rows atomically."""
-
-        self.apply_changes([], records)
 
     def put_if_absent(self, namespace: str, key: str, value: Any) -> bool:
         """Insert one value only when its namespace/key is unused.
@@ -429,6 +534,39 @@ class Store:
             self.db.rollback()
             raise
         return True
+
+    def update_if(
+        self,
+        namespace: str,
+        key: str,
+        predicate,
+        update,
+    ) -> bool:
+        """Update one sealed value while holding SQLite's write lock."""
+
+        try:
+            self.db.execute("BEGIN IMMEDIATE")
+            row = self.db.execute(
+                "select value from kv where namespace=? and key=?",
+                (namespace, key),
+            ).fetchone()
+            if row is None:
+                self.db.rollback()
+                return False
+            current = self._open(row["value"])
+            if not predicate(current):
+                self.db.rollback()
+                return False
+            updated = update(current)
+            self.db.execute(
+                "update kv set value=? where namespace=? and key=?",
+                (self._seal(updated), namespace, key),
+            )
+            self.db.commit()
+            return True
+        except Exception:
+            self.db.rollback()
+            raise
 
     def get(self, namespace: str, key: str) -> Any | None:
         row = self.db.execute(

@@ -1,0 +1,72 @@
+{
+  "synthetic": {
+    "status": "passed",
+    "stages": [
+      {
+        "stage": "intake",
+        "facts_preserved": 12,
+        "bundles": 3
+      },
+      {
+        "stage": "retrieve",
+        "historical_excluded": true,
+        "clarification_required": true,
+        "legacy_status": "ambiguous"
+      },
+      {
+        "stage": "scoped_read",
+        "required_fields": 4,
+        "correct_fields": 4,
+        "mixed_bundles": 0
+      },
+      {
+        "stage": "one_time_feedback",
+        "replays": 5,
+        "silent_defaults": 0
+      },
+      {
+        "stage": "confirmed_reuse",
+        "tasks": 3,
+        "correct_selections": 3,
+        "repeated_clarifications": 0,
+        "legacy_repeated_clarifications": 3,
+        "max_context_characters": 1297
+      },
+      {
+        "stage": "evidence_change",
+        "stale_notes_returned": 0,
+        "stale_bundles_returned": 0
+      },
+      {
+        "stage": "forget",
+        "dependent_records_remaining": 0
+      }
+    ],
+    "scope": "deterministic synthetic no-submit tasks; not an LLM or live-site success rate"
+  },
+  "real_snapshot": {
+    "status": "passed",
+    "counts": {
+      "source_groups": 19,
+      "ambiguous_semantic_components": 0,
+      "shadow_groups": 18,
+      "values_preserved_and_read": 119,
+      "groups_without_semantic_fields": 1,
+      "task_replays": 6,
+      "context_characters": 8336,
+      "profile_fields": 120
+    },
+    "task_statuses": {
+      "delivery:needs_clarification": 1,
+      "delivery:missing_information": 1,
+      "professional_contact:needs_clarification": 1,
+      "professional_contact:missing_information": 1,
+      "telephone_contact:needs_clarification": 1,
+      "telephone_contact:no_authorized_context": 1
+    },
+    "production_profile_rows_unchanged": true,
+    "snapshot": "encrypted ordinary profile rows only, in memory, discarded",
+    "ground_truth": "source-group membership and exact value preservation; personal meanings unreviewed",
+    "limitations": "No site submission, production write, secrets, or inferred personal defaults. No correctness claim for unreviewed home/work identities."
+  }
+}

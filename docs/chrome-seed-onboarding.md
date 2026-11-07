@@ -1,12 +1,13 @@
 # Seed Agent Autofill from Chrome
 
-Chrome can provide the first ordinary profile data so the user does not have
+Chrome can provide the first ordinary autofill data so the user does not have
 to type the same name, contact details, and addresses again. The recommended
 path is an agent-led, review-first intake. It reads selected structured Chrome
-address data, asks about unclear columns or ownership, then saves only the
-rows the user approves.
+autofill data, asks about unclear columns or ownership, then saves only the
+rows the user approves. Saved Chrome passwords are a separate opt-in and are
+imported directly into the encrypted local Agent Autofill store.
 
-## Start with a selected profile
+## Use Chrome's Default profile
 
 Install and initialize Agent Autofill, then list the available profile names:
 
@@ -15,22 +16,43 @@ agent-autofill --db ~/.agent-autofill.sqlite3 init
 agent-autofill chrome profiles
 ```
 
-Choose the profile explicitly. Do not assume the first profile is the right
-person or account. Before reading values, the acting agent should explain that
+The command resolves Chrome's `Default` profile only. Secondary profiles are
+rejected rather than silently selected. Before reading values, the acting agent should explain that
 ordinary selected values enter its conversation context and follow that
 provider's retention settings.
 
 Then ask the local agent to run the repository skill:
 
 > Seed Agent Autofill from my selected Chrome profile. Read only supported
-> structured names, contact details, and addresses. Keep source groups intact,
-> use the Chrome classification guide, ask me grouped questions for ambiguous
-> columns or ownership, show the complete proposal, and save only the exact
-> rows I approve.
+> structured autofill names, contact details, and addresses. Keep source groups
+> intact, use the Chrome classification guide, ask me grouped questions for
+> ambiguous columns or ownership, show the complete proposal, and save only
+> the exact rows I approve. Separately ask whether I want saved passwords
+> imported to Agent Autofill's local encrypted store only; never show or export
+> password values.
 
 The skill requires local execution access. An MCP-only agent cannot read the
 selected local Chrome profile and should say so rather than requesting a wider
 grant.
+
+## The onboarding pass
+
+The agent runs the intake in four short phases:
+
+1. Scan the selected profile's supported structured tables.
+2. Run `organize_structured_candidates(...)` to preserve source groups and add
+   deterministic comparison values and review flags.
+3. Show a value-free count summary first, then ask only grouped questions for
+   ownership, currentness, conflicting representations, unsplit names, or
+   suspicious content. A duplicate signal never merges records by itself.
+4. Regenerate the proposal after answers, show the exact rows, and save only
+   the unchanged rows explicitly approved.
+
+The organizer uses `normalized_value` only to compare candidates. The original
+Chrome `value` stays attached to its source row for review. Flagged groups stay
+held until the answer is reflected in a regenerated proposal. See the
+[Chrome intake benchmark](../evals/chrome_intake/README.md) for the synthetic
+group-fidelity, normalization, ambiguity, replay, and no-write checks.
 
 ## What the seed read includes
 
@@ -47,9 +69,25 @@ Each candidate keeps an opaque source profile ID, source group ID, and field
 type. This lets the agent distinguish two address groups without flattening
 them into one generic `address` record.
 
-The intake does not read Chrome passwords, payment cards, OTPs, sync payloads,
-arbitrary autocomplete history, or unrelated browser tables. It does not
-modify Chrome and does not create a raw database copy or candidate export.
+The ordinary autofill intake does not read Chrome passwords, payment cards,
+OTPs, sync payloads, arbitrary autocomplete history, or unrelated browser
+tables. It does not modify Chrome and does not create a raw database copy or
+candidate export.
+
+### Optional saved-password import
+
+The agent must ask separately whether the user authorizes reading saved
+passwords from the selected profile and importing them to the encrypted Agent
+Autofill database on this device only. A general autofill approval does not
+count. If the user says no or is unclear, skip the password path.
+
+After a clear yes, the agent runs the `chrome password-manager --preview`
+command described in the [password intake reference](../.agents/skills/agent-autofill-chrome-intake/references/password-intake.md),
+shows the value-free reconciliation preview, and asks for approval of that
+exact local sync. Password plaintext stays in the importer process and is
+sealed immediately by the broker. It never enters the agent prompt, a proposal,
+an audit row, a CSV, or an external service. Unsupported Chrome encryption and
+an unavailable Safe Storage key fail closed without writes.
 
 ## How ambiguity is handled
 

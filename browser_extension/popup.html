@@ -16,7 +16,7 @@
   .status-row::before { content:'•'; color:#98a2b3; font-size:17px; line-height:0; }
   .status-row.ok { color:#047857; background:var(--mint-soft); }.status-row.ok::before { color:#10b981; }.status-row.warn { color:#9a6700; background:#fffaf0; }.status-row.error { color:#b42318; background:#fff5f4; }
   label { display:block; margin:11px 0 5px; font-weight:700; font-size:11px; color:#344054; }
-  input, button { width:100%; font:inherit; }
+  input, button, select { width:100%; font:inherit; box-sizing:border-box; }
   input { padding:9px 10px; border:1px solid #cfd5df; border-radius:9px; background:#fff; color:var(--ink); outline:none; }
   input:focus { border-color:var(--blue); box-shadow:0 0 0 3px #4f46e51f; }
   button { margin-top:12px; padding:9px 11px; cursor:pointer; border:0; border-radius:9px; background:var(--blue); color:#fff; font-weight:750; box-shadow:0 5px 14px #4f46e533; }
@@ -27,13 +27,16 @@
   details { margin-top:12px; } summary { cursor:pointer; color:#344054; font-size:11px; font-weight:750; } .advanced { margin-top:8px; }
   .boundary { margin:12px 0 0; padding:9px 10px; border-left:3px solid #10b981; border-radius:7px; background:var(--mint-soft); color:#14532d; font-size:11px; }
 </style>
-<div class="header"><div class="mark">✦</div><div><h1>Agent Autofill bridge</h1><p class="subtitle">Optional transport helper · requests stay in the CLI.</p></div></div>
+<div class="header"><div class="mark">✦</div><div><h1>Fill a login</h1><p class="subtitle">Password goes to the matching page through this extension.</p></div></div>
 <div class="card">
   <div class="status-grid"><div id="origin" class="status-row" role="status">Active origin: checking…</div><div id="bridge" class="status-row" role="status">Bridge: checking…</div></div>
-  <label for="agent">Agent ID</label><input id="agent" autocomplete="off" spellcheck="false">
-  <label for="handle">One-time bridge handle</label><input id="handle" type="password" autocomplete="off" spellcheck="false">
-  <div class="boundary">The approved origin and purpose grant is the consent step. The handle is a scoped, one-time verification handoff, not a reusable link or proof that the site accepted anything. It is never stored here and this extension never submits the page; review and submit yourself.</div>
-  <button id="fill" disabled>Use bridge on current page</button><div id="status" role="status"></div>
+  <label for="requests">Approved requests for this site</label><select id="requests"><option value="">Refresh to find requests</option></select>
+  <p id="request-detail" class="hint"></p>
+  <button id="refresh-requests" type="button">Refresh requests</button>
+  <details><summary>Use a one-time handle manually</summary><label for="agent">Agent ID</label><input id="agent" autocomplete="off" spellcheck="false"><label for="handle">One-time bridge handle</label><input id="handle" type="password" autocomplete="off" spellcheck="false"></details>
+  <div class="boundary">The approved origin and purpose grant is the consent step. The handle is a scoped, one-time verification handoff, not a reusable link. This delivery keeps the password out of the agent response. This extension never submits the page; review and submit yourself.</div>
+  <button id="fill" disabled>Fill selected login</button><div id="status" role="status"></div>
 </div>
+<details><summary>Pair this browser session</summary><p class="hint">Pair once to discover this agent's approved requests for eight hours. The pairing code stays in browser session memory. Restarting the browser requires pairing again.</p><button id="pair" type="button">Generate pairing code</button><label for="pairing-code">Pairing code — paste into the terminal prompt</label><input id="pairing-code" type="password" readonly autocomplete="off"><p id="pair-command" class="hint"></p><button id="forget-pairing" type="button">Forget pairing on this browser</button></details>
 <details><summary>Advanced connection settings</summary><div class="advanced"><label for="bridge-url">Loopback bridge URL</label><input id="bridge-url" type="url" autocomplete="off" spellcheck="false"><p class="hint">Only this URL and the agent identifier are remembered. Handles are cleared after every attempt.</p><button id="refresh" type="button">Refresh origin and bridge</button></div></details>
-<script src="popup.js"></script>
+<script src="login_fields.js"></script><script src="popup.js"></script>

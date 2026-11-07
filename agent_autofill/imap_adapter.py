@@ -4,12 +4,15 @@ Credentials are supplied by a caller that owns them (normally Keychain). This
 adapter intentionally has no send or mutation methods.
 """
 
+import imaplib
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from email import message_from_bytes
 from email.header import decode_header, make_header
 from email.utils import parsedate_to_datetime
-import imaplib
+from html.parser import HTMLParser
+from typing import ClassVar
+
 from .models import EmailMessage
 
 
@@ -37,29 +40,111 @@ def _header(value: str | None) -> str:
     return str(make_header(decode_header(value or "")))
 
 
+class _HTMLTextParser(HTMLParser):
+    """Extract readable text from HTML-only mail without retaining markup."""
+
+    _BLOCK_TAGS: ClassVar[set[str]] = {
+        "address",
+        "article",
+        "aside",
+        "blockquote",
+        "br",
+        "div",
+        "footer",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "header",
+        "li",
+        "main",
+        "nav",
+        "ol",
+        "p",
+        "pre",
+        "section",
+        "table",
+        "td",
+        "th",
+        "tr",
+        "ul",
+    }
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._chunks: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        if data.strip():
+            self._chunks.append(data)
+
+    def handle_starttag(self, tag: str, _attrs) -> None:
+        if tag.lower() in self._BLOCK_TAGS:
+            self._chunks.append("\n")
+
+    def handle_startendtag(self, tag: str, _attrs) -> None:
+        if tag.lower() in self._BLOCK_TAGS:
+            self._chunks.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() in self._BLOCK_TAGS:
+            self._chunks.append("\n")
+
+    def text(self) -> str:
+        lines = [" ".join(line.split()) for line in "".join(self._chunks).splitlines()]
+        return "\n".join(line for line in lines if line)
+
+
+def _html_body(value: str) -> str:
+    parser = _HTMLTextParser()
+    try:
+        parser.feed(value)
+        parser.close()
+    except (ValueError, AssertionError):
+        # A malformed provider template should not make the entire message
+        # unreadable; the partial parser output is still safer than markup.
+        return parser.text()
+    return parser.text()
+
+
 def _body(msg) -> str:
     parts = list(msg.walk()) if msg.is_multipart() else [msg]
-    text = []
+    plain: list[str] = []
+    html: list[str] = []
     for part in parts:
-        if part.get_content_type() == "text/plain" and "attachment" not in str(
-            part.get("Content-Disposition", "")
-        ):
-            try:
-                text.append(
-                    part.get_payload(decode=True).decode(
-                        part.get_content_charset() or "utf-8", errors="replace"
-                    )
-                )
-            except Exception:
-                pass
-    return "\n".join(text)[:200_000]
+        if "attachment" in str(part.get("Content-Disposition", "")).lower():
+            continue
+        if part.get_content_type() not in {"text/plain", "text/html"}:
+            continue
+        try:
+            payload = part.get_payload(decode=True)
+            if payload is None:
+                raw = part.get_payload()
+                value = raw if isinstance(raw, str) else ""
+            else:
+                value = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+        except (LookupError, ValueError, TypeError):
+            # Skip malformed MIME without logging message data.
+            continue
+        if part.get_content_type() == "text/plain":
+            plain.append(value)
+        else:
+            parsed = _html_body(value)
+            if parsed:
+                html.append(parsed)
+    # Prefer the provider's plain-text alternative. HTML-only mail is common
+    # for login-code messages, so fall back to readable text from that part.
+    return "\n".join(plain or html)[:200_000]
 
 
-def _date(value: str | None) -> str:
+def _date(value: str | None) -> str | None:
     try:
-        return parsedate_to_datetime(value or "").astimezone(timezone.utc).isoformat()
-    except Exception:
-        return datetime.now(timezone.utc).isoformat()
+        return parsedate_to_datetime(value or "").astimezone(UTC).isoformat()
+    except (TypeError, ValueError, OverflowError, OSError):
+        # A missing or malformed provider date must never look newly received.
+        return None
 
 
 @dataclass
@@ -141,7 +226,7 @@ class IMAPEmailAdapter:
     def _logout(conn) -> None:
         try:
             conn.logout()
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 - cleanup must not expose provider diagnostics
             # A failed network connection must not mask the useful provider
             # error or leak dependency-specific diagnostics to the caller.
             pass
@@ -185,8 +270,10 @@ class IMAPEmailAdapter:
     def recent(self, max_age_seconds: int = 300) -> list[EmailMessage]:
         conn = self._connect()
         try:
+            # IMAP SINCE compares calendar dates, ignoring the mailbox timezone.
+            # Include the previous day; the timestamp filter below stays exact.
             since = (
-                datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
+                datetime.now(UTC) - timedelta(seconds=max_age_seconds, days=1)
             ).strftime("%d-%b-%Y")
             _, data = conn.uid("search", None, "SINCE", since)
             result = []
@@ -197,8 +284,10 @@ class IMAPEmailAdapter:
                 )
                 if raw:
                     msg = self._parse(uid, raw)
+                    if msg.received_at is None:
+                        continue
                     age = (
-                        datetime.now(timezone.utc)
+                        datetime.now(UTC)
                         - datetime.fromisoformat(msg.received_at)
                     ).total_seconds()
                     if 0 <= age <= max_age_seconds:

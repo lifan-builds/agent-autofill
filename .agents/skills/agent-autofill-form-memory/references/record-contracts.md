@@ -20,7 +20,9 @@ record, origin, purpose, expiry, or revocation checks.
 | `list_profile_fields` | none | none | Metadata only; values are omitted. |
 | `list_credentials` | none | none | Authenticated credential metadata; secrets are omitted. |
 | `list_financial_records` | none | none | Authenticated payment/financial metadata; values are omitted. |
-| `request_profile_fields` | `field_ids`, `target_origin`, `purpose` | none | Read selected profile values under `profile.read` grants. |
+| `match_form_fields` | `fields` | `limit` | Value-free ranked record table with matched/missing/ambiguous/credential/consent/transient/task-specific state. |
+| `record_form_mapping_feedback` | `target_origin`, `purpose`, `field_label`, `selected_field_ids`, `confirmed` | `group_id`, `outcome` | Store a value-free mapping choice after a user-confirmed outcome so later matching can prefer it. |
+| `request_profile_fields` | `field_ids`, `target_origin`, `purpose` | `group_id` | Read selected profile values under `profile.read` grants; group-bound reads cannot mix address groups. |
 | `request_credential_fields` | `credential_id`, `field_ids`, `target_origin`, `purpose` | none | Read selected credential fields under `credential.read`. |
 | `request_financial_fields` | `record_id`, `field_ids`, `target_origin`, `purpose` | none | Read selected financial fields under `financial.read`. |
 | `write_records` | `target_origin`, `purpose`, `confirmed`, `entries` | none | Persist one explicitly approved batch. `confirmed` must be literal `true`. |
@@ -31,12 +33,33 @@ these tools. The three `request_*_fields` schemas use an array of strings for
 limits field and entry collections to 1 through 100 items and rejects
 duplicates.
 
+`match_form_fields` may also receive `target_origin` and `purpose` to apply a
+previously learned mapping. Each field may include only value-free browser
+metadata (`field_id`, `name`, `autocomplete`, `type`, and `role`) as locator
+hints. It may also include the safe booleans `task_specific`, `consent`, and
+`page_default`. Explicit hints take precedence over ordinary label heuristics
+after credential, transient, obstruction, and validation checks. A
+`page_default` field gets `value_state: "page_default"`; this describes the
+site's visible default and is never a saved profile value.
+
+Each result includes a value-free `candidate_rows` table (also available as
+`candidates`) with rank, score, stable field metadata, and Chrome `group_id`
+metadata. `confidence` and `llm_guidance` tell the consuming model what to do:
+use the top row for a strong match, choose a row or ask the focused `question`
+when candidates are tied, or ask for a missing value. The broker does not call
+an external model; the acting agent supplies page context and judgment.
+An `ambiguous` result still includes `decision: agent_judgment` and the
+submission boundary. After a confirmed result or user correction,
+`record_form_mapping_feedback` persists the selected field IDs and outcome.
+That feedback is value-free and makes the next table rank the learned choice
+first. It never accepts profile values or secrets.
+
 The following existing catalog operation is intentionally not a record-write
 path:
 
 | Tool | Required inputs | Optional input | Boundary |
 | --- | --- | --- | --- |
-| `request_auth_code` | `account_id`, `target_origin`, `purpose` | `max_age_seconds` | Returns one recent target-bound OTP only under `email.otp`; an OTP is transient and never becomes a proposal. |
+| `request_auth_code` | `account_id` | `target_origin`, `purpose`, `max_age_seconds`, `origin_policy` | Returns one recent OTP from the explicitly authorized mailbox under `email.otp`; `origin_policy` is `mailbox-read` and an OTP is transient and never becomes a proposal. |
 
 `request_credential_use` also exists for the compatibility handle flow with
 required `credential_id`, `target_origin`, and `purpose`, plus optional
@@ -212,6 +235,42 @@ It never includes the `values` map or a full financial number.
 Each status is `created`, `updated`, or `unchanged`. The broker validates all
 entries and grants before one encrypted transaction; a failed validation or
 storage operation leaves the batch uncommitted.
+
+## Missing-field promotion contract
+
+When a form has a required field with no compatible saved record, the acting
+agent may run a just-in-time check-in:
+
+```text
+I need <field label> for <target origin> (purpose: <purpose>).
+Choose: use once | save to Agent Autofill | skip.
+```
+
+The answer is available to the current form immediately. `use once` creates no
+proposal and no write. `save to Agent Autofill` is eligible only when the value is
+stable and user-supplied or explicitly verified. The saved profile record is
+reusable across future origins and purposes, so omit `allowed_origins` and
+`allowed_purposes` (the broker stores those as unrestricted empty lists). The
+current origin and purpose still scope the narrow write grant for this save and
+every later read is governed by its own request and grant.
+
+The compact confirmation card is the approval unit and must contain the
+canonical id, category, display name, exact ordinary value, source context,
+sensitivity, saved-record scope, current allowed origin, current purpose,
+confidence, and ambiguity. Saved-record scope must say `any future authorized
+origin/purpose` for this path. If `profile.write` is missing, include its exact
+resource and current scope on that same card; the agent must not create a
+wildcard grant or use an administrative fallback. The user's single **save to
+Agent Autofill** choice approves both the visible reusable entry and that displayed
+narrow grant. Obtain the grant and send only the accepted entry to
+`write_records` with literal `confirmed: true`; do not add a second generic
+proposal-approval prompt.
+
+Do not offer promotion for OTPs, one-time codes, passwords, payment values,
+tokens, handles, CAPTCHA answers, session data, or inferred page values. Use
+the dedicated credential/financial workflow for a user-entered secret and keep
+one-time values transient. A missing-field save approval never approves an
+external browser submission.
 
 An update replaces the complete stored record at that id; it is not a field
 patch. In particular, omitted optional credential fields take their defaults,

@@ -16,3 +16,7 @@ passwords.csv
 build/
 dist/
 *.egg-info/
+evals/form_filling/screenshots/
+evals/form_filling/runs/*real-data*.md
+agent-autofill-product-video-*.mp4
+tests/manual/

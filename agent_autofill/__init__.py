@@ -1,17 +1,17 @@
 """Agent Autofill: local-first personal information broker for agent clients."""
 
-from .service import Broker, BrokerError, AuthorizationError, CredentialUseError
 from .imap_adapter import IMAPEmailAdapter
-from .messages_adapter import MacMessagesAdapter
 from .local import LocalConnection, connect_service
+from .messages_adapter import MacMessagesAdapter
+from .service import AuthorizationError, Broker, BrokerError, CredentialUseError
 
 __all__ = [
+    "AuthorizationError",
     "Broker",
     "BrokerError",
-    "AuthorizationError",
     "CredentialUseError",
     "IMAPEmailAdapter",
-    "MacMessagesAdapter",
     "LocalConnection",
+    "MacMessagesAdapter",
     "connect_service",
 ]

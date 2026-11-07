@@ -5,12 +5,36 @@ depends only on metadata APIs and read-only source presence checks; sensitive
 record values never enter a status snapshot.
 """
 
-from datetime import datetime, timedelta, timezone
+import hashlib
+import sys
+from datetime import UTC, datetime, timedelta
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, cast
 
-from .chrome import discover_profiles
+from .chrome import ChromeImportError, default_profile
+from .form_policy import get_form_submission_policy
 from .service import Broker
+from .storage import CredentialStoreError
+
+
+def _installation_status() -> dict[str, str]:
+    root = Path(__file__).resolve().parent
+    digest = hashlib.sha256()
+    for path in sorted(root.glob("*.py")):
+        digest.update(path.name.encode())
+        digest.update(path.read_bytes())
+    try:
+        package_version = version("agent-autofill")
+    except PackageNotFoundError:
+        package_version = "uninstalled"
+    return {
+        "version": package_version,
+        "build": digest.hexdigest()[:16],
+        "package_path": str(root),
+        "python_executable": sys.executable,
+        "resolved_python": str(Path(sys.executable).resolve()),
+    }
 
 
 def _keychain_status(broker: Broker) -> dict[str, str]:
@@ -32,7 +56,14 @@ def _keychain_status(broker: Broker) -> dict[str, str]:
         }
     try:
         loader()
-    except Exception:
+    except CredentialStoreError as error:
+        return {
+            "status": "needs-attention",
+            "summary": str(error),
+            "code": error.code,
+            "next_action": error.next_action,
+        }
+    except Exception:  # noqa: BLE001 - provider errors must remain value-free
         return {
             "status": "needs-attention",
             "summary": (
@@ -59,45 +90,55 @@ def _startup_failure_snapshot(error: RuntimeError) -> dict[str, object]:
         "Unlock the login Keychain and rerun this command in a host process "
         "with Keychain access"
     )
+    if isinstance(error, CredentialStoreError):
+        next_action = error.next_action
     return {
         "status": "needs-attention",
+        "installation": _installation_status(),
         "broker": {
             "status": "unavailable",
             "summary": "The encrypted local broker could not be opened",
         },
+        "inventory_status": "unknown",
         "keychain": {
             "status": "needs-attention",
             "summary": message,
             "next_action": next_action,
+            **({"code": error.code, "os_status": error.os_status}
+               if isinstance(error, CredentialStoreError) else {}),
         },
         "next_action": next_action,
         "stored": {
-            "sources": 0,
-            "profile_fields": 0,
-            "profile_groups": 0,
-            "credentials": 0,
-            "financial_records": 0,
-            "agents": 0,
-            "active_grants": 0,
-            "recent_activity": 0,
+            "sources": None,
+            "profile_fields": None,
+            "profile_groups": None,
+            "credentials": None,
+            "financial_records": None,
+            "agents": None,
+            "active_grants": None,
+            "recent_activity": None,
         },
         "sources": {
-            "configured": 0,
-            "ready": 0,
-            "needs_attention": 1,
+            "configured": None,
+            "ready": None,
+            "needs_attention": None,
             "items": [],
         },
-        "agents": {"configured": 0, "revoked": 0},
+        "agents": {"configured": None, "revoked": None},
         "grants": {
-            "active": 0,
-            "expired": 0,
-            "expiring_24h": 0,
-            "invalid_expiry": 0,
-            "revoked": 0,
+            "active": None,
+            "expired": None,
+            "expiring_24h": None,
+            "invalid_expiry": None,
+            "revoked": None,
+        },
+        "form_submission": {
+            "confirmation": "always",
+            "financial_confirmation": "always",
         },
         "attention": [next_action],
         "local_sources": {
-            "chrome_profiles": 0,
+            "chrome_profiles": None,
             "chrome_status": "unknown",
             "messages_status": "unknown",
         },
@@ -111,7 +152,7 @@ def _source_statuses(broker: Broker) -> list[dict[str, str]]:
     unavailable: set[str] = getattr(broker, "unavailable_email_sources", set())
     email_adapters = getattr(broker, "email_adapters", {})
     message_adapters = getattr(broker, "message_adapters", {})
-    for source in broker.list_sources():
+    for source in broker.sources.values():
         source_id = source.get("source_id")
         source_key = str(source_id) if source_id is not None else ""
         kind = source.get("kind", "unknown")
@@ -166,7 +207,7 @@ def _safe_email_match_metadata(matches: object) -> list[dict[str, object]]:
 def _grant_attention(grants: list[dict]) -> dict[str, object]:
     """Count revoked and soon-to-expire grants using only safe metadata."""
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     revoked = 0
     expired = 0
     expiring = 0
@@ -179,7 +220,7 @@ def _grant_attention(grants: list[dict]) -> dict[str, object]:
         try:
             expiry = datetime.fromisoformat(str(raw_expiry))
             if expiry.tzinfo is None:
-                expiry = expiry.replace(tzinfo=timezone.utc)
+                expiry = expiry.replace(tzinfo=UTC)
         except (TypeError, ValueError):
             invalid_expiry += 1
             continue
@@ -199,9 +240,13 @@ def _local_source_snapshot() -> dict[str, object]:
     """Probe optional local source presence without opening provider data."""
 
     try:
-        chrome_count = len(discover_profiles())
-        chrome_status = "available" if chrome_count else "not-found"
-    except Exception:
+        default_profile()
+        chrome_count = 1
+        chrome_status = "available"
+    except ChromeImportError:
+        chrome_count = 0
+        chrome_status = "not-found"
+    except OSError:
         chrome_count = 0
         chrome_status = "unavailable"
     messages_path = Path.home() / "Library" / "Messages" / "chat.db"
@@ -212,23 +257,26 @@ def _local_source_snapshot() -> dict[str, object]:
     }
 
 
-def _status_snapshot(broker: Broker) -> dict[str, object]:
+def _status_snapshot(broker: Broker, task: str = "profile") -> dict[str, object]:
     """Build the shared value-free status projection for CLI commands."""
 
+    if task not in {"profile", "login", "email", "messages"}:
+        raise ValueError("unknown readiness task")
     source_statuses = _source_statuses(broker)
     agents = broker.list_agents()
     grants = broker.list_grants()
     grant_summary = _grant_attention(grants)
     stored = {
         "sources": len(source_statuses),
-        "profile_fields": len(broker.list_profile_fields()),
+        "profile_fields": broker.store.count("profile"),
         "profile_groups": len(broker.list_profile_groups()),
-        "credentials": len(broker.list_credentials()),
-        "financial_records": len(broker.list_financial_records()),
+        "credentials": broker.store.count("credential"),
+        "financial_records": broker.store.count("financial"),
         "agents": len(agents),
         "active_grants": sum(bool(item.get("active")) for item in grants),
         "recent_activity": len(broker.store.audits()[-20:]),
     }
+    submission_policy = get_form_submission_policy(broker)
     attention: list[str] = []
     keychain = _keychain_status(broker)
     if keychain["status"] in {"needs-attention", "unknown"}:
@@ -236,26 +284,28 @@ def _status_snapshot(broker: Broker) -> dict[str, object]:
     attention.extend(
         item["next_action"]
         for item in source_statuses
-        if item["status"] == "needs-attention" and item["next_action"]
+        if item["status"] != "ready" and item["next_action"]
+        and item["kind"] == task
     )
-    if not source_statuses:
+    if task in {"email", "messages"} and not any(
+        item["kind"] == task for item in source_statuses
+    ):
         attention.append(
-            "Run setup to connect a local source, or use profile add for a standalone field"
+            f"Run setup to connect the {task} source needed for this task"
         )
-    if not agents:
+    if not any(not item.get("revoked") for item in agents):
         attention.append(
             "Create an agent identity with agent-create before connecting a consumer"
         )
-    if any(item.get("revoked") for item in agents):
-        attention.append("Review revoked agent identities in the local Inbox")
-    if grant_summary["revoked"] or grant_summary["expired"]:
-        attention.append("Review revoked or expired grants in the local Inbox")
-    if grant_summary["expiring_24h"]:
-        attention.append("Renew grants that expire within 24 hours when access is still needed")
-    if not stored["profile_fields"]:
+    if task == "profile" and not stored["profile_fields"]:
         attention.append("Add a profile field with profile add when a local value is needed")
+    if task == "login" and not stored["credentials"]:
+        attention.append("Add one website credential through the approved local import flow")
     status = "needs-attention" if attention else "ready"
     return {
+        "task": task,
+        "installation": _installation_status(),
+        "readiness_scope": "Local prerequisites only; the task still needs authorized access",
         "status": status,
         "next_action": attention[0]
         if attention
@@ -282,6 +332,7 @@ def _status_snapshot(broker: Broker) -> dict[str, object]:
             **grant_summary,
             "active": stored["active_grants"],
         },
+        "form_submission": submission_policy.to_dict(),
         "attention": attention,
         "local_sources": _local_source_snapshot(),
     }
@@ -298,6 +349,11 @@ def _print_status(
         print(json.dumps(snapshot, indent=2, sort_keys=True))
         return
     print(f"{title}: {snapshot['status']}")
+    installation = snapshot.get("installation")
+    if isinstance(installation, dict):
+        print(f"Installation: {installation['version']} build {installation['build']}")
+        print(f"Package: {installation['package_path']}")
+        print(f"Python: {installation['python_executable']} -> {installation['resolved_python']}")
     print(f"Next action: {snapshot['next_action']}")
     print("Summary is metadata-only; stored values and secrets are omitted.")
     broker = cast(dict[str, Any], snapshot["broker"])
@@ -306,6 +362,9 @@ def _print_status(
     stored = cast(dict[str, Any], snapshot["stored"])
     print(f"Broker: {broker['summary']}")
     print(f"Keychain: {keychain['summary']}")
+    if broker["status"] == "unavailable":
+        print("Inventory: unknown because the broker could not open; saved data was not counted.")
+        return
     print(
         "Sources: "
         f"{sources['configured']} configured, {sources['ready']} ready, "
@@ -318,6 +377,13 @@ def _print_status(
         f"{stored['financial_records']} financial records, "
         f"{stored['agents']} agents, {stored['active_grants']} active grants"
     )
+    policy = cast(dict[str, Any], snapshot.get("form_submission", {}))
+    if policy:
+        print(
+            "Form submission: "
+            f"{policy.get('confirmation', 'always')} confirmation; "
+            "financial confirmation always required"
+        )
     local_sources = cast(dict[str, Any], snapshot["local_sources"])
     print(
         "Local sources: "

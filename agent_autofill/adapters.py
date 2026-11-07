@@ -1,6 +1,7 @@
 """Provider-neutral adapter contracts for real local integrations."""
 
 from typing import Protocol
+
 from .models import EmailMessage, TextMessage
 
 

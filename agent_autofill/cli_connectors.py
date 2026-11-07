@@ -6,12 +6,14 @@ import secrets
 from pathlib import Path
 from typing import Any
 
+from .gmail_adapter import GmailEmailAdapter
 from .google_oauth import (
     GoogleOAuthAuthorizationError,
     GoogleOAuthClient,
     GoogleOAuthConfigurationError,
     GoogleOAuthError,
     GoogleOAuthTokenError,
+    GoogleOAuthTokenProvider,
     authorize_google_desktop,
     oauth_provider_from_keychain_secret,
 )
@@ -19,6 +21,7 @@ from .imap_adapter import IMAPAdapterError, IMAPEmailAdapter
 from .service import Broker
 from .storage import KeyringProvider
 from .thunderbird import verify_profile
+
 
 def _imap_secret_name(db_path: str, account_id: str) -> str:
     """Return a fresh opaque Keychain lookup name for an account replacement."""
@@ -79,7 +82,7 @@ def _save_imap_configuration(
     except Exception as exc:
         try:
             keyring.delete_secret(secret_name)
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 - cleanup must preserve the safe original error
             pass
         raise SystemExit(
             f"Could not save {provider_name} connector secret"
@@ -203,10 +206,10 @@ def _configure_gmail(
     label: str | None = None,
     keyring: KeyringProvider | None = None,
     *,
-    oauth_provider: object | None = None,
+    oauth_provider: GoogleOAuthTokenProvider | None = None,
     authorize_fn=None,
 ) -> dict:
-    """Authorize, verify, and persist a read-only Gmail IMAP source."""
+    """Authorize, verify, and persist a read-only Gmail API source."""
 
     if oauth_provider is None:
         try:
@@ -225,34 +228,25 @@ def _configure_gmail(
         except Exception as exc:
             raise SystemExit("Google OAuth setup failed") from exc
 
-    adapter = IMAPEmailAdapter(
-        account_id,
-        "imap.gmail.com",
-        username,
-        None,
-        993,
-        mailbox,
-        None,
-        oauth_provider,
-    )
+    adapter = GmailEmailAdapter(account_id, username, oauth_provider, mailbox)
     try:
         adapter.check_connection()
     except IMAPAdapterError as exc:
         raise SystemExit(str(exc)) from exc
     except Exception as exc:
-        raise SystemExit("Gmail IMAP connection check failed") from exc
+        raise SystemExit("Gmail connection check failed") from exc
 
     if keyring is None:
         keyring = KeyringProvider()
     source_label = label or account_id
     config = {
         "source_id": account_id,
-        "kind": "imap",
+        "kind": "gmail",
         "auth_kind": "google_oauth",
         "label": source_label,
-        "host": "imap.gmail.com",
+        "host": "gmail.googleapis.com",
         "username": username,
-        "port": 993,
+        "port": 443,
         "mailbox": mailbox,
         "secret_name": _imap_secret_name(db_path, account_id),
     }
@@ -269,9 +263,49 @@ def _configure_gmail(
     )
 
 
+def _reconnect_gmail(
+    broker: Broker,
+    db_path: str,
+    account_id: str,
+    keyring: KeyringProvider,
+    *,
+    authorize_fn=None,
+) -> dict:
+    """Renew one saved Google source without exporting its client credentials."""
+
+    config = broker.store.get("connection", account_id)
+    if (
+        not config
+        or config.get("kind") not in {"imap", "gmail"}
+        or config.get("auth_kind") != "google_oauth"
+        or not config.get("secret_name")
+    ):
+        raise SystemExit("This source is not a saved Google OAuth email connector")
+    try:
+        saved = keyring.get_secret(config["secret_name"])
+        provider = oauth_provider_from_keychain_secret(saved)
+        if type(provider) is not GoogleOAuthTokenProvider:
+            raise ValueError("Unsupported provider")
+        client = GoogleOAuthClient(provider.client_id, provider.client_secret)
+    except Exception as exc:
+        raise SystemExit("Saved Google OAuth client is unavailable") from exc
+    try:
+        renewed = (authorize_fn or authorize_google_desktop)(client)
+    except Exception as exc:
+        raise SystemExit("Google authorization failed; saved connection was preserved") from exc
+    # The existing setup flow verifies account identity and mailbox before
+    # replacing the connection. Its scope is Gmail read-only, including when
+    # migrating an older IMAP connector with full-mail OAuth permission.
+    return _configure_gmail(
+        broker, db_path, account_id, config["username"], "",
+        mailbox=config.get("mailbox", "INBOX"),
+        label=config.get("label"), keyring=keyring, oauth_provider=renewed,
+    )
+
+
 def _test_saved_imap(broker: Broker, account_id: str, keyring: KeyringProvider) -> dict:
     config = broker.store.get("connection", account_id)
-    if not config or config.get("kind") != "imap":
+    if not config or config.get("kind") not in {"imap", "gmail"}:
         raise SystemExit(f"No saved IMAP source named {account_id}")
     secret_name = config.get("secret_name")
     if not secret_name:
@@ -293,16 +327,13 @@ def _test_saved_imap(broker: Broker, account_id: str, keyring: KeyringProvider) 
             provider = oauth_provider_from_keychain_secret(
                 secret, on_refresh=lambda value: keyring.set_secret(secret_name, value)
             )
-            adapter = IMAPEmailAdapter(
-                source_id,
-                host,
-                username,
-                None,
-                port,
-                mailbox,
-                None,
-                provider,
-            )
+            adapter: IMAPEmailAdapter | GmailEmailAdapter
+            if config.get("kind") == "gmail":
+                adapter = GmailEmailAdapter(source_id, username, provider, mailbox)
+            else:
+                adapter = IMAPEmailAdapter(
+                    source_id, host, username, None, port, mailbox, None, provider,
+                )
         else:
             value = secret.decode()
             adapter = _imap_adapter(

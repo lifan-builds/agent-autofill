@@ -1,14 +1,83 @@
+import io
+import json
+from datetime import UTC
+from types import SimpleNamespace
+
 import pytest
-from agent_autofill.server import TOOLS
-from agent_autofill.server import _call
+
+from agent_autofill import server
+from agent_autofill.server import TOOLS, _call
 from agent_autofill.service import Broker, BrokerError
 from agent_autofill.storage import Store
+
+
+@pytest.mark.parametrize("bad_request", [
+    "not json",
+    "null",
+    "[]",
+    '{"id": [], "method": "tools/list"}',
+    '{"id": 1, "method": []}',
+    '{"id": 1, "method": "tools/list", "params": []}',
+    '{"id": 1, "method": "tools/call", "params": {"name": []}}',
+    '{"id": 1, "method": "tools/call", "params": {"name": "list_sources", "arguments": []}}',
+])
+def test_server_recovers_after_malformed_requests(bad_request, monkeypatch, capsys):
+    broker = Broker(Store(":memory:", key=b"j" * 32))
+    connection = SimpleNamespace(broker=broker, keyring=None, close=broker.store.db.close)
+    monkeypatch.setattr(server, "connect_service", lambda *_args: connection)
+    monkeypatch.setattr(server.sys, "stdin", io.StringIO(
+        bad_request + '\n{"id": 2, "method": "tools/list"}\n'
+    ))
+
+    server.main(["--service", "synthetic-test"])
+
+    captured = capsys.readouterr()
+    replies = [json.loads(line) for line in captured.out.splitlines()]
+    assert len(replies) == 2
+    assert "error" in replies[0]
+    assert replies[1]["id"] == 2
+    assert replies[1]["result"]["tools"]
+    assert not captured.err
+
+
+@pytest.mark.parametrize("auth_failure", [False, True])
+def test_server_redacts_unexpected_backend_errors_and_continues(monkeypatch, capsys, auth_failure):
+    broker = Broker(Store(":memory:", key=b"j" * 32))
+    connection = SimpleNamespace(broker=broker, keyring=None, close=broker.store.db.close)
+
+    def fail():
+        error_type = server.IMAPAuthenticationError if auth_failure else RuntimeError
+        raise error_type("synthetic-password-and-provider-response")
+
+    monkeypatch.setattr(broker, "list_sources", fail)
+    monkeypatch.setattr(server, "connect_service", lambda *_args: connection)
+    monkeypatch.setattr(server.sys, "stdin", io.StringIO(
+        '{"id": 1, "method": "list_sources"}\n'
+        '{"id": 2, "method": "tools/list"}\n'
+    ))
+    connection.agent_id = "synthetic-test"
+    connection.token = None
+
+    server.main(["--service", "synthetic-test"])
+
+    captured = capsys.readouterr()
+    replies = [json.loads(line) for line in captured.out.splitlines()]
+    message = replies[0]["error"]["message"]
+    if auth_failure:
+        assert "Email authentication failed" in message
+        assert "email-test" in message
+    else:
+        assert message == "Request failed; backend details were withheld"
+    assert "synthetic-password" not in captured.out + captured.err
+    assert replies[1]["result"]["tools"]
+    assert not captured.err
 
 
 def test_mcp_tool_catalog_has_information_only_surface():
     names = {tool["name"] for tool in TOOLS}
     assert {
         "request_profile_fields",
+        "match_form_fields",
         "list_profile_groups",
         "match_credentials",
         "search_email",
@@ -23,9 +92,10 @@ def test_mcp_tool_catalog_has_information_only_surface():
         "request_credential_fields",
         "request_credential",
         "request_financial_fields",
+        "record_form_mapping_feedback",
     } <= names
     assert not {"get_password", "send_message", "submit_form"} & names
-    for name in {"request_credential_fields", "request_financial_fields"}:
+    for name in ("request_credential_fields", "request_financial_fields"):
         schema = next(tool["inputSchema"] for tool in TOOLS if tool["name"] == name)
         assert "confirmed" not in schema["properties"]
     unified = next(tool["inputSchema"] for tool in TOOLS if tool["name"] == "request_credential")
@@ -37,6 +107,23 @@ def test_mcp_tool_catalog_has_information_only_surface():
         if tool["name"] == "request_verification_link_for_recipient"
     )
     assert link_schema["required"] == ["recipient", "target_origin", "purpose"]
+    otp_schema = next(
+        tool["inputSchema"] for tool in TOOLS if tool["name"] == "request_auth_code"
+    )
+    assert otp_schema["properties"]["origin_policy"] == {
+        "type": "string",
+        "enum": ["target-origin", "mailbox-read"],
+        "default": "target-origin",
+    }
+    feedback_schema = next(
+        tool["inputSchema"]
+        for tool in TOOLS
+        if tool["name"] == "record_form_mapping_feedback"
+    )
+    assert feedback_schema["properties"]["confirmed"] == {
+        "type": "boolean",
+        "const": True,
+    }
 
 
 def test_transport_requires_agent_token_for_data_tools():
@@ -92,6 +179,27 @@ def test_bound_local_service_uses_its_keychain_identity_without_request_credenti
     )
 
     assert result["name"]["value"] == "Ada"
+
+
+def test_transport_records_confirmed_value_free_mapping_feedback():
+    broker = Broker(Store(":memory:", key=b"b" * 32))
+    broker.put_profile("email", "contact", "Email", "ada@example.test")
+    token = broker.create_agent("codex")
+    result = _call(
+        broker,
+        "record_form_mapping_feedback",
+        {
+            "agent_id": "codex",
+            "agent_token": token,
+            "target_origin": "https://example.test",
+            "purpose": "signup",
+            "field_label": "Email",
+            "selected_field_ids": ["email"],
+            "confirmed": True,
+        },
+    )
+    assert result["status"] == "stored"
+    assert "ada@example.test" not in str(result)
 
 
 def test_transport_matches_credentials_with_auth_and_never_returns_password():
@@ -190,7 +298,8 @@ def test_transport_dispatches_unified_direct_and_extension_with_authentication()
 
 
 def test_transport_dispatches_email_matching_and_scoped_verification_link():
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     from agent_autofill.models import EmailMessage
 
     broker = Broker(Store(":memory:", key=b"v" * 32))
@@ -207,7 +316,7 @@ def test_transport_dispatches_email_matching_and_scoped_verification_link():
             "no-reply@auth.example.test",
             "Verify",
             "https://auth.example.test/verify?token=synthetic-link-token",
-            datetime.now(timezone.utc).isoformat(),
+            datetime.now(UTC).isoformat(),
         )
     ]
     token = broker.create_agent("codex")

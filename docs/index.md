@@ -10,8 +10,9 @@ organized around the moment you are in, so you can start small and add sources
 when a real task needs them.
 
 > [!IMPORTANT]
-> Agent Autofill returns information. The acting agent or user owns browser
-> navigation, form submission, and post-action verification.
+> Agent Autofill returns scoped information and the local submission policy.
+> The acting agent owns browser navigation and must obtain fresh confirmation
+> immediately before submitting; financial information always requires it.
 
 ## Pick a path
 
@@ -23,18 +24,28 @@ when a real task needs them.
 </tr>
 </table>
 
+## See the product before installing
+
+Open the [interactive synthetic demo](demo/index.html) to walk through the
+macOS-first flow: value-free inventory, exact request, human approval,
+origin-bound delivery, and revocation. It never reads local files or sends a
+network request.
+
 ## Guides at a glance
 
 | Guide | Use it for | What you will leave with |
 | --- | --- | --- |
 | [Getting started](getting-started.md) | First install and first review | A value-free inventory and a clear next action |
-| [Chrome seed onboarding](chrome-seed-onboarding.md) | Bootstrap profile data from Chrome | A reviewed seed proposal with human-resolved ambiguities |
+| [Chrome seed onboarding](chrome-seed-onboarding.md) | Bootstrap autofill data and optionally saved passwords from Chrome | A reviewed seed proposal plus an opt-in local credential sync |
 | [Access modes](access-modes.md) | Credential and form workflows | A deliberate direct or extension handoff |
 | [CLI cookbook](cli.md) | Daily operation | Safe status, source, grant, and server commands |
 | [Troubleshooting](troubleshooting.md) | Recovery | A diagnosis and an exact retry path |
 | [Operator guide](agent-autofill.md) | Full connector and MCP reference | Detailed setup, scopes, and compatibility notes |
 | [Extension guide](../browser_extension/README.md) | Optional Chrome handoff | A one-time, origin-bound local fill |
-| [Evaluation set](../evals/form_filling/README.md) | Regression scenarios | Repeatable form-filling checks without submission |
+| [Evaluation set](../evals/form_filling/README.md) | Regression scenarios | Repeatable form-filling checks with explicit submission gates |
+| [GTM and competitive brief](gtm.md) | Launch planning | Direct competitors, open-source building blocks, positioning, and gaps |
+| [Support matrix](support-matrix.md) | Product coverage | macOS-first support and coming-soon platforms |
+| [Integration examples](examples/README.md) | MCP/JSON-lines clients | Metadata-only Python and JavaScript starting points |
 
 ## The product in one picture
 
@@ -44,8 +55,8 @@ when a real task needs them.
 
 The first five steps are Agent Autofill's information path. The dashboard only
 shows the safe inventory; the agent uses the CLI/MCP path for the request. The
-last step is deliberately outside the broker: an agent or user decides whether
-to type, submit, or stop after reviewing the page.
+last step is deliberately outside the broker: the acting agent decides whether
+to type, submit, or stop after applying the confirmation policy.
 
 ## Reference and contributor docs
 

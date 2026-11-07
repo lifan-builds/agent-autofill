@@ -5,7 +5,7 @@ import io
 import json
 import sqlite3
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -14,7 +14,6 @@ from agent_autofill import cli, server
 from agent_autofill.models import EmailMessage
 from agent_autofill.service import Broker
 from agent_autofill.storage import Store
-
 
 FIELD_ID = "autofill:" + hashlib.sha256(b"First name").hexdigest()[:20]
 ORIGIN = "https://example.com"
@@ -68,7 +67,7 @@ def first_run(tmp_path, monkeypatch, capsys):
             db.close()
 
     keyring = FixtureKeyring()
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     state = SimpleNamespace(
         path=tmp_path / "broker.sqlite3",
         keyring=keyring,
@@ -256,13 +255,13 @@ def test_setup_to_json_lines_reads_and_persisted_otp_consumption(
             "received_at": state.messages[1].received_at,
         },
     }
-    assert responses[4]["error"]["message"] == "authentication code already consumed"
+    assert responses[4]["error"]["reason"] == "otp_consumed"
     assert OTP not in json.dumps(responses[:3] + responses[4:])
     assert state.searches == [(1, "Welcome", 20)]
-    assert state.recent_calls == [(1, 300), (1, 300)]
+    assert state.recent_calls == [(1, 900), (1, 900)]
     replay = _serve(state, monkeypatch, capsys, otp)[0]
-    assert replay["error"]["message"] == "authentication code already consumed"
-    assert state.recent_calls[-1] == (2, 300)
+    assert replay["error"]["reason"] == "otp_consumed"
+    assert state.recent_calls[-1] == (2, 900)
 
     store = Store(state.path, key_provider=state.keyring, key_name=str(state.path))
     try:
@@ -279,7 +278,7 @@ def test_setup_to_json_lines_reads_and_persisted_otp_consumption(
         } == {
             ("profile.read", FIELD_ID, ORIGIN, "login"),
             ("email.search", "personal", None, None),
-            ("email.otp", "personal", ORIGIN, "login"),
+            ("email.otp", "personal", None, None),
         }
         assert {
             datetime.fromisoformat(grant["expires_at"])
@@ -350,20 +349,6 @@ def test_setup_to_json_lines_reads_and_persisted_otp_consumption(
             {"account_id": "other", "target_origin": ORIGIN, "purpose": "login"},
             "AuthorizationError",
         ),
-        (
-            "request_auth_code",
-            {
-                "account_id": "personal",
-                "target_origin": "https://other.test",
-                "purpose": "login",
-            },
-            "AuthorizationError",
-        ),
-        (
-            "request_auth_code",
-            {"account_id": "personal", "target_origin": ORIGIN, "purpose": "other"},
-            "AuthorizationError",
-        ),
     ],
 )
 def test_first_run_refuses_unapproved_requests(
@@ -391,7 +376,7 @@ def test_first_run_otp_refusals(first_run, monkeypatch, capsys, mode):
                     key = grant.pop("grant_id")
                     grant.pop("active")
                     grant["expires_at"] = (
-                        datetime.now(timezone.utc) - timedelta(seconds=1)
+                        datetime.now(UTC) - timedelta(seconds=1)
                     ).isoformat()
                     store.put("grant", key, grant)
         finally:
@@ -399,7 +384,7 @@ def test_first_run_otp_refusals(first_run, monkeypatch, capsys, mode):
     elif mode == "stale":
         state.messages[1] = replace(
             state.messages[1],
-            received_at=(datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+            received_at=(datetime.now(UTC) - timedelta(hours=1)).isoformat(),
         )
     else:
         state.messages.append(replace(state.messages[1], message_id="another-code"))
@@ -411,6 +396,7 @@ def test_first_run_otp_refusals(first_run, monkeypatch, capsys, mode):
         purpose="login",
     )
     response = _serve(state, monkeypatch, capsys, request)[0]
-    expected = "AuthorizationError" if mode == "expired" else "BrokerError"
+    expected = ("AuthorizationError" if mode == "expired" else
+                "AuthCodeError" if mode in {"stale", "ambiguous"} else "BrokerError")
     assert response["error"]["type"] == expected
     assert OTP not in json.dumps(response)

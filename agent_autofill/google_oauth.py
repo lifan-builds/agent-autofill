@@ -1,4 +1,4 @@
-"""Google installed-app OAuth for the read-only Gmail IMAP adapter.
+"""Google installed-app OAuth for read-only Gmail access.
 
 The module deliberately owns only the OAuth boundary.  It opens a short-lived
 loopback callback listener, validates the authorization response, exchanges a
@@ -13,25 +13,25 @@ application client JSON downloaded from their own Google Cloud project.
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass, field
 import hashlib
 import http.server
 import json
 import secrets
 import threading
 import time
+import webbrowser
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import Request, urlopen
-import webbrowser
-
 
 AUTHORIZATION_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 MICROSOFT_TOKEN_ENDPOINT = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
-GMAIL_SCOPE = "https://mail.google.com/"
+GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 LOOPBACK_HOST = "127.0.0.1"
 # Desktop clients use the loopback redirect URI at the root path.  Keeping the
 # path fixed (rather than accepting arbitrary local URLs) also avoids a
@@ -67,7 +67,7 @@ class GoogleOAuthClient:
     client_secret: str | None = field(default=None, repr=False)
 
     @classmethod
-    def from_json(cls, value: Mapping[str, Any] | str | bytes) -> "GoogleOAuthClient":
+    def from_json(cls, value: Mapping[str, Any] | str | bytes) -> GoogleOAuthClient:
         """Parse a Google Desktop client payload without retaining extra fields."""
 
         if isinstance(value, (str, bytes)):
@@ -99,7 +99,7 @@ class GoogleOAuthClient:
         return cls(client_id.strip(), client_secret or None)
 
     @classmethod
-    def from_file(cls, path: str | Path) -> "GoogleOAuthClient":
+    def from_file(cls, path: str | Path) -> GoogleOAuthClient:
         """Read and validate a user-supplied Desktop client JSON file."""
 
         try:
@@ -109,11 +109,6 @@ class GoogleOAuthClient:
                 "Could not read Google OAuth client JSON"
             ) from exc
         return cls.from_json(raw)
-
-    # Friendly aliases make the boundary easy to use from CLI tests and small
-    # integrations without exposing the original Google JSON object.
-    load = from_file
-    load_file = from_file
 
 
 @dataclass(frozen=True)
@@ -245,7 +240,7 @@ class GoogleOAuthTokenProvider:
         http_post: HttpPost | None = None,
         token_endpoint: str = TOKEN_ENDPOINT,
         clock: Callable[[], float] | None = None,
-    ) -> "GoogleOAuthTokenProvider":
+    ) -> GoogleOAuthTokenProvider:
         decoded = _safe_response_json(response)
         access_token = _access_token(decoded)
         refresh_token = decoded.get("refresh_token")
@@ -274,7 +269,7 @@ class GoogleOAuthTokenProvider:
         token_endpoint: str | None = None,
         clock: Callable[[], float] | None = None,
         on_refresh: Callable[[bytes], None] | None = None,
-    ) -> "GoogleOAuthTokenProvider":
+    ) -> GoogleOAuthTokenProvider:
         """Reconstruct a provider from the versioned, secret-store payload."""
 
         if isinstance(value, bytes):
@@ -325,11 +320,6 @@ class GoogleOAuthTokenProvider:
             clock=clock,
             on_refresh=on_refresh,
         )
-
-    # ``from_secret`` is useful at the server/CLI boundary and preserves the
-    # fact that the value is a Keychain payload rather than an access token.
-    from_secret = from_keychain_secret
-    from_keychain = from_keychain_secret
 
     def keychain_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -542,7 +532,7 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
-    def do_GET(self) -> None:  # noqa: N802 - stdlib handler hook
+    def do_GET(self) -> None:
         parsed = urlsplit(self.path)
         if parsed.path != self.server.callback_path:
             self._reply(404, "<html><body>Not found.</body></html>")
@@ -694,6 +684,7 @@ __all__ = [
     "AUTHORIZATION_ENDPOINT",
     "CALLBACK_PATH",
     "GMAIL_SCOPE",
+    "TOKEN_ENDPOINT",
     "GoogleOAuthAuthorizationError",
     "GoogleOAuthClient",
     "GoogleOAuthConfigurationError",
@@ -702,7 +693,6 @@ __all__ = [
     "GoogleOAuthTokenError",
     "GoogleOAuthTokenProvider",
     "MicrosoftOAuthTokenProvider",
-    "TOKEN_ENDPOINT",
     "authorize",
     "authorize_google_desktop",
     "authorize_installed_app",

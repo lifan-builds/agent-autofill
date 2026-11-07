@@ -3,7 +3,13 @@ import json
 
 import pytest
 
-from agent_autofill.fill_server import _json_response, consume_payload, serve
+from agent_autofill.fill_server import (
+    _json_response,
+    consume_payload,
+    pair_browser,
+    pending_payload,
+    serve,
+)
 from agent_autofill.service import Broker
 from agent_autofill.storage import Store
 
@@ -133,3 +139,68 @@ def test_fill_server_response_is_no_store_and_scoped_to_extension_origin():
         == "chrome-extension://fixture"
     )
     assert json.loads(response.wfile.getvalue())["password"] == "synthetic-password"
+
+
+def test_paired_discovery_requires_session_agent_and_matching_site():
+    broker, handle = _fill_fixture()
+    broker.create_agent("fill-helper")
+    extension_id = "a" * 32
+    token = "b" * 64
+    origin = "chrome-extension://" + extension_id
+    payload = json.dumps({"pairing_token": token, "target_origin": "https://example.test"}).encode()
+    assert pending_payload(broker, payload, origin)[0] == 403
+    pair_browser(broker, "fill-helper", extension_id, token)
+    assert pending_payload(broker, payload, "https://evil.test")[0] == 403
+    wrong_token = json.dumps({"pairing_token": "c" * 64, "target_origin": "https://example.test"}).encode()
+    assert pending_payload(broker, wrong_token, origin)[0] == 403
+    wrong_site = json.dumps({"pairing_token": token, "target_origin": "https://evil.test"}).encode()
+    assert pending_payload(broker, wrong_site, origin) == (200, {"requests": []})
+    status, body = pending_payload(broker, payload, origin)
+    assert status == 200 and body["requests"][0]["handle"] == handle
+    assert body["requests"][0]["label"] == "Example"
+    assert "synthetic-password" not in json.dumps(body)
+    assert token not in str(broker.store.get("browser-pairing", extension_id))
+    broker.revoke_agent("fill-helper")
+    assert pending_payload(broker, payload, origin)[0] == 403
+    status, body = consume_payload(broker, json.dumps({
+        "handle": handle, "agent_id": "fill-helper", "target_origin": "https://example.test",
+    }).encode())
+    assert status == 403
+    assert "synthetic-password" not in str(body)
+
+
+def test_pairing_expiry_and_handle_consumption_remove_pending_requests():
+    from datetime import UTC, datetime, timedelta
+
+    broker, handle = _fill_fixture()
+    broker.create_agent("fill-helper")
+    extension_id, token = "a" * 32, "b" * 64
+    origin = "chrome-extension://" + extension_id
+    pair_browser(broker, "fill-helper", extension_id, token)
+    payload = json.dumps({"pairing_token": token, "target_origin": "https://example.test"}).encode()
+    broker.consume_credential_handle(handle, "fill-helper", "https://example.test")
+    assert pending_payload(broker, payload, origin) == (200, {"requests": []})
+    pairing = broker.store.get("browser-pairing", extension_id)
+    pairing["expires_at"] = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+    broker.store.put("browser-pairing", extension_id, pairing)
+    assert pending_payload(broker, payload, origin)[0] == 403
+    assert handle not in json.dumps(broker.store.audits())
+
+
+def test_scope_changes_block_pending_discovery_and_consumption():
+    broker, handle = _fill_fixture()
+    broker.create_agent("fill-helper")
+    extension_id, token = "a" * 32, "b" * 64
+    pair_browser(broker, "fill-helper", extension_id, token)
+    credential = broker.store.get("credential", "example-login")
+    credential["allowed_purposes"] = ["different purpose"]
+    broker.store.put("credential", "example-login", credential)
+    payload = json.dumps({"pairing_token": token, "target_origin": "https://example.test"}).encode()
+    assert pending_payload(broker, payload, "chrome-extension://" + extension_id) == (
+        200, {"requests": []},
+    )
+    status, body = consume_payload(broker, json.dumps({
+        "handle": handle, "agent_id": "fill-helper", "target_origin": "https://example.test",
+    }).encode())
+    assert status == 403
+    assert "synthetic-password" not in str(body)

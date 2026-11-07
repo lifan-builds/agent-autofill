@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Review your details · Agent Autofill</title>
+  <link rel="stylesheet" href="/review.css"><script src="/review.js" defer></script>
+</head>
+<body>
+  <header class="topbar"><a class="brand" href="/" aria-label="Agent Autofill review"><span class="brand-icon">a</span> Agent Autofill <span class="brand-separator">/</span> <span class="brand-page">Review</span></a><span class="private-pill"><span class="dot"></span> On your device</span></header>
+  <main>
+    <div class="trial-banner"><strong>A safe place to try it.</strong> You’re reviewing an isolated copy. Saved meanings stay in this trial; your live vault is unchanged.</div>
+    <section class="intro"><div class="eyebrow">LET’S START WITH WHAT YOU KNOW</div><h1>Your details, <span>with context.</span></h1><p>Confirm a few meanings now. Your agent can ask about the rest when it needs them.</p><div id="stats" class="stats" aria-live="polite">Opening your private review…</div></section>
+    <section class="task-section" aria-labelledby="task-title"><div class="section-heading"><h2 id="task-title">What would you like to do first?</h2><span>Choose where to start</span></div><div class="task-grid" role="group" aria-label="Choose a task"><button class="task active" data-task="delivery" aria-pressed="true"><span class="task-icon">↗</span><strong>Prepare a delivery</strong><span>Recognize your address groups</span></button><button class="task" data-task="contact" aria-pressed="false"><span class="task-icon">＠</span><strong>Fill contact details</strong><span>Separate personal and work details</span></button><button class="task" data-task="all" aria-pressed="false"><span class="task-icon">≡</span><strong>Review everything</strong><span>Take a look through all saved groups</span></button></div></section>
+    <section class="review-section" aria-labelledby="review-title"><div class="section-heading"><h2 id="review-title">Give these details some context</h2><button id="show-reviewed" class="text-button">Include reviewed groups</button></div><p class="section-note">Choose a shortcut or edit the meaning. Nothing is saved until you review and confirm.</p>
+      <details class="bulk"><summary>Have several answers? Describe them together <span>↵</span></summary><label for="bulk-input">Use the letters on the cards. For example: A is my current home; B is my current office; C is my old address.</label><textarea id="bulk-input" rows="2" placeholder="A is my current home; B is my current office"></textarea><div class="bulk-bottom"><span>Supported descriptions only. Unclear instructions are left for review.</span><button id="apply-bulk" class="secondary">Draft these meanings</button></div><p id="bulk-message" role="status"></p></details>
+      <div id="message" class="message" role="status" aria-live="polite"></div><div id="cards" class="cards" aria-live="polite"></div><button id="show-more" class="secondary show-more" hidden>Show more groups</button>
+    </section>
+    <section class="boundary"><span class="boundary-icon">✓</span><div><h2>A meaning is not a default</h2><p>“My current home” helps your agent understand this group. It does not choose it for every delivery, confirm a billing address, merge people, or give a website access. Those decisions stay separate.</p></div></section>
+    <footer class="page-footer">Agent Autofill · Private, local, and yours.<span id="source-label"></span></footer>
+  </main>
+  <div class="save-bar"><div><strong id="draft-count">No changes drafted</strong><span id="draft-hint">Start with one group. You can skip the rest.</span></div><div class="save-actions"><button id="clear-drafts" class="text-button" hidden>Clear drafts</button><button id="review-changes" class="primary" disabled>Review changes <span>→</span></button></div></div>
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title"><div class="dialog-top"><div><div class="eyebrow">ONE LAST LOOK</div><h2 id="confirm-title">Save these meanings?</h2></div><button id="close-dialog" class="icon-button" aria-label="Close confirmation">×</button></div><p class="dialog-explainer">Only the meanings below will change in your trial. Saved values, access permissions and defaults stay the same.</p><div id="confirmation-list"></div><p id="save-error" class="error" role="alert"></p><div class="dialog-bottom"><button id="back-to-edit" class="secondary">Back to editing</button><button id="confirm-save" class="primary">Save meanings</button></div></dialog>
+</body>
+</html>

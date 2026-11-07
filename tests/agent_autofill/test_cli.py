@@ -1,4 +1,6 @@
+import json
 from datetime import datetime
+from typing import ClassVar
 
 import pytest
 
@@ -25,7 +27,7 @@ class MemoryKeyring:
 
 
 class FakeAdapter:
-    instances: list["FakeAdapter"] = []
+    instances: ClassVar[list["FakeAdapter"]] = []
     check_error = None
 
     def __init__(self, *args):
@@ -628,7 +630,7 @@ def test_email_test_reconnects_saved_secret_without_returning_it(monkeypatch):
 
 
 def test_configure_gmail_verifies_before_saving_refresh_state(monkeypatch, tmp_path):
-    monkeypatch.setattr(cli, "IMAPEmailAdapter", FakeAdapter)
+    monkeypatch.setattr(cli._connector_flows, "GmailEmailAdapter", FakeAdapter)
     FakeAdapter.instances = []
     FakeAdapter.check_error = None
     client_path = tmp_path / "desktop-client.json"
@@ -650,13 +652,56 @@ def test_configure_gmail_verifies_before_saving_refresh_state(monkeypatch, tmp_p
     )
 
     assert config["auth_kind"] == "google_oauth"
-    assert config["host"] == "imap.gmail.com"
+    assert config["host"] == "gmail.googleapis.com"
+    assert config["kind"] == "gmail"
     assert len(FakeAdapter.instances) == 1
-    assert FakeAdapter.instances[0].args[-1] is provider
+    assert FakeAdapter.instances[0].args[2] is provider
     saved = keyring.values[config["secret_name"]]
     assert b"refresh-token-fixture" in saved
     assert b"access-token-fixture" not in saved
     assert broker.store.get("connection", "personal") == config
+
+
+@pytest.mark.parametrize("failure", [None, "authorization", "identity"])
+def test_reconnect_gmail_preserves_old_source_until_verified(monkeypatch, tmp_path, failure):
+    flows = cli._connector_flows
+    broker = _broker()
+    keyring = MemoryKeyring()
+    old = {"kind": "imap", "auth_kind": "google_oauth", "secret_name": "old",
+           "username": "user@gmail.test", "mailbox": "INBOX", "label": "Personal"}
+    broker.store.put("connection", "personal", old)
+    keyring.set_secret("old", FakeOAuthProvider().to_keychain_secret())
+    monkeypatch.setattr(flows, "GmailEmailAdapter", FakeAdapter)
+    monkeypatch.setattr(FakeAdapter, "check_error",
+                        IMAPAuthenticationError("different account") if failure == "identity" else None)
+    def authorize(client):
+        assert client.client_id == "client-id"
+        assert broker.store.get("connection", "personal") == old
+        if failure == "authorization":
+            raise RuntimeError("synthetic-private-provider-response")
+        return FakeOAuthProvider()
+    if failure:
+        with pytest.raises(SystemExit) as caught:
+            flows._reconnect_gmail(broker, str(tmp_path / "broker.sqlite"), "personal", keyring,
+                                   authorize_fn=authorize)
+        assert "synthetic-private" not in str(caught.value)
+        assert broker.store.get("connection", "personal") == old
+        assert list(keyring.values) == ["old"]
+    else:
+        result = flows._reconnect_gmail(broker, str(tmp_path / "broker.sqlite"), "personal", keyring,
+                                       authorize_fn=authorize)
+        assert result["kind"] == "gmail"
+        assert result["username"] == old["username"]
+        assert result["mailbox"] == "INBOX"
+        assert result["label"] == "Personal"
+        assert "old" not in keyring.values
+
+
+def test_reconnect_gmail_rejects_other_connectors():
+    broker = _broker()
+    broker.store.put("connection", "other", {"kind": "imap", "auth_kind": "microsoft_oauth"})
+    with pytest.raises(SystemExit, match="not a saved Google"):
+        cli._connector_flows._reconnect_gmail(broker, "unused", "other", MemoryKeyring())
 
 
 def test_configure_gmail_authorization_failure_does_not_save(monkeypatch, tmp_path):
@@ -741,8 +786,8 @@ def test_setup_grant_proposal_is_exact_and_value_free():
         {
             "operation": "email.otp",
             "resource_scope": "personal",
-            "target_origin": "https://example.test",
-            "purpose": "checkout",
+            "target_origin": None,
+            "purpose": None,
             "expires_in_seconds": 600,
         },
     ]
@@ -917,7 +962,7 @@ def test_setup_rejects_multiple_or_unknown_email_accounts_before_writing(
         (["y", "", ""], None),
         (["y", "first_name", "", "example.test", "form", "y"], "profile.read"),
         (["y", "", "personal", "y", "n", "y"], "email.search"),
-        (["y", "", "personal", "n", "y", "example.test", "login", "y"], "email.otp"),
+        (["y", "", "personal", "n", "y", "y"], "email.otp"),
     ],
 )
 def test_setup_grants_are_independently_optional(monkeypatch, answers, operation):
@@ -946,16 +991,9 @@ def test_setup_grants_are_independently_optional(monkeypatch, answers, operation
             "target_origin": "",
             "purpose": "checkout",
         },
-        {
-            "profile_field_ids": [],
-            "email_account_id": "personal",
-            "include_email_otp": True,
-            "target_origin": "https://example.test",
-            "purpose": "",
-        },
     ],
 )
-def test_setup_requires_origin_and_purpose_for_profile_or_otp_scopes(proposal_args):
+def test_setup_requires_origin_and_purpose_for_profile_scopes(proposal_args):
     broker = _setup_grant_broker()
 
     with pytest.raises(SystemExit, match="required"):
@@ -1199,3 +1237,54 @@ def test_site_grant_parser_exposes_site_and_password_manager_commands():
         ]
     )
     assert password_manager.preview is True
+
+
+def test_mcp_install_prints_and_writes_client_config(monkeypatch, tmp_path, capsys):
+    config_file = tmp_path / "mcp.json"
+    assert (
+        cli.main(
+            [
+                "mcp-install",
+                "--client",
+                "cursor",
+                "--config-path",
+                str(config_file),
+            ]
+        )
+        == 0
+    )
+    preview = json.loads(capsys.readouterr().out)
+    assert preview["written"] is False
+    assert preview["mcpServers"]["agent-autofill"]["args"] == ["--service", "cursor"]
+    assert not config_file.exists()
+
+    class DummyConn:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        "agent_autofill.local.connect_service", lambda *_a, **_k: DummyConn()
+    )
+    assert (
+        cli.main(
+            [
+                "mcp-install",
+                "--client",
+                "cursor",
+                "--config-path",
+                str(config_file),
+                "--write",
+            ]
+        )
+        == 0
+    )
+    written = json.loads(capsys.readouterr().out)
+    assert written["written"] is True
+    saved = json.loads(config_file.read_text(encoding="utf-8"))
+    assert saved["mcpServers"]["agent-autofill"]["command"] == "agent-autofill-server"
+
+
+def test_default_setup_profile_accepts_explicit_numbered_profile(tmp_path):
+    profile1 = tmp_path / "Profile 1"
+    profile1.mkdir()
+    assert cli._default_setup_profile(str(profile1)) == str(profile1)

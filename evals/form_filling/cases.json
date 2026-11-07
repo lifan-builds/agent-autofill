@@ -99,5 +99,316 @@
       "refusal_signal": "Wrong origin, replay, expiry, or field_ids are rejected"
     },
     "data_policy": "synthetic in-memory broker fixture; handles and raw values never enter the run record"
+  },
+  {
+    "case_id": "FF-007",
+    "title": "Real-data account sign-up matrix",
+    "kind": "real_data_no_submit",
+    "urls": [
+      "https://app.notion.com/signup",
+      "https://www.spotify.com/us/signup",
+      "https://www.figma.com/signup"
+    ],
+    "steps": [
+      "Approve these exact origins and the saved email category once before the run",
+      "Retrieve only the selected saved email field",
+      "Fill each visible email field without activating Continue, Next, or a social-login control",
+      "Clear the fields and record labels, validation state, and mapping gaps"
+    ],
+    "expected": {
+      "success_signal": "The saved email is visible in each form and the page remains on sign-up",
+      "stop_signal": "No account, password, CAPTCHA, or submit step is reached"
+    },
+    "data_policy": "user-approved saved email only; no password, OTP, financial value, or submission"
+  },
+  {
+    "case_id": "FF-008",
+    "title": "Real-data education registration",
+    "kind": "real_data_no_submit",
+    "url": "https://authn.edx.org/register",
+    "steps": [
+      "Approve the origin and saved name/email categories once before the run",
+      "Fill Full name and Email from selected saved fields",
+      "Leave Public username, Password, marketing consent, and Country/Region unchanged",
+      "Stop before Create an account for free"
+    ],
+    "expected": {
+      "success_signal": "Name and email are populated without advancing the registration flow",
+      "gap_signal": "Password, username, country, and consent fields require separate user decisions"
+    },
+    "data_policy": "user-approved saved name and email only; no password, consent, or submission"
+  },
+  {
+    "case_id": "FF-009",
+    "title": "Real-data lead/contact form",
+    "kind": "real_data_no_submit",
+    "url": "https://calendly.com/contact",
+    "steps": [
+      "Approve the origin and saved name/email categories once before the run",
+      "Fill First Name, Last Name, and Work Email",
+      "Leave the usage select, comments, consent text, and Submit button untouched",
+      "Record any business-email or label mismatch"
+    ],
+    "expected": {
+      "success_signal": "Saved identity/contact fields are populated and the page remains on the contact form",
+      "gap_signal": "Free text, select controls, and marketing consent need acting-agent decisions"
+    },
+    "data_policy": "user-approved saved name and email only; no comments, consent, or submission"
+  },
+  {
+    "case_id": "FF-010",
+    "title": "Real-data sales form",
+    "kind": "real_data_no_submit",
+    "url": "https://stripe.com/contact/sales",
+    "steps": [
+      "Approve the origin and saved email category once before the run",
+      "Fill Work email only",
+      "Leave Country/Region and Continue untouched",
+      "Record whether the form accepts the saved address without progressing"
+    ],
+    "expected": {
+      "success_signal": "Work email is populated while the page remains on step 1",
+      "gap_signal": "Country selection and progression are separate decisions"
+    },
+    "data_policy": "user-approved saved email only; no progression or submission"
+  },
+  {
+    "case_id": "FF-011",
+    "title": "Real-data enterprise contact form",
+    "kind": "real_data_no_submit",
+    "url": "https://www.cloudflare.com/plans/enterprise/contact/",
+    "steps": [
+      "Approve the origin and saved identity/contact categories once before the run",
+      "Fill First Name, Last Name, Phone, Work Email, and Company only when each saved field is unambiguous",
+      "Leave Job Level, Job Function, Country, Comments, consent text, and Contact us today untouched",
+      "Record ambiguous or missing mappings and stop"
+    ],
+    "expected": {
+      "success_signal": "Unambiguous saved fields are populated without submitting",
+      "gap_signal": "Company identity, select values, comments, and consent need explicit user input"
+    },
+    "data_policy": "user-approved saved profile/contact fields only; no credentials, financial values, comments, consent, or submission"
+  },
+  {
+    "case_id": "FF-012",
+    "title": "Real-data identity creation",
+    "kind": "real_data_no_submit",
+    "url": "https://accounts.google.com/signup",
+    "steps": [
+      "Approve the origin and saved name category once before the run",
+      "Fill First name and Last name",
+      "Do not click Next or continue to email/password steps",
+      "Record label and validation behavior"
+    ],
+    "expected": {
+      "success_signal": "Saved first and last names are visible and the name step remains open",
+      "gap_signal": "Next-step email, username, and password fields are not entered"
+    },
+    "data_policy": "user-approved saved name fields only; no email, password, or progression"
+  },
+  {
+    "case_id": "FF-013",
+    "title": "Missing stable field use-once path",
+    "kind": "missing_field_boundary",
+    "url": null,
+    "steps": [
+      "Prepare a synthetic form whose required company_name field has no saved match",
+      "Ask one contextual check-in offering use once, save to Agent Autofill, or skip",
+      "Choose use once and continue the form",
+      "Verify no profile proposal is written and no write grant is requested"
+    ],
+    "expected": {
+      "success_signal": "The field is available to the current form and is discarded after the task",
+      "refusal_signal": "No broker write occurs"
+    },
+    "data_policy": "synthetic ordinary profile value only; never persist it or submit the form"
+  },
+  {
+    "case_id": "FF-014",
+    "title": "Missing stable field save promotion",
+    "kind": "missing_field_boundary",
+    "url": null,
+    "steps": [
+      "Prepare a synthetic form whose required company_name field has no saved match",
+      "Ask one contextual check-in offering use once, save to Agent Autofill, or skip",
+      "Render one compact confirmation card with the complete reusable row and exact profile.write scope if absent",
+      "Choose save to Agent Autofill once; this approves the reusable row and narrow grant together",
+      "Obtain that grant and call write_records with confirmed=true without a second proposal prompt",
+      "Continue the form and stop at the final submission confirmation"
+    ],
+    "expected": {
+      "success_signal": "One approved profile row is created and is reusable for later matching",
+      "refusal_signal": "A missing grant, changed scope, or unapproved row leaves the vault unchanged"
+    },
+    "data_policy": "synthetic ordinary profile value only; no submission or sensitive fields"
+  },
+  {
+    "case_id": "FF-015",
+    "title": "Missing transient value cannot be promoted",
+    "kind": "missing_field_boundary",
+    "url": null,
+    "steps": [
+      "Prepare a synthetic form that requests a one-time OTP or CAPTCHA answer",
+      "Use the value only for the current step when an approved source returns it",
+      "Verify the agent does not offer save to Agent Autofill and does not call write_records"
+    ],
+    "expected": {
+      "success_signal": "The transient value is used once and remains absent from saved records",
+      "refusal_signal": "Promotion is refused without exposing the value in logs or proposals"
+    },
+    "data_policy": "deterministic synthetic transient value; never persist or include it in run records"
+  },
+  {
+    "case_id": "FF-016",
+    "title": "Real-data OTP-bound account sign-up",
+    "kind": "real_data_no_submit",
+    "url": "https://www.airbnb.com/signup_login",
+    "steps": [
+      "Use the previously approved saved email category for the exact origin",
+      "Fill the visible Phone number or email field",
+      "Stop before Continue because the next step sends a confirmation code",
+      "Record the OTP boundary without requesting or entering a code"
+    ],
+    "expected": {
+      "success_signal": "The saved email is visible and the sign-up step remains open",
+      "stop_signal": "Continue, OTP retrieval, and account creation remain untouched"
+    },
+    "data_policy": "user-approved saved email only; no OTP, password, or submission"
+  },
+  {
+    "case_id": "FF-017",
+    "title": "Real-data email-first account creation",
+    "kind": "real_data_no_submit",
+    "url": "https://signup.live.com/signup",
+    "steps": [
+      "Use the previously approved saved email category for the exact origin",
+      "Fill the Email field",
+      "Stop before Next and any password or verification step"
+    ],
+    "expected": {
+      "success_signal": "The saved email is visible and the first account step remains open",
+      "stop_signal": "Next, password, verification, and account creation remain untouched"
+    },
+    "data_policy": "user-approved saved email only; no password, OTP, or submission"
+  },
+  {
+    "case_id": "FF-018",
+    "title": "Real-data demo lead form with overlays",
+    "kind": "real_data_no_submit",
+    "url": "https://www.hubspot.com/products/crm/demo",
+    "steps": [
+      "Use the previously approved saved email category for the exact origin",
+      "Fill the visible Email field",
+      "Record cookie, chat, and reCAPTCHA obstruction state",
+      "Stop before Next, consent, chat, or any submission action"
+    ],
+    "expected": {
+      "success_signal": "The saved email is visible on the demo form",
+      "gap_signal": "Overlay and unavailable reCAPTCHA state are reported without dismissing or consenting"
+    },
+    "data_policy": "user-approved saved email only; no consent, CAPTCHA, chat message, or submission"
+  },
+  {
+    "case_id": "FF-019",
+    "title": "Real-data job application with required-field gaps",
+    "kind": "real_data_no_submit",
+    "url": "https://jobs.lever.co/hophr/a7016e1a-2f71-41f7-88ff-565637ab365f/apply",
+    "steps": [
+      "Use the previously approved saved name, email, and phone categories for the exact origin",
+      "Fill the unambiguous name, email, and phone fields",
+      "Leave resume upload, current location, company, links, demographics, and submit untouched",
+      "Record required-marker and missing-field mapping behavior"
+    ],
+    "expected": {
+      "success_signal": "Identity/contact fields are populated and the application remains on the same page",
+      "gap_signal": "Resume, location, and other missing or optional fields are surfaced as unresolved"
+    },
+    "data_policy": "user-approved saved identity/contact fields only; no resume, demographic data, upload, or submission"
+  },
+  {
+    "case_id": "FF-020",
+    "title": "Real-data shipping quote with task-specific fields",
+    "kind": "real_data_no_submit",
+    "url": "https://www.fedex.com/en-us/shipping/last-minute-rates.html",
+    "steps": [
+      "Use the previously approved saved name, email, and phone categories for the exact origin",
+      "Fill the reusable contact fields only",
+      "Leave account, origin, destination, date, package, value, and quote controls untouched",
+      "Record validation and the distinction between profile memory and shipment-specific inputs"
+    ],
+    "expected": {
+      "success_signal": "Reusable contact fields are populated without requesting a quote",
+      "gap_signal": "Phone-format validation and task-specific shipment fields are surfaced"
+    },
+    "data_policy": "user-approved saved identity/contact fields only; no account, address, financial, shipment, or submission data"
+  },
+  {
+    "case_id": "FF-021",
+    "title": "Real-data multi-field developer signup",
+    "kind": "real_data_no_submit",
+    "url": "https://gitlab.com/users/sign_up",
+    "steps": [
+      "Choose one explicitly selected Chrome profile group for identity/contact fields",
+      "Fill First name, Last name, and Company email from that group",
+      "Leave Username and Password empty and leave the preselected marketing checkbox unchanged",
+      "Stop before Continue and record missing credential and username fields"
+    ],
+    "expected": {
+      "success_signal": "Three saved identity/contact fields are visible on the same signup page",
+      "gap_signal": "Username and password are reported as missing or credential-specific; preselected consent is reported"
+    },
+    "data_policy": "user-approved saved identity/contact fields only; no password, username invention, consent change, or submission"
+  },
+  {
+    "case_id": "FF-022",
+    "title": "Real-data OTP signup boundary",
+    "kind": "real_data_otp",
+    "url": "https://www.airbnb.com/signup_login",
+    "steps": [
+      "Use the exact configured test mailbox recipient for this origin and signup purpose",
+      "Fill Phone number or email from the saved mailbox recipient",
+      "Obtain fresh confirmation immediately before clicking Continue because it sends a code",
+      "After the user confirms, request one target-bound OTP from Agent Autofill and enter it once",
+      "Stop at any additional account-creation or legal-consent step unless separately confirmed"
+    ],
+    "expected": {
+      "success_signal": "The site accepts the one-time code and advances without logging or saving it",
+      "stop_signal": "No account creation, consent, or later submission is performed without a fresh exact confirmation"
+    },
+    "data_policy": "user-authorized mailbox recipient and one transient target-bound OTP only; never persist or screenshot the code"
+  },
+  {
+    "case_id": "FF-023",
+    "title": "Real-data AWS sales support form",
+    "kind": "real_data_no_submit",
+    "url": "https://aws.amazon.com/contact-us/sales-support/",
+    "steps": [
+      "Choose one complete Chrome profile group by page context",
+      "Fill the saved name, email, phone, country, state, and postal-code fields",
+      "Leave job role, company, company type, industry, use case, inquiry, project description, marketing consent, and Submit untouched",
+      "Record required-field, consent, and group-selection mapping behavior"
+    ],
+    "expected": {
+      "success_signal": "Reusable contact and address fields are populated while the page remains on the sales form",
+      "gap_signal": "Employment and project questions are missing task inputs; duplicated Chrome groups remain an agent-judgment choice"
+    },
+    "data_policy": "user-approved saved identity/contact/address fields only; no company, project, consent, or submission"
+  },
+  {
+    "case_id": "FF-024",
+    "title": "Real-data USPS postage calculator preflight",
+    "kind": "real_data_no_submit",
+    "url": "https://postcalc.usps.com/",
+    "steps": [
+      "Inspect the destination, origin, date/time, mailpiece, and transport controls",
+      "Use saved data only when the profile contains a compatible value with clear task meaning",
+      "Leave origin ZIP, destination ZIP, shipping date/time, package choice, and Calculate controls untouched when task inputs are absent",
+      "Record missing-versus-task-specific classification without advancing"
+    ],
+    "expected": {
+      "success_signal": "The calculator remains at its initial step with no inferred shipment data",
+      "gap_signal": "Shipping origin, destination, date/time, package, and transport choices are task inputs rather than profile omissions"
+    },
+    "data_policy": "saved profile metadata only; no inferred shipment values, quote, calculation, or submission"
   }
 ]

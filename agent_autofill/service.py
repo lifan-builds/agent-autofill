@@ -1,11 +1,21 @@
-from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import re
 import secrets
+from datetime import UTC, datetime, timedelta
+from email.utils import getaddresses
+from itertools import islice
 from typing import Any
 from urllib.parse import urlparse
-from .models import Grant, EmailMessage, TextMessage, now_iso
+
+from .form_memory import (
+    match_form_fields as _match_form_fields,
+)
+from .form_memory import (
+    normalize_form_label,
+    profile_group_id,
+)
+from .models import EmailMessage, Grant, TextMessage, now_iso
 from .storage import Store
 
 
@@ -21,6 +31,15 @@ class CredentialUseError(BrokerError):
     pass
 
 
+class AuthCodeError(BrokerError):
+    """Value-free selection failure and a concrete recovery action."""
+
+    def __init__(self, reason: str, message: str, next_action: str):
+        self.reason = reason
+        self.next_action = next_action
+        super().__init__(f"{message}. {next_action}")
+
+
 _RECORD_TYPES = {"profile", "credential", "financial"}
 _FINANCIAL_KINDS = {
     "payment_card",
@@ -33,18 +52,29 @@ _MAX_RECORD_ID_LENGTH = 128
 _MAX_FIELD_ID_LENGTH = 128
 _MAX_TEXT_LENGTH = 4096
 _MAX_SCOPE_ITEMS = 100
+_FORM_MAPPING_NAMESPACE = "form-mapping"
+_FORM_MAPPING_OUTCOMES = {"accepted", "corrected"}
+_EMAIL_GRANT_OPERATIONS = {
+    "email.search",
+    "email.read",
+    "email.otp",
+    "email.verification_link",
+}
 _TRUSTED_LOCAL_READ_OPERATIONS = {
     "profile.read",
     "credential.read",
     "credential.use",
     "financial.read",
-    "email.search",
-    "email.read",
-    "email.otp",
-    "email.verification_link",
+    *_EMAIL_GRANT_OPERATIONS,
     "messages.search",
     "messages.list",
     "messages.read",
+}
+_OTP_ORIGIN_POLICIES = {"target-origin", "mailbox-read"}
+# Exact aliases documented by OpenAI's login-verification help article.
+_OTP_SENDER_DOMAINS = {
+    "auth.openai.com": {"tm.openai.com", "tm1.openai.com"},
+    "chatgpt.com": {"tm.openai.com", "tm1.openai.com"},
 }
 _FORBIDDEN_TRANSIENT_PARTS = {
     "access_token",
@@ -102,12 +132,24 @@ _FORBIDDEN_PROFILE_CATEGORIES = {
 }
 _VERIFICATION_LINK_PATTERN = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 _VERIFICATION_LINK_TRAILING = ".,;:!?)]}>'"
+_AUTH_CODE_LABEL = r"(?:one[\s-]*time|verification|confirmation|security|authentication|login|sign[\s-]*in)?[\s-]*(?:code|passcode|otp)"
+_AUTH_CODE_AFTER_LABEL = re.compile(
+    rf"\b{_AUTH_CODE_LABEL}\b[^0-9]{{0,40}}(\d{{4,8}})\b", re.IGNORECASE
+)
+_AUTH_CODE_BEFORE_LABEL = re.compile(
+    rf"\b(\d{{4,8}})\b[^A-Za-z0-9]{{0,40}}{_AUTH_CODE_LABEL}\b", re.IGNORECASE
+)
+_AUTH_CODE_BRANDED = re.compile(
+    r"\byour\s+[A-Za-z][A-Za-z ._-]{0,80}?\b(?:code|passcode|otp)\b[^0-9]{0,200}(\d{4,8})\b",
+    re.IGNORECASE,
+)
 _SAFE_HINT_KEYS = {
     "account_last4",
     "country",
     "currency",
     "expiration_month",
     "expiration_year",
+    "hint",
     "institution",
     "last4",
     "network",
@@ -271,16 +313,20 @@ def _normal_text(
     return result
 
 
-def _forbidden_transient_name(value: str) -> bool:
-    normalized = re.sub(
+def _normalize_snake_case(value: str) -> str:
+    return re.sub(
         r"[^A-Za-z0-9]+",
         "_",
         re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", value),
     ).lower().strip("_")
+
+
+def _matches_forbidden_parts(value: str, forbidden_parts: set[str]) -> bool:
+    normalized = _normalize_snake_case(value)
     if not normalized:
         return False
     parts = normalized.split("_")
-    for forbidden in _FORBIDDEN_TRANSIENT_PARTS:
+    for forbidden in forbidden_parts:
         tokens = forbidden.split("_")
         if len(tokens) == 1:
             if tokens[0] in parts:
@@ -292,29 +338,14 @@ def _forbidden_transient_name(value: str) -> bool:
         ):
             return True
     return False
+
+
+def _forbidden_transient_name(value: str) -> bool:
+    return _matches_forbidden_parts(value, _FORBIDDEN_TRANSIENT_PARTS)
 
 
 def _forbidden_sensitive_name(value: str) -> bool:
-    normalized = re.sub(
-        r"[^A-Za-z0-9]+",
-        "_",
-        re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", value),
-    ).lower().strip("_")
-    if not normalized:
-        return False
-    parts = normalized.split("_")
-    for forbidden in _FORBIDDEN_SENSITIVE_PARTS:
-        tokens = forbidden.split("_")
-        if len(tokens) == 1:
-            if tokens[0] in parts:
-                return True
-            continue
-        if any(
-            parts[index : index + len(tokens)] == tokens
-            for index in range(len(parts) - len(tokens) + 1)
-        ):
-            return True
-    return False
+    return _matches_forbidden_parts(value, _FORBIDDEN_SENSITIVE_PARTS)
 
 
 def _validate_no_transient_name(value: str, label: str) -> None:
@@ -392,11 +423,7 @@ def _safe_provenance(value: Any, *, default_source: str) -> dict[str, Any]:
             for key, nested in item.items():
                 if not isinstance(key, str):
                     raise BrokerError("provenance keys must be strings")
-                normalized_key = re.sub(
-                    r"[^a-z0-9]+",
-                    "_",
-                    re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", key).lower(),
-                ).strip("_")
+                normalized_key = _normalize_snake_case(key)
                 key_parts = set(normalized_key.split("_"))
                 if (
                     _forbidden_transient_name(key)
@@ -527,19 +554,61 @@ def _origin_hostname(value: str) -> str:
     return (parsed.hostname or "").lower()
 
 
-def _hostname_token_matches(text: str, hostname: str) -> bool:
-    """Match a hostname as a complete token in provider text.
+def _normalize_otp_origin_policy(value: Any) -> str:
+    if value is None:
+        return "target-origin"
+    if not isinstance(value, str):
+        raise BrokerError("origin_policy must be target-origin or mailbox-read")
+    policy = value.strip().lower()
+    if policy not in _OTP_ORIGIN_POLICIES:
+        raise BrokerError("origin_policy must be target-origin or mailbox-read")
+    return policy
 
-    URL and email delimiters such as ``/``, ``?``, ``@``, ``<`` and ``>`` are
-    valid boundaries. Hostname characters are not, so ``notexample.com`` and
-    ``example.com.evil`` cannot accidentally bind an OTP to ``example.com``.
-    """
 
-    if not hostname:
+def _otp_sender_matches(sender: str, target_origin: str) -> bool:
+    # Match the parsed address, never display names, body links, or suffix guesses.
+    addresses = getaddresses([sender])
+    if len(addresses) != 1:
         return False
-    boundary = r"A-Za-z0-9_.-"
-    pattern = rf"(?<![{boundary}]){re.escape(hostname)}(?![{boundary}])"
-    return re.search(pattern, text, flags=re.IGNORECASE) is not None
+    address = addresses[0][1]
+    if address.count("@") != 1:
+        return False
+    domain = address.rsplit("@", 1)[1].lower()
+    host = _origin_hostname(target_origin)
+    return domain in ({host} | _OTP_SENDER_DOMAINS.get(host, set()))
+
+
+def _metadata_page(items, limit, offset):
+    if type(offset) is not int or offset < 0:
+        raise BrokerError("offset must be a nonnegative integer")
+    return list(islice(items, offset, offset + _bounded_limit(limit)))
+
+
+def _extract_auth_codes(body: str) -> list[str]:
+    """Prefer numbers explicitly labeled as authentication codes."""
+
+    labeled = [
+        match.group(1)
+        for pattern in (_AUTH_CODE_AFTER_LABEL, _AUTH_CODE_BEFORE_LABEL, _AUTH_CODE_BRANDED)
+        for match in pattern.finditer(body)
+    ]
+    if labeled:
+        return list(dict.fromkeys(labeled))
+    return re.findall(r"\b\d{4,8}\b", body)
+
+
+def _message_received_at(value: Any) -> datetime | None:
+    """Parse provider time without turning malformed input into a fresh time."""
+
+    if not isinstance(value, str):
+        return None
+    try:
+        received_at = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+    if received_at.tzinfo is None:
+        received_at = received_at.replace(tzinfo=UTC)
+    return received_at
 
 
 class Broker:
@@ -583,6 +652,18 @@ class Broker:
         self.add_source(source_id, "messages", label or source_id)
 
     def remove_source(self, source_id: str) -> None:
+        grant_writes: list[tuple[str, str, dict[str, Any]]] = []
+        for row in self.store.db.execute(
+            "select key,value from kv where namespace='grant'"
+        ).fetchall():
+            grant = self.store._open(row["value"])
+            if grant["resource_scope"] == source_id:
+                grant["revoked"] = True
+                grant_writes.append(("grant", row["key"], grant))
+        self.store.apply_changes(
+            grant_writes,
+            [("source", source_id), ("connection", source_id)],
+        )
         # Keep a tombstone even when the persisted source was unavailable and
         # no adapter was reconstructed. This prevents stale in-memory fallback
         # messages from becoming readable again after removal.
@@ -591,18 +672,6 @@ class Broker:
         self.email_adapters.pop(source_id, None)
         self.unavailable_email_sources.discard(source_id)
         self.message_adapters.pop(source_id, None)
-        self.store.db.execute(
-            "delete from kv where namespace in ('source','connection') and key=?",
-            (source_id,),
-        )
-        self.store.db.commit()
-        for row in self.store.db.execute(
-            "select key,value from kv where namespace='grant'"
-        ).fetchall():
-            grant = self.store._open(row["value"])
-            if grant["resource_scope"] == source_id:
-                grant["revoked"] = True
-                self.store.put("grant", row["key"], grant)
 
     def put_profile(
         self,
@@ -669,6 +738,7 @@ class Broker:
         target_origin: str | None = None,
         username_hint: str | None = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> list[dict]:
         """List bounded credential metadata without passwords."""
 
@@ -677,13 +747,14 @@ class Broker:
                 target_origin,
                 username_hint=username_hint,
                 limit=limit,
+                offset=offset,
             )
         normalized_query = (
             _normal_text(query, "query").casefold() if query is not None else None
         )
         result = []
         for row in self.store.db.execute(
-            "select key from kv where namespace='credential'"
+            "select key from kv where namespace='credential' order by key"
         ):
             item = self.store.get("credential", row["key"])
             if item:
@@ -691,19 +762,25 @@ class Broker:
                 metadata = self._credential_metadata(item)
                 if normalized_query is not None:
                     searchable = " ".join(
-                        str(metadata.get(key, ""))
-                        for key in ("credential_id", "name", "origin", "username")
+                        [
+                            *(
+                                str(metadata.get(key, ""))
+                                for key in ("credential_id", "name", "origin", "username")
+                            ),
+                            str((metadata.get("provenance") or {}).get("hint", "")),
+                        ]
                     ).casefold()
                     if normalized_query not in searchable:
                         continue
                 result.append(metadata)
-        return result[: _bounded_limit(limit)]
+        return _metadata_page(iter(result), limit, offset)
 
     def match_credentials(
         self,
         target_origin: str,
         username_hint: str | None = None,
         limit: int = 20,
+        offset: int = 0,
     ) -> list[dict]:
         """Find credential metadata for one site without exposing secrets."""
 
@@ -740,7 +817,7 @@ class Broker:
                 item.get("credential_id", ""),
             )
         )
-        return matches[: _bounded_limit(limit)]
+        return _metadata_page(iter(matches), limit, offset)
 
     @staticmethod
     def _profile_defaults(key: str, item: dict[str, Any]) -> dict[str, Any]:
@@ -1189,19 +1266,19 @@ class Broker:
             provenance=provenance,
         )
 
-    # Keep a concise name for internal callers while exposing the descriptive
-    # name in the public broker API and MCP catalog.
-    put_financial = put_financial_record
-
     def list_financial_records(
         self,
         *,
         kind: str | None = None,
         query: str | None = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         """List bounded financial metadata without stored values."""
 
+        return _metadata_page(self._iter_financial_records(kind=kind, query=query), limit, offset)
+
+    def _iter_financial_records(self, *, kind=None, query=None, card_suffix=None):
         normalized_kind = (
             _normal_text(kind, "financial kind").casefold()
             if kind is not None
@@ -1210,14 +1287,19 @@ class Broker:
         normalized_query = (
             _normal_text(query, "query").casefold() if query is not None else None
         )
-        result = []
         for row in self.store.db.execute(
-            "select key from kv where namespace='financial'"
+            "select key from kv where namespace='financial' order by key"
         ):
             item = self.store.get("financial", row["key"])
             if not item:
                 continue
             item = self._financial_defaults(row["key"], item)
+            if card_suffix is not None:
+                number = re.sub(r"[ -]", "", item["values"].get("card_number", ""))
+                if (item["kind"] != "payment_card"
+                        or not re.fullmatch(r"[0-9]{12,19}", number)
+                        or not number.endswith(card_suffix)):
+                    continue
             metadata = {
                 "record_id": item["record_id"],
                 "kind": item["kind"],
@@ -1241,26 +1323,33 @@ class Broker:
                 continue
             if normalized_query is not None:
                 searchable = " ".join(
-                    str(metadata.get(key, ""))
-                    for key in ("record_id", "kind", "display_name", "field_ids")
+                    [
+                        *(
+                            str(metadata.get(key, ""))
+                            for key in ("record_id", "kind", "display_name", "field_ids")
+                        ),
+                        str((metadata.get("matching_hints") or {}).get("hint", "")),
+                        str((metadata.get("provenance") or {}).get("hint", "")),
+                    ]
                 ).casefold()
                 if normalized_query not in searchable:
                     continue
-            result.append(metadata)
-        return result[: _bounded_limit(limit)]
+            yield metadata
 
     def match_financial_records(
         self,
         *,
         kind: str | None = None,
         matching_hints: dict[str, str] | None = None,
+        card_suffix: str | None = None,
+        query: str | None = None,
     ) -> list[dict[str, Any]]:
         """Return metadata-only financial records matching safe card hints.
 
         This supports deterministic selection when a wallet contains duplicate
-        cards or multiple expiration dates. It never reads or returns values;
-        callers still need a scoped ``financial.read`` grant before requesting
-        card fields for the selected record.
+        cards or multiple expiration dates. An optional four- or five-digit
+        suffix is compared inside the vault; stored values are never returned.
+        Retrieving card fields still requires an authenticated, scoped read.
         """
 
         normalized_kind = None
@@ -1268,10 +1357,17 @@ class Broker:
             normalized_kind = _normal_text(kind, "financial kind").lower()
             if normalized_kind not in _FINANCIAL_KINDS:
                 raise BrokerError("financial kind is unsupported")
+        if card_suffix is not None:
+            if not isinstance(card_suffix, str) or not re.fullmatch(r"[0-9]{4,5}", card_suffix):
+                raise BrokerError("card_suffix must contain four or five digits")
+            if normalized_kind not in (None, "payment_card"):
+                raise BrokerError("card_suffix is only supported for payment cards")
         requested = self._matching_hints(
             normalized_kind or "custom_financial", {}, matching_hints
         )
-        records = self.list_financial_records()
+        records = self._iter_financial_records(
+            kind=normalized_kind, query=query, card_suffix=card_suffix
+        )
         result = []
         for item in records:
             if normalized_kind and item["kind"] != normalized_kind:
@@ -1283,8 +1379,6 @@ class Broker:
             ):
                 result.append(item)
         return result
-
-    list_financial = list_financial_records
 
     def write_records(
         self,
@@ -1362,9 +1456,8 @@ class Broker:
                 target,
                 purpose,
             )
-            if current:
-                if "created_at" in current and "created_at" in normalized:
-                    normalized["created_at"] = current["created_at"]
+            if current and "created_at" in current and "created_at" in normalized:
+                normalized["created_at"] = current["created_at"]
             prepared.append((record_type, record_id, normalized, current))
 
         results = []
@@ -1643,6 +1736,7 @@ class Broker:
         self.store.apply_changes(
             grant_writes,
             deletes,
+            cascade_field_references=True,
             audits=[
                 (
                     "local-admin",
@@ -1703,9 +1797,10 @@ class Broker:
                 "purpose": purpose,
                 "target_origin": target,
                 "expires_at": (
-                    datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+                    datetime.now(UTC) + timedelta(seconds=expires_in)
                 ).isoformat(),
                 "consumed": False,
+                "credential_handle": handle,
             },
         )
         self.store.audit(
@@ -1734,11 +1829,13 @@ class Broker:
     ) -> dict:
         key = hashlib.sha256(handle.encode()).hexdigest()
         item = self.store.get("credential-handle", key)
+        expires_at = _message_received_at(item.get("expires_at")) if item else None
         if (
             not item
             or item["agent_id"] != agent_id
             or item["consumed"]
-            or datetime.fromisoformat(item["expires_at"]) <= datetime.now(timezone.utc)
+            or expires_at is None
+            or expires_at <= datetime.now(UTC)
         ):
             raise CredentialUseError(
                 "credential handle is invalid, expired, or already consumed"
@@ -1759,8 +1856,35 @@ class Broker:
         if credential is None:
             raise CredentialUseError("credential not found")
         credential = self._credential_defaults(item["credential_id"], credential)
-        item["consumed"] = True
-        self.store.put("credential-handle", key, item)
+        self._authorized(
+            agent_id, "credential.use", item["credential_id"],
+            item["target_origin"], item["purpose"],
+        )
+        _record_scope_allowed(
+            credential["allowed_origins"], credential["allowed_purposes"],
+            item["target_origin"], item["purpose"],
+            trusted_local=self._is_trusted_local(agent_id),
+        )
+
+        def claimable(current: dict[str, Any]) -> bool:
+            current_expires_at = _message_received_at(current.get("expires_at"))
+            return bool(
+                current.get("agent_id") == agent_id
+                and not current.get("consumed", False)
+                and current_expires_at is not None
+                and current_expires_at > datetime.now(UTC)
+            )
+
+        claimed = self.store.update_if(
+            "credential-handle",
+            key,
+            claimable,
+            lambda current: {**current, "consumed": True, "credential_handle": None},
+        )
+        if not claimed:
+            raise CredentialUseError(
+                "credential handle is invalid, expired, or already consumed"
+            )
         return {
             "username": credential["username"],
             "password": credential["password"],
@@ -1778,7 +1902,7 @@ class Broker:
     ) -> Grant:
         if expires_in < 1 or expires_in > 86400:
             raise BrokerError("expires_in must be between 1 and 86400 seconds")
-        issued = datetime.now(timezone.utc)
+        issued = datetime.now(UTC)
         g = Grant(
             agent_id,
             operation,
@@ -1791,6 +1915,26 @@ class Broker:
         self.store.put("grant", secrets.token_hex(12), g.__dict__)
         return g
 
+    def _grant_email_scope(
+        self,
+        agent_id: str,
+        operation: str,
+        resource_scope: str,
+        target_origin: str | None,
+        purpose: str | None,
+        expires_in: int = 600,
+    ) -> Grant:
+        if operation not in _EMAIL_GRANT_OPERATIONS:
+            raise BrokerError("email grant operation is unsupported")
+        return self.grant(
+            agent_id,
+            operation,
+            resource_scope,
+            target_origin,
+            purpose,
+            expires_in,
+        )
+
     def grant_email_recipient(
         self,
         agent_id: str,
@@ -1802,18 +1946,10 @@ class Broker:
     ) -> Grant:
         """Create an email grant from an address without exposing source IDs."""
 
-        if operation not in {
-            "email.search",
-            "email.read",
-            "email.otp",
-            "email.verification_link",
-        }:
-            raise BrokerError("email grant operation is unsupported")
-        account_id = self.resolve_email_account(recipient)
-        return self.grant(
+        return self._grant_email_scope(
             agent_id,
             operation,
-            account_id,
+            self.resolve_email_account(recipient),
             target_origin,
             purpose,
             expires_in,
@@ -1834,14 +1970,7 @@ class Broker:
         to one configured mailbox before reading anything.
         """
 
-        if operation not in {
-            "email.search",
-            "email.read",
-            "email.otp",
-            "email.verification_link",
-        }:
-            raise BrokerError("email grant operation is unsupported")
-        return self.grant(
+        return self._grant_email_scope(
             agent_id,
             operation,
             "*",
@@ -1948,17 +2077,19 @@ class Broker:
         return result
 
     def revoke_agent(self, agent_id: str) -> None:
+        grant_writes: list[tuple[str, str, dict[str, Any]]] = []
         for row in self.store.db.execute(
             "select key,value from kv where namespace='grant'"
         ).fetchall():
             d = self.store._open(row["value"])
             if d["agent_id"] == agent_id:
                 d["revoked"] = True
-                self.store.put("grant", row["key"], d)
+                grant_writes.append(("grant", row["key"], d))
         item = self.store.get("agent", agent_id)
         if item:
             item["revoked"] = True
-            self.store.put("agent", agent_id, item)
+            grant_writes.append(("agent", agent_id, item))
+        self.store.apply_changes(grant_writes, [])
 
     def list_grants(self) -> list[dict]:
         result = []
@@ -1978,7 +2109,7 @@ class Broker:
             operation in _TRUSTED_LOCAL_READ_OPERATIONS
             and self._is_trusted_local(agent_id)
         ):
-            issued = datetime.now(timezone.utc)
+            issued = datetime.now(UTC)
             return Grant(
                 agent_id,
                 operation,
@@ -2056,9 +2187,13 @@ class Broker:
         category: str | None = None,
         query: str | None = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         """List bounded profile metadata without returning stored values."""
 
+        return _metadata_page(self._iter_profile_fields(category=category, query=query), limit, offset)
+
+    def _iter_profile_fields(self, *, category=None, query=None):
         normalized_category = (
             _normal_text(category, "category").casefold()
             if category is not None
@@ -2067,9 +2202,8 @@ class Broker:
         normalized_query = (
             _normal_text(query, "query").casefold() if query is not None else None
         )
-        result = []
         for row in self.store.db.execute(
-            "select key from kv where namespace='profile'"
+            "select key from kv where namespace='profile' order by key"
         ):
             item = self.store.get("profile", row["key"])
             if not item:
@@ -2088,19 +2222,23 @@ class Broker:
                 continue
             if normalized_query is not None:
                 searchable = " ".join(
-                    str(metadata.get(key, ""))
-                    for key in ("field_id", "display_name", "category")
+                    [
+                        *(
+                            str(metadata.get(key, ""))
+                            for key in ("field_id", "display_name", "category")
+                        ),
+                        str((metadata.get("provenance") or {}).get("hint", "")),
+                    ]
                 ).casefold()
                 if normalized_query not in searchable:
                     continue
-            result.append(metadata)
-        return result[: _bounded_limit(limit)]
+            yield metadata
 
     def list_profile_groups(self) -> list[dict[str, Any]]:
         """List metadata-only groups so callers can choose an address set."""
 
         groups: dict[str, dict[str, Any]] = {}
-        for row in self.list_profile_fields():
+        for row in self._iter_profile_fields():
             provenance = row.get("provenance")
             if not isinstance(provenance, dict):
                 provenance = {}
@@ -2109,15 +2247,10 @@ class Broker:
                 "source_guid_hash"
             )
             if isinstance(profile_id, str) and isinstance(source_key, str):
-                grouping_key = f"{profile_id}\0{source_key}"
                 source = provenance.get("source", "chrome-structured-address")
             else:
-                grouping_key = f"local\0{row['field_id']}"
                 source = provenance.get("source", "local-profile")
-            digest = hashlib.sha256(grouping_key.encode("utf-8")).hexdigest()[:24]
-            group_id = "profile_group_" + "_".join(
-                digest[index : index + 4] for index in range(0, 24, 4)
-            )
+            group_id = profile_group_id(row)
             group = groups.setdefault(
                 group_id,
                 {
@@ -2136,7 +2269,180 @@ class Broker:
             group["field_ids"].sort()
             group["field_types"].sort()
             group["field_count"] = len(group["field_ids"])
+            is_chrome_group = group["source"] == "chrome-structured-address"
+            group["needs_selection"] = is_chrome_group and group["field_count"] > 1
+            if group["needs_selection"]:
+                group["selection_reason"] = (
+                    "Choose this address group by meaning (for example home, work, "
+                    "origin, or destination) before filling a form."
+                )
+            else:
+                group["selection_reason"] = None
+            bundle = self.store.get("context", f"bundle:review_{group['group_id']}")
+            if (
+                isinstance(bundle, dict)
+                and bundle.get("authority") == "confirmed"
+                and isinstance(bundle.get("field_versions"), dict)
+                and all(
+                    (self.store.get("profile", fid) or {}).get("updated_at") == ver
+                    for fid, ver in bundle["field_versions"].items()
+                )
+            ):
+                data = bundle.get("data", {})
+                group["confirmed_meaning"] = {
+                    "bundle_id": bundle.get("id"),
+                    "subject": data.get("subject", "unknown"),
+                    "role": data.get("role", "unknown"),
+                    "currentness": data.get("currentness", "unknown"),
+                    "title": data.get("title", ""),
+                }
         return sorted(groups.values(), key=lambda item: item["group_id"])
+
+    def match_form_fields(
+        self,
+        fields: list[dict[str, Any]],
+        limit: int = 100,
+        target_origin: str | None = None,
+        purpose: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return value-free mapping and missing-field guidance."""
+
+        if not isinstance(fields, list) or not fields:
+            raise BrokerError("fields must contain 1 to 100 items")
+        if len(fields) > _MAX_SCOPE_ITEMS:
+            raise BrokerError("fields must contain 1 to 100 items")
+        if (target_origin is None) != (purpose is None):
+            raise BrokerError("target_origin and purpose must be provided together")
+        bounded = _bounded_limit(limit)
+        preferences: dict[str, dict[str, Any]] = {}
+        if target_origin is not None and purpose is not None:
+            target = _normalize_origin(target_origin, "target_origin")
+            normalized_purpose = _normal_text(purpose, "purpose")
+            for raw in fields[:bounded]:
+                label = raw.get("label", raw.get("display_name", raw.get("field_id", "")))
+                normalized_label = normalize_form_label(label)
+                if not normalized_label:
+                    continue
+                preference = self.store.get(
+                    _FORM_MAPPING_NAMESPACE,
+                    self._form_mapping_key(target, normalized_purpose, normalized_label),
+                )
+                if isinstance(preference, dict):
+                    preferences[normalized_label] = preference
+        try:
+            return _match_form_fields(
+                fields[:bounded], list(self._iter_profile_fields()), preferences
+            )
+        except (TypeError, ValueError) as exc:
+            raise BrokerError(str(exc)) from exc
+
+    @staticmethod
+    def _form_mapping_key(target_origin: str, purpose: str, label: str) -> str:
+        digest = hashlib.sha256(
+            f"{target_origin}\0{purpose}\0{label}".encode()
+        ).hexdigest()[:24]
+        return "mapping_" + digest
+
+    def record_form_mapping_feedback(
+        self,
+        agent_id: str,
+        target_origin: Any = None,
+        purpose: Any = None,
+        field_label: Any = None,
+        selected_field_ids: Any = None,
+        group_id: Any = None,
+        outcome: Any = "accepted",
+        confirmed: Any = None,
+    ) -> dict[str, Any]:
+        """Remember a value-free mapping choice after the user decision point."""
+
+        if confirmed is not True:
+            raise BrokerError("confirmed must be true")
+        target = _normalize_origin(target_origin, "target_origin")
+        normalized_purpose = _normal_text(purpose, "purpose")
+        label = normalize_form_label(field_label)
+        if not label:
+            raise BrokerError("field_label is required")
+        _validate_no_transient_name(label, "field_label")
+        if any(
+            term in label
+            for term in (
+                "card number",
+                "account number",
+                "routing number",
+                "security code",
+                "credit card",
+                "payment",
+                "secret",
+            )
+        ):
+            raise BrokerError("field_label cannot identify a secret or financial field")
+        if not isinstance(selected_field_ids, list) or not selected_field_ids:
+            raise BrokerError("selected_field_ids must contain 1 to 100 items")
+        if len(selected_field_ids) > _MAX_SCOPE_ITEMS:
+            raise BrokerError("selected_field_ids must contain 1 to 100 items")
+        field_ids = [_normal_field_id(item, "selected field id") for item in selected_field_ids]
+        if len(set(field_ids)) != len(field_ids):
+            raise BrokerError("selected_field_ids contain duplicates")
+        if outcome not in _FORM_MAPPING_OUTCOMES:
+            raise BrokerError("outcome must be accepted or corrected")
+        if group_id is not None:
+            group_id = _normal_text(group_id, "group_id")
+            group_fields = self._profile_group_field_ids(group_id)
+            if not set(field_ids).issubset(group_fields):
+                raise BrokerError("selected fields are outside profile group")
+        known_fields = {
+            item["field_id"] for item in self._iter_profile_fields()
+        }
+        if not set(field_ids).issubset(known_fields):
+            raise BrokerError("selected field is not in profile memory")
+        record = {
+            "target_origin": target,
+            "purpose": normalized_purpose,
+            "label": label,
+            "field_ids": field_ids,
+            "group_id": group_id,
+            "outcome": outcome,
+            "updated_at": now_iso(),
+        }
+        key = self._form_mapping_key(target, normalized_purpose, label)
+        self.store.apply_changes(
+            [(_FORM_MAPPING_NAMESPACE, key, record)],
+            [],
+            audits=[
+                (
+                    agent_id,
+                    "form-mapping.write",
+                    key,
+                    record["updated_at"],
+                    {
+                        "target_origin": target,
+                        "purpose": normalized_purpose,
+                        "label": label,
+                        "field_ids": field_ids,
+                        "group_id": group_id,
+                        "outcome": outcome,
+                    },
+                )
+            ],
+        )
+        return {
+            "status": "stored",
+            "target_origin": target,
+            "purpose": normalized_purpose,
+            "label": label,
+            "field_ids": field_ids,
+            "group_id": group_id,
+            "outcome": outcome,
+        }
+
+    def _profile_group_field_ids(self, group_id: str) -> set[str]:
+        if not isinstance(group_id, str) or not group_id.strip():
+            raise BrokerError("group_id must be a string")
+        for group in self.list_profile_groups():
+            if group["group_id"] == group_id:
+                return set(group["field_ids"])
+        raise BrokerError("unknown profile group")
 
     def request_profile_fields(
         self,
@@ -2144,17 +2450,36 @@ class Broker:
         field_ids,
         target_origin: str | None = None,
         purpose: str | None = None,
+        group_id: str | None = None,
+        bundle_id: str | None = None,
     ):
         target, purpose = self._read_context(agent_id, target_origin, purpose)
         requested = self._requested_fields(
             field_ids, "field_ids", identifiers=True
         )
+        if group_id is not None:
+            group_fields = self._profile_group_field_ids(group_id)
+            if not set(requested).issubset(group_fields):
+                raise BrokerError("requested profile fields are outside profile group")
+        bundle = None
+        if bundle_id is not None:
+            from .context_memory import ContextMemory, scope_matches
+
+            memory = ContextMemory(self)
+            bundle = self.store.get("context", f"bundle:{_normal_identifier(bundle_id, 'bundle_id')}")
+            if not bundle or not scope_matches(bundle, target, purpose):
+                raise BrokerError("bundle unavailable in this context")
+            memory._authorized_fields(agent_id, bundle["field_ids"], target, purpose)
+            if not memory._fresh(bundle) or not set(requested).issubset(bundle["field_ids"]):
+                raise BrokerError("bundle evidence changed or selected fields are outside bundle")
         out = {}
         for fid in requested:
             self._authorized(agent_id, "profile.read", fid, target, purpose)
             item = self.store.get("profile", fid)
             if item is None:
                 raise BrokerError(f"unknown profile field: {fid}")
+            if bundle is not None and item.get("updated_at") != bundle["field_versions"].get(fid):
+                raise BrokerError("bundle evidence changed during read; review the bundle")
             item = self._profile_defaults(fid, item)
             _record_scope_allowed(
                 item["allowed_origins"],
@@ -2169,6 +2494,8 @@ class Broker:
                     item, "local-profile", fid, target, purpose, "field_id"
                 ),
             }
+        if bundle is not None and not memory._fresh(bundle):
+            raise BrokerError("bundle evidence changed during read; review the bundle")
         self.store.audit(
             agent_id,
             "profile.read",
@@ -2248,7 +2575,7 @@ class Broker:
             "select key from kv where namespace='connection'"
         ):
             config = self.store.get("connection", row["key"])
-            if not isinstance(config, dict) or config.get("kind") != "imap":
+            if not isinstance(config, dict) or config.get("kind") not in {"imap", "gmail"}:
                 continue
             source_id = config.get("source_id", row["key"])
             if isinstance(source_id, str):
@@ -2264,8 +2591,6 @@ class Broker:
             if not (
                 isinstance(username, str)
                 and username.strip().casefold() == address
-            ) and not (
-                isinstance(label, str) and label.strip().casefold() == address
             ):
                 continue
             provider = (
@@ -2331,63 +2656,92 @@ class Broker:
         raise BrokerError("message not found")
 
     def request_auth_code(
-        self, agent_id, account_id, target_origin, purpose, max_age_seconds=300
+        self,
+        agent_id,
+        account_id,
+        target_origin=None,
+        purpose=None,
+        max_age_seconds=300,
+        origin_policy="target-origin",
     ):
-        if not target_origin or not purpose:
-            raise BrokerError("target_origin and purpose are required")
+        origin_policy = _normalize_otp_origin_policy(origin_policy)
         try:
             max_age_seconds = int(max_age_seconds)
         except (TypeError, ValueError):
             raise BrokerError("max_age_seconds must be an integer")
         if max_age_seconds < 1 or max_age_seconds > 3600:
             raise BrokerError("max_age_seconds must be between 1 and 3600 seconds")
-        self._authorized(agent_id, "email.otp", account_id, target_origin, purpose)
+        normalized_target = (
+            _normalize_origin(target_origin, "target_origin")
+            if target_origin
+            else None
+        )
+        normalized_purpose = _normal_text(purpose, "purpose") if purpose else None
+        if origin_policy == "target-origin" and not normalized_target:
+            raise BrokerError("target-origin OTP selection requires target_origin")
+        self._authorized(
+            agent_id,
+            "email.otp",
+            account_id,
+            normalized_target,
+            normalized_purpose,
+        )
         self.store.purge_legacy_otp_markers()
         adapter = self._ensure_email_source(account_id)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         candidates = []
+        stale = False
+        unmatched = False
         messages = (
-            adapter.recent(max_age_seconds)
+            adapter.recent(min(3600, max(900, max_age_seconds * 2)))
             if adapter is not None and hasattr(adapter, "recent")
             else self.email.get(account_id, [])
         )
         for m in messages:
-            received_at = datetime.fromisoformat(m.received_at)
-            if received_at.tzinfo is None:
-                received_at = received_at.replace(tzinfo=timezone.utc)
+            received_at = _message_received_at(m.received_at)
+            if received_at is None:
+                continue
             age = (now - received_at).total_seconds()
-            if 0 <= age <= max_age_seconds:
-                codes = re.findall(r"\b\d{4,8}\b", m.body)
-                candidates.extend((m, c) for c in codes)
-        parsed_origin = urlparse(
-            target_origin if "://" in target_origin else "//" + target_origin
-        )
-        domain = (parsed_origin.hostname or "").lower().rstrip(".")
-        if len(candidates) != 1:
-            raise BrokerError(
-                "no unambiguous recent authentication code associated with target origin"
-            )
-        bound = [
+            if age < 0 or age > 3600:
+                continue
+            codes = _extract_auth_codes(m.body)
+            if not codes:
+                continue
+            if origin_policy == "target-origin" and not _otp_sender_matches(m.sender, normalized_target):
+                unmatched = unmatched or age <= max_age_seconds
+                continue
+            if age > max_age_seconds:
+                stale = True
+                continue
+            candidates.extend((m, c, received_at) for c in codes)
+        if not candidates:
+            if stale:
+                raise AuthCodeError("otp_stale", "Only expired authentication codes were found",
+                                    "Request a new code on the website, then retry")
+            if unmatched:
+                raise AuthCodeError("otp_service_mismatch", "No recent code matched the target service",
+                                    "Verify the service's sender domain; complete sign-in manually if it is unsupported")
+            raise AuthCodeError("otp_not_found", "No authentication code was found in the checked messages",
+                                "Wait for delivery and retry; if none arrives, request a new code on the website")
+        # Use the newest message only; never fall back to an older code.
+        newest_received_at = max(item[2] for item in candidates)
+        newest = [
             item
             for item in candidates
-            if _hostname_token_matches(
-                item[0].sender + " " + item[0].subject + " " + item[0].body,
-                domain,
-            )
+            if item[2] == newest_received_at
         ]
-        if len(bound) != 1:
-            raise BrokerError(
-                "recent authentication code is not bound to target origin"
-            )
-        candidates = bound
-        m, code = candidates[0]
+        if len(newest) != 1:
+            raise AuthCodeError("otp_ambiguous", "No unambiguous recent authentication code",
+                                "Complete verification manually or request one new code; do not guess")
+        m, code, _ = newest[0]
         used_key = hashlib.sha256(
-            f"{agent_id}\0{account_id}\0{m.message_id}".encode()
+            f"{account_id}\0{m.message_id}".encode()
         ).hexdigest()
         if not self.store.put_if_absent(
             "otp-consumed", used_key, {"used_at": now_iso()}
         ):
-            raise BrokerError("authentication code already consumed")
+            raise AuthCodeError("otp_consumed", "Authentication code already consumed",
+                                "Check whether sign-in succeeded; otherwise request a new code on the website")
         self.store.audit(
             agent_id,
             "email.otp",
@@ -2395,8 +2749,9 @@ class Broker:
             now_iso(),
             {
                 "message_id": m.message_id,
-                "target_origin": target_origin,
-                "purpose": purpose,
+                "target_origin": normalized_target,
+                "purpose": normalized_purpose,
+                "origin_policy": origin_policy,
             },
         )
         return {
@@ -2413,9 +2768,10 @@ class Broker:
         self,
         agent_id,
         recipient,
-        target_origin,
-        purpose,
+        target_origin=None,
+        purpose=None,
         max_age_seconds=300,
+        origin_policy="target-origin",
     ):
         """Return a code for an exact recipient without exposing source IDs."""
 
@@ -2426,6 +2782,7 @@ class Broker:
             target_origin,
             purpose,
             max_age_seconds,
+            origin_policy,
         )
 
     def request_verification_link_for_recipient(
@@ -2465,7 +2822,7 @@ class Broker:
         )
         self.store.purge_legacy_otp_markers()
         adapter = self._ensure_email_source(account_id)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         messages = (
             adapter.recent(max_age_seconds)
             if adapter is not None and hasattr(adapter, "recent")
@@ -2474,13 +2831,13 @@ class Broker:
 
         candidates: list[tuple[EmailMessage, str]] = []
         for message in messages:
-            received_at = datetime.fromisoformat(message.received_at)
-            if received_at.tzinfo is None:
-                received_at = received_at.replace(tzinfo=timezone.utc)
+            received_at = _message_received_at(message.received_at)
+            if received_at is None:
+                continue
             age = (now - received_at).total_seconds()
             if age < 0 or age > max_age_seconds:
                 continue
-            text = " ".join((message.sender, message.subject, message.body))
+            text = f"{message.sender} {message.subject} {message.body}"
             for raw_link in _VERIFICATION_LINK_PATTERN.findall(text):
                 link = raw_link.rstrip(_VERIFICATION_LINK_TRAILING)
                 try:
@@ -2529,7 +2886,7 @@ class Broker:
         self._authorized(agent_id, "messages.search", conversation_scope)
         q = query.lower()
         rows = []
-        for source_id, adapter in self.message_adapters.items():
+        for adapter in self.message_adapters.values():
             if hasattr(adapter, "search"):
                 rows.extend(adapter.search(query, conversation_scope, limit))
         rows.extend(

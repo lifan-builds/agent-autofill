@@ -1,0 +1,59 @@
+[
+  {
+    "case_id": "MB-001",
+    "label": "Email address",
+    "profile_fields": [
+      {"field_id": "email", "category": "contact", "display_name": "Email address"}
+    ],
+    "expected_status": "matched",
+    "expected_top_field_id": "email"
+  },
+  {
+    "case_id": "MB-002",
+    "label": "Work email",
+    "profile_fields": [
+      {"field_id": "email_home", "category": "contact", "display_name": "Email", "provenance": {"source": "chrome-structured-address", "source_profile_id": "fixture", "source_guid_hash": "home", "field_type": "email"}},
+      {"field_id": "email_work", "category": "contact", "display_name": "Email", "provenance": {"source": "chrome-structured-address", "source_profile_id": "fixture", "source_guid_hash": "work", "field_type": "email"}}
+    ],
+    "expected_status": "ambiguous"
+  },
+  {
+    "case_id": "MB-003",
+    "label": "Country/Region",
+    "profile_fields": [
+      {"field_id": "country", "category": "address", "display_name": "Saved address country", "provenance": {"source": "chrome-structured-address", "source_profile_id": "fixture", "source_guid_hash": "home", "field_type": "country"}}
+    ],
+    "expected_status": "matched",
+    "expected_top_field_id": "country"
+  },
+  {
+    "case_id": "MB-004",
+    "label": "What ZIP Code are you mailing to?",
+    "profile_fields": [],
+    "expected_status": "task_specific"
+  },
+  {
+    "case_id": "MB-005",
+    "label": "Verification code",
+    "profile_fields": [],
+    "expected_status": "transient"
+  },
+  {
+    "case_id": "MB-006",
+    "label": "Password",
+    "profile_fields": [],
+    "expected_status": "credential"
+  },
+  {
+    "case_id": "MB-007",
+    "label": "Current company",
+    "profile_fields": [],
+    "expected_status": "missing"
+  },
+  {
+    "case_id": "MB-008",
+    "label": "Marketing updates",
+    "profile_fields": [],
+    "expected_status": "consent"
+  }
+]

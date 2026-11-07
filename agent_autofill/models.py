@@ -1,9 +1,9 @@
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 @dataclass(frozen=True)
@@ -20,7 +20,7 @@ class Grant:
     def active(self) -> bool:
         return not self.revoked and datetime.fromisoformat(
             self.expires_at
-        ) > datetime.now(timezone.utc)
+        ) > datetime.now(UTC)
 
 
 @dataclass(frozen=True)
@@ -30,7 +30,7 @@ class EmailMessage:
     sender: str
     subject: str
     body: str
-    received_at: str
+    received_at: str | None
 
 
 @dataclass(frozen=True)
@@ -39,4 +39,4 @@ class TextMessage:
     conversation_id: str
     sender: str
     body: str
-    sent_at: str
+    sent_at: str | None

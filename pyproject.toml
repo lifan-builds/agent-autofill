@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-autofill"
-version = "0.1.0"
+version = "0.1.2"
 description = "Local-first personal information broker for AI agents"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -23,7 +23,7 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/lifan-builds/agent-autofill"
+Homepage = "https://clifan.com/agent-autofill/"
 Repository = "https://github.com/lifan-builds/agent-autofill"
 Issues = "https://github.com/lifan-builds/agent-autofill/issues"
 
@@ -33,6 +33,9 @@ agent-autofill-server = "agent_autofill.server:main"
 
 [tool.setuptools.packages.find]
 include = ["agent_autofill*"]
+
+[tool.setuptools.package-data]
+agent_autofill = ["review_assets/*.html", "review_assets/*.css", "review_assets/*.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

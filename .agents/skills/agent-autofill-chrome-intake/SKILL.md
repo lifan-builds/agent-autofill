@@ -1,13 +1,36 @@
 ---
 name: agent-autofill-chrome-intake
-description: Bootstrap Agent Autofill from a user-selected local Chrome profile by organizing saved names, contact details, and addresses, resolving ambiguities, and saving only a finally approved proposal. Use for Chrome cold-start intake, not general form filling, autocomplete-history mining, password/payment extraction, or browser automation.
+description: Bootstrap Agent Autofill from a user-selected local Chrome profile by organizing saved autofill names, contact details, and addresses, with an optional explicit local-only import of Chrome Password Manager credentials. Use for Chrome cold-start intake, not general form filling, autocomplete-history mining, payment extraction, or browser automation.
 ---
 
 # Chrome agentic intake
 
+For contextual intake, review the exact ordinary fields and their meaning
+together. Use the `context` argument of `save_approved_profiles` in
+`references/local-intake.md`, or the authenticated `write_context` tool with
+`kind: bundle` and `profile_entries`. This commits the approved facts, source
+provenance and bundle atomically. The context includes agent_id, record_id,
+expected_revision, target_origin, purpose, confirmed and data (fields mapping,
+subject, role, title, currentness). It requires existing scoped profile.write
+grants; do not create a broader grant or fall back to administrative writes.
+Leave unresolved subject, role and currentness as `unknown`. Do not infer
+ownership from shared addresses or Chrome recency. Reimports require the exact
+previous field timestamp and bundle revision; conflicts return for review.
+The older context-free recipe remains for compatibility and reports partial
+per-record failures; use the atomic contextual path for this workflow.
+
 You are the intake agent. Agent Autofill provides local storage and these
 instructions, not a separate model or automatic importer. Use your normal
 reasoning and conversation to curate the source data.
+
+Lead with the user's task. Compare and prepare a proposed interpretation before
+asking questions; do not delegate classification of every group to the user.
+Ask one consequential question at a time with recognizable existing values,
+and defer unrelated groups. A question may include the exact proposed save
+effect so a direct affirmative answer resolves and approves it in one turn;
+an answer without that displayed effect is only clarification. For existing
+saved data, use [conversation onboarding](../agent-autofill/references/conversation-onboarding.md).
+New imports and value/scope changes still need the complete proposal below.
 
 ## Establish the source
 
@@ -31,16 +54,61 @@ Read [classification-guide.md](references/classification-guide.md) before
 classifying candidates. It defines the default mappings, held cases, and
 grouped questions to ask a human when Chrome's columns or address ownership are
 ambiguous.
-Use only structured names, contact details, and addresses. Do not query
-autocomplete history, passwords, cards, authentication material, sync payloads,
+Use the synthetic intake checks in
+[the Chrome intake benchmark](../../../evals/chrome_intake/README.md) when
+changing this workflow; they measure group fidelity, safe normalization,
+ambiguity holds, replay stability, and write separation.
+Use the structured autofill path for names, contact details, and addresses. Do
+not query autocomplete history, cards, authentication material, sync payloads,
 or unrelated browser files. Never run `chrome import`, `cold_start`, or `setup`
 as part of intake: those paths persist data before this review.
+
+Chrome passwords are a separate, optional intake. Before reading any Chrome
+Password Manager database, ask a fresh, plain-language question such as:
+
+> Chrome has saved login passwords. Do you authorize reading them from the
+> selected Chrome profile and importing them directly into Agent Autofill's
+> encrypted local store on this device only? Passwords will not be shown to me,
+> copied to a file, sent to a service, or added to the review proposal. Yes or
+> no?
+
+Do not infer consent from the request to seed autofill, a previous form-fill
+approval, or a generic “go ahead.” A clear yes authorizes the password read and
+local export only for the selected profile and current run. A no, unclear
+answer, or missing local broker leaves passwords untouched and the ordinary
+autofill intake may continue. Read [password-intake.md](references/password-intake.md)
+only after a clear yes. Password plaintext must remain in the importer process;
+the agent may receive only the value-free preview and completion counts.
 
 On a locked database, ask the user to close Chrome and retry when ready. On an
 unsupported schema, report that limitation. Never force-close Chrome, ignore
 journals/WAL, use SQLite immutable mode, decrypt protected browser data, or
 copy the raw database to disk. Keep candidates in the current execution and
 conversation only; do not create candidate exports or staging records.
+
+## Onboard in four phases
+
+1. **Scan the selected profile.** Read only the supported structured tables in
+   the read-only transaction described in `local-intake.md`.
+2. **Organize before interpreting.** Always run
+   `organize_structured_candidates(read_structured_addresses(profile_dir))`.
+   Keep the returned source groups intact. Use each field's
+   `normalized_value` only for matching and comparison; preserve the original
+   `value` for review and any approved write.
+3. **Resolve blockers.** First show a value-free summary containing the number
+   of profiles, source groups, fields, flagged groups, and ignored or
+   unsupported rows. Then ask only the grouped questions needed to resolve
+   ownership, currentness, unsplit names, conflicting street representations,
+   or suspicious content. Duplicate signals are questions, never automatic
+   merge decisions. Keep flagged groups held until the answer is incorporated
+   and the proposal is regenerated.
+4. **Review and save exact rows.** Show the complete proposal with ordinary
+   values only after the blocking questions are resolved. Save only the exact
+   unchanged rows the user approves through the existing local broker path.
+
+Never merge source groups automatically, even when normalized values match.
+Organization is a deterministic review aid, not save approval and not proof
+that two source rows belong to the same person or address.
 
 ## Curate before asking
 
@@ -129,6 +197,14 @@ check that its target metadata still matches what was reviewed; hold stale
 changes for renewed review. Supply ordinary values as data in the local
 execution payload, not interpolated shell syntax or a saved plaintext file.
 Do not bypass public profile validation with direct SQLite writes.
+
+Password-manager imports are not part of the profile proposal. Run them only
+after the separate local-only consent above, show the value-free reconciliation
+preview, and obtain any final approval required by the command before syncing
+adds or updates. Never request or print a password, copy Chrome's database or
+CSV, attach a password to provenance, or export credentials anywhere other
+than the selected Agent Autofill database. Do not remove stale credentials
+unless the user separately and explicitly approves that deletion.
 
 These writes commit individually. If one fails, stop and report saved IDs and
 pending IDs without raw exception text or values; never claim atomic rollback,

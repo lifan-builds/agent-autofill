@@ -4,14 +4,17 @@ import argparse
 import json
 import os
 import sys
-from .catalog import TOOLS
-from .service import Broker, BrokerError
-from .storage import Store, KeyringProvider
-from .imap_adapter import IMAPEmailAdapter
-from .google_oauth import GoogleOAuthError, oauth_provider_from_keychain_secret
-from .messages_adapter import MacMessagesAdapter
-from .local import LocalConnection, connect_service, default_database_path
+from importlib.metadata import version
 
+from .catalog import TOOLS
+from .context_memory import ContextMemory
+from .gmail_adapter import GmailEmailAdapter
+from .google_oauth import GoogleOAuthError, oauth_provider_from_keychain_secret
+from .imap_adapter import IMAPAuthenticationError, IMAPEmailAdapter
+from .local import LocalConnection, connect_service, default_database_path
+from .messages_adapter import MacMessagesAdapter
+from .service import AuthCodeError, Broker, BrokerError
+from .storage import KeyringProvider, Store
 
 
 def _call(
@@ -42,9 +45,15 @@ def _call(
     } and not broker.authenticate_agent(agent, token):
         raise BrokerError("agent authentication failed")
     dispatch = {
+        "write_context": lambda: ContextMemory(broker).write(agent, **params),
+        "get_task_context": lambda: ContextMemory(broker).retrieve(agent, **params),
         "list_sources": lambda: broker.list_sources(**params),
         "list_profile_fields": lambda: broker.list_profile_fields(**params),
         "list_profile_groups": lambda: broker.list_profile_groups(),
+        "match_form_fields": lambda: broker.match_form_fields(**params),
+        "record_form_mapping_feedback": lambda: broker.record_form_mapping_feedback(
+            agent, **params
+        ),
         "list_credentials": lambda: broker.list_credentials(**params),
         "match_credentials": lambda: broker.match_credentials(**params),
         "list_financial_records": lambda: broker.list_financial_records(**params),
@@ -89,7 +98,7 @@ def _register_connections(broker: Broker, keyring: KeyringProvider) -> None:
         config = broker.store.get("connection", row["key"])
         if not config:
             continue
-        if config.get("kind") == "imap":
+        if config.get("kind") in {"imap", "gmail"}:
             source_id = config.get("source_id", row["key"])
             if source_id not in broker.sources:
                 broker.add_source(
@@ -101,7 +110,7 @@ def _register_connections(broker: Broker, keyring: KeyringProvider) -> None:
                 continue
             try:
                 secret = keyring.get_secret(secret_name)
-            except Exception:
+            except Exception:  # noqa: BLE001 - provider errors must remain value-free
                 broker.mark_email_unavailable(source_id)
                 continue
             if not secret:
@@ -117,16 +126,18 @@ def _register_connections(broker: Broker, keyring: KeyringProvider) -> None:
                         secret,
                         on_refresh=save_refreshed_secret,
                     )
-                    adapter = IMAPEmailAdapter(
-                        source_id,
-                        config["host"],
-                        config["username"],
-                        None,
-                        config.get("port", 993),
-                        config.get("mailbox", "INBOX"),
-                        None,
-                        provider,
-                    )
+                    adapter: IMAPEmailAdapter | GmailEmailAdapter
+                    if config.get("kind") == "gmail":
+                        adapter = GmailEmailAdapter(
+                            source_id, config["username"], provider,
+                            config.get("mailbox", "INBOX"),
+                        )
+                    else:
+                        adapter = IMAPEmailAdapter(
+                            source_id, config["host"], config["username"], None,
+                            config.get("port", 993), config.get("mailbox", "INBOX"),
+                            None, provider,
+                        )
                 else:
                     value = secret.decode()
                     if auth_kind == "oauth2":
@@ -194,24 +205,38 @@ def main(argv=None):
     try:
         for line in sys.stdin:
             req = {}
+            req_id = None
             try:
-                req = json.loads(line)
-                name = req.get("method")
-                p = dict(req.get("params", {}))
+                parsed = json.loads(line)
+                if not isinstance(parsed, dict):
+                    raise BrokerError("request must be an object")
+                req = parsed
+                if req.get("id") is not None and type(req["id"]) not in {str, int}:
+                    raise BrokerError("request id must be a string or integer")
                 req_id = req.get("id")
+                name = req.get("method")
+                if not isinstance(name, str):
+                    raise BrokerError("method must be a string")
+                if not isinstance(req.get("params", {}), dict):
+                    raise BrokerError("params must be an object")
+                p = dict(req.get("params", {}))
                 if name == "notifications/initialized":
                     continue
                 if name == "initialize":
                     result = {
                         "protocolVersion": "2025-06-18",
                         "capabilities": {"tools": {"listChanged": False}},
-                        "serverInfo": {"name": "agent-autofill", "version": "0.1.0"},
+                        "serverInfo": {"name": "agent-autofill", "version": version("agent-autofill")},
                     }
                 elif name == "tools/list":
                     result = {"tools": TOOLS}
                 elif name == "tools/call":
                     tool_name = p.get("name")
-                    arguments = dict(p.get("arguments") or {})
+                    if not isinstance(tool_name, str):
+                        raise BrokerError("tool name must be a string")
+                    if not isinstance(p.get("arguments", {}), dict):
+                        raise BrokerError("tool arguments must be an object")
+                    arguments = dict(p.get("arguments", {}))
                     result = {
                         "content": [
                             {
@@ -230,16 +255,23 @@ def main(argv=None):
                         json.dumps({"jsonrpc": "2.0", "id": req_id, "result": result}),
                         flush=True,
                     )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - isolate requests and redact unexpected backend errors
                 print(
                     json.dumps(
                         {
                             "jsonrpc": "2.0",
-                            "id": req.get("id"),
+                            "id": req_id,
                             "error": {
                                 "code": -32000,
                                 "type": type(e).__name__,
-                                "message": str(e),
+                                "message": (
+                                    str(e) if isinstance(e, BrokerError)
+                                    else "Email authentication failed; run email-test for this source and reconnect its authorization"
+                                    if isinstance(e, IMAPAuthenticationError)
+                                    else "Request failed; backend details were withheld"
+                                ),
+                                **({"reason": e.reason, "next_action": e.next_action}
+                                   if isinstance(e, AuthCodeError) else {}),
                             },
                         }
                     ),
@@ -248,7 +280,5 @@ def main(argv=None):
     finally:
         if connection is not None:
             connection.close()
-
-
-if __name__ == "__main__":
-    main()
+        else:
+            broker.store.db.close()

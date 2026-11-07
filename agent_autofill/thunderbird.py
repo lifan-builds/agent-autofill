@@ -12,13 +12,14 @@ import ast
 import base64
 import configparser
 import ctypes
+import json
+import re
+import zipfile
+from collections.abc import Callable, Iterable
 from ctypes import POINTER, Structure, c_char_p, c_int, c_ubyte, c_uint, c_void_p
 from dataclasses import dataclass
-import json
 from pathlib import Path
-import re
-from typing import Any, Callable, Iterable
-import zipfile
+from typing import Any, Self
 
 from .google_oauth import GoogleOAuthTokenProvider, MicrosoftOAuthTokenProvider
 from .imap_adapter import (
@@ -29,7 +30,6 @@ from .imap_adapter import (
     IMAPEmailAdapter,
     IMAPMailboxError,
 )
-
 
 DEFAULT_PROFILE_ROOT = Path.home() / "Library" / "Thunderbird"
 DEFAULT_THUNDERBIRD_APP = Path("/Applications/Thunderbird.app/Contents/MacOS")
@@ -251,7 +251,7 @@ class _NSS:
             self._lib.NSS_Shutdown()
             self._closed = True
 
-    def __enter__(self) -> "_NSS":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, _type, _value, _traceback) -> None:
@@ -389,7 +389,7 @@ def verify_profile(
                 adapter = adapter_factory(account.account_id, account.host, account.username, None, account.port, account.mailbox, None, provider)
                 adapter.check_connection()
                 status, reason = "PASS", None
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - expose only the sanitized failure category
                 status, reason = "FAIL", _failure_reason(exc)
             results.append(ThunderbirdAccountResult(account.account_id, account.username, account.host, account.provider, status, reason))
             if status == "PASS" and verified_out is not None:

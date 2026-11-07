@@ -5,26 +5,34 @@ import getpass
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+
 from . import cli_connectors as _connector_flows
 from .chrome import (
+    ChromeImportError,
     cold_start,
+    default_profile,
     discover_profiles,
     preview_chrome_password_manager,
     sync_chrome_password_manager,
 )
+from .cli_connectors import IMAPEmailAdapter
 from .cli_connectors import (
     _configure_gmail as _configure_gmail_impl,
+)
+from .cli_connectors import (
     _configure_imap as _configure_imap_impl,
+)
+from .cli_connectors import (
     _import_thunderbird as _import_thunderbird_impl,
 )
-from .cli_connectors import _oauth_keychain_secret as _oauth_keychain_secret  # noqa: F401
-from .cli_connectors import IMAPEmailAdapter
-from .thunderbird import (
-    ThunderbirdError,
-    discover_profile,
-    test_profile,
+from .cli_connectors import _oauth_keychain_secret as _oauth_keychain_secret  # noqa: PLC0414 - legacy re-export
+from .form_policy import (
+    CONFIRMATION_MODES,
+    get_form_submission_policy,
+    set_form_submission_policy,
 )
+from .local import default_database_path
 from .service import Broker
 from .status import (
     _print_status,
@@ -33,8 +41,11 @@ from .status import (
     _status_snapshot,
 )
 from .storage import KeyringProvider, Store
-from .local import default_database_path
-
+from .thunderbird import (
+    ThunderbirdError,
+    discover_profile,
+    test_profile,
+)
 
 _SETUP_GRANT_EXPIRES_IN = 600
 _SITE_DELIVERY_OPERATIONS = {
@@ -106,6 +117,32 @@ def _select_setup_profile(explicit_profile: str | None) -> str:
     return input("Chrome profile directory (blank to skip): ").strip()
 
 
+def _default_setup_profile(explicit_profile: str | None) -> str:
+    """Return Chrome's Default profile, with no secondary-profile fallback."""
+
+    try:
+        # Discovery is deliberately a presence check only.  It prevents a
+        # first run on a machine without Chrome from prompting or touching a
+        # guessed path, while the resolver below still guarantees Default
+        # unless the caller explicitly passed a numbered Profile directory.
+        if explicit_profile is None and not discover_profiles():
+            return ""
+        if explicit_profile is not None:
+            candidate = Path(explicit_profile).expanduser()
+            if re.fullmatch(r"Profile \d+", candidate.name):
+                if not candidate.is_dir():
+                    raise ChromeImportError(
+                        f"Chrome Default profile directory not found: {candidate}"
+                    )
+                return str(candidate)
+        return str(default_profile(explicit_profile))
+    except ChromeImportError as exc:
+        if explicit_profile:
+            raise SystemExit(str(exc)) from exc
+        print(f"Chrome seed skipped: {exc}")
+        return ""
+
+
 def _demo_snapshot() -> dict[str, object]:
     """Build a synthetic, memory-only status projection for first-run tours.
 
@@ -132,7 +169,7 @@ def _demo_snapshot() -> dict[str, object]:
             "synthetic-password",
             provenance={"source": "synthetic-demo"},
         )
-        demo_broker.create_agent("demo-agent")
+        demo_token = demo_broker.create_agent("demo-agent")
         demo_broker.grant(
             "demo-agent",
             "profile.read",
@@ -183,11 +220,48 @@ def _demo_snapshot() -> dict[str, object]:
                 "messages_status": "skipped",
             },
         }
-        snapshot["demo"] = {
+        demo: dict[str, Any] = {
             "synthetic": True,
             "database": "memory-only",
             "next_action": "Exit demo and run `agent-autofill start` for your local vault",
         }
+        snapshot["demo"] = demo
+        # Exercise the same authenticated tool boundary used by a connected agent.
+        from .server import _call
+        from .service import BrokerError
+
+        request = {
+            "agent_id": "demo-agent", "agent_token": demo_token,
+            "field_ids": ["display_name"], "target_origin": "https://example.test",
+            "purpose": "demo walkthrough",
+        }
+        _call(demo_broker, "request_profile_fields", dict(request))
+        demo_broker.grant(
+            "demo-agent", "credential.use", "example-login",
+            "https://example.test", "demo walkthrough", 600,
+        )
+        handoff = _call(demo_broker, "request_credential", {
+            "agent_id": "demo-agent", "agent_token": demo_token,
+            "delivery": "extension", "credential_id": "example-login",
+            "target_origin": "https://example.test", "purpose": "demo walkthrough",
+        })
+        demo_broker.consume_credential_handle(
+            handoff["handle"], "demo-agent", "https://example.test"
+        )
+        demo_broker.revoke_agent("demo-agent")
+        try:
+            _call(demo_broker, "request_profile_fields", dict(request))
+        except BrokerError:
+            revoked = True
+        else:
+            raise RuntimeError("Synthetic revocation check failed")
+        demo["walkthrough"] = [
+            {"step": "Read an approved profile field through the agent tool", "passed": True},
+            {"step": "Deliver a login through a one-time browser handoff", "passed": True},
+            {"step": "Revoke the agent and verify the next read is denied", "passed": revoked},
+        ]
+        demo["scope"] = "Synthetic broker/tool checks; no browser was filled"
+        demo["status_snapshot"] = "Before walkthrough; the demo agent is revoked at the end"
         return snapshot
     finally:
         demo_store.db.close()
@@ -196,7 +270,7 @@ def _demo_snapshot() -> dict[str, object]:
 def _sync_connector_test_seams() -> None:
     """Keep legacy CLI monkeypatch/import seams working after extraction."""
 
-    setattr(_connector_flows, "IMAPEmailAdapter", IMAPEmailAdapter)
+    setattr(_connector_flows, "IMAPEmailAdapter", IMAPEmailAdapter)  # noqa: B010 - replaceable test seam
 
 
 def _configure_imap(*args: Any, **kwargs: Any) -> dict:
@@ -221,7 +295,7 @@ def _import_thunderbird(*args: Any, **kwargs: Any) -> list[dict]:
 class _MarkExplicitAction(argparse.Action):
     """Keep a legacy default while remembering whether an option was supplied."""
 
-    def __call__(self, parser, namespace, values, option_string=None):
+    def __call__(self, _parser, namespace, values, _option_string=None):
         setattr(namespace, self.dest, values)
         setattr(namespace, f"_{self.dest}_explicit", True)
 
@@ -250,8 +324,8 @@ def _broker(path: str) -> Broker:
         if config and config.get("secret_name"):
             connector_names.append(config["secret_name"])
     migrate = getattr(keyring, "migrate_legacy", None)
-    setattr(broker, "_keyring_migrated_count", migrate(connector_names) if callable(migrate) else 0)
-    setattr(broker, "_keyring_provider", keyring)
+    setattr(broker, "_keyring_migrated_count", migrate(connector_names) if callable(migrate) else 0)  # noqa: B010 - CLI-only metadata
+    setattr(broker, "_keyring_provider", keyring)  # noqa: B010 - CLI-only diagnostic hook
     return broker
 
 
@@ -441,7 +515,7 @@ def _setup_grant_proposal(
     _setup_validate_agent(broker, agent_id)
     available_fields = tuple(
         item["field_id"]
-        for item in broker.list_profile_fields()
+        for item in broker._iter_profile_fields()
         if isinstance(item.get("field_id"), str) and item["field_id"]
     )
     selected_fields = list(profile_field_ids)
@@ -480,15 +554,11 @@ def _setup_grant_proposal(
     ):
         raise SystemExit(f"Unknown email account ID: {email_account_id}")
 
-    if selected_fields or include_email_otp:
+    if selected_fields:
         if not isinstance(target_origin, str) or not target_origin.strip():
-            raise SystemExit(
-                "A nonempty origin is required for profile and OTP grants"
-            )
+            raise SystemExit("A nonempty origin is required for profile grants")
         if not isinstance(purpose, str) or not purpose.strip():
-            raise SystemExit(
-                "A nonempty purpose is required for profile and OTP grants"
-            )
+            raise SystemExit("A nonempty purpose is required for profile grants")
         target_origin = target_origin.strip()
         purpose = purpose.strip()
         if "*" in target_origin or "*" in purpose:
@@ -519,8 +589,8 @@ def _setup_grant_proposal(
             {
                 "operation": "email.otp",
                 "resource_scope": email_account_id,
-                "target_origin": target_origin,
-                "purpose": purpose,
+                "target_origin": None,
+                "purpose": None,
                 "expires_in_seconds": _SETUP_GRANT_EXPIRES_IN,
             }
         )
@@ -536,7 +606,7 @@ def _configure_setup_grants(broker: Broker, agent_id: str) -> list:
 
     profile_ids = tuple(
         item["field_id"]
-        for item in broker.list_profile_fields()
+        for item in broker._iter_profile_fields()
         if isinstance(item.get("field_id"), str) and item["field_id"]
     )
     if profile_ids:
@@ -577,15 +647,15 @@ def _configure_setup_grants(broker: Broker, agent_id: str) -> list:
                 == "y"
             )
             include_email_otp = (
-                input("Authorize origin/purpose-bound email OTP? [y/N] ").strip().lower()
+                input("Authorize mailbox-read email OTP? [y/N] ").strip().lower()
                 == "y"
             )
 
     target_origin = None
     purpose = None
-    if selected_fields or include_email_otp:
-        target_origin = input("Origin for profile/OTP grants (required): ").strip()
-        purpose = input("Purpose for profile/OTP grants (required): ").strip()
+    if selected_fields:
+        target_origin = input("Origin for profile grants (required): ").strip()
+        purpose = input("Purpose for profile grants (required): ").strip()
 
     # Build the complete proposal before printing a confirmation or calling
     # Broker.grant, so a bad id/scope cannot leave a partial grant set behind.
@@ -790,7 +860,7 @@ def _interactive_profile(broker: Broker, args: argparse.Namespace) -> bool:
     metadata = next(
         (
             item
-            for item in broker.list_profile_fields()
+            for item in broker._iter_profile_fields()
             if item.get("field_id") == args.field_id
         ),
         None,
@@ -895,8 +965,8 @@ def _parser() -> argparse.ArgumentParser:
             "  %(prog)s data                  see what is stored (metadata only)\n"
             "  %(prog)s access                review agent access and grants\n\n"
             "Chrome seed:\n"
-            "  %(prog)s chrome profiles       list profiles for explicit selection\n"
-            "  Then ask your local agent to use the Chrome intake guide.\n\n"
+            "  %(prog)s chrome profiles       show the Default profile only\n"
+            "  %(prog)s chrome import         review/import Default profile data\n\n"
             "Use `%(prog)s <command> --help` for examples and options."
         ),
     )
@@ -938,6 +1008,7 @@ def _parser() -> argparse.ArgumentParser:
     profile_list.add_argument("--category")
     profile_list.add_argument("--query")
     profile_list.add_argument("--limit", type=int, default=100)
+    profile_list.add_argument("--offset", type=int, default=0)
     grant = sub.add_parser("grant", help="create an agent capability grant")
     grant.add_argument("agent_id")
     grant.add_argument("operation")
@@ -946,7 +1017,15 @@ def _parser() -> argparse.ArgumentParser:
     grant.add_argument("--purpose")
     grant.add_argument("--expires-in", type=int, default=600)
     email_grant = sub.add_parser(
-        "grant-email", help="create an exact or all-mailbox email grant"
+        "grant-email",
+        help=(
+            "create an exact or all-mailbox email grant; Website OTP requests default to "
+            "origin_policy=target-origin"
+        ),
+        description=(
+            "Create an exact or all-mailbox email grant. OTP retrieval uses "
+            "origin_policy=target-origin."
+        ),
     )
     email_grant.add_argument("agent_id")
     email_grant.add_argument(
@@ -1008,6 +1087,7 @@ def _parser() -> argparse.ArgumentParser:
     creds.add_argument("--target-origin")
     creds.add_argument("--username-hint")
     creds.add_argument("--limit", type=int, default=100)
+    creds.add_argument("--offset", type=int, default=0)
     financial = sub.add_parser(
         "financial-records",
         aliases=["financial"],
@@ -1017,10 +1097,12 @@ def _parser() -> argparse.ArgumentParser:
     financial.add_argument("--kind")
     financial.add_argument("--network")
     financial.add_argument("--last4")
+    financial.add_argument("--card-suffix", help="match four or five ending digits without returning card values")
     financial.add_argument("--expiration-month")
     financial.add_argument("--expiration-year")
     financial.add_argument("--query")
     financial.add_argument("--limit", type=int, default=100)
+    financial.add_argument("--offset", type=int, default=0)
     card = sub.add_parser(
         "payment-card-add",
         help="review and store or replace one encrypted local payment card",
@@ -1041,6 +1123,23 @@ def _parser() -> argparse.ArgumentParser:
         "record_type", choices=["profile", "credential", "financial"]
     )
     record_delete.add_argument("record_id")
+    policy = sub.add_parser(
+        "policy", help="configure local acting-agent form submission policy"
+    )
+    policy_sub = policy.add_subparsers(dest="policy_command", required=True)
+    form_policy = policy_sub.add_parser(
+        "form-submission",
+        help="set or show the confirmation gate before an acting agent submits",
+    )
+    form_policy.add_argument(
+        "--confirmation",
+        choices=list(CONFIRMATION_MODES),
+        help=(
+            "always ask immediately before submit (default), or allow skipping "
+            "that prompt for ordinary non-financial forms"
+        ),
+    )
+    form_policy.add_argument("--json", action="store_true")
     email = sub.add_parser("email-add", help="configure a read-only IMAP account")
     email.add_argument("account_id")
     email.add_argument("host")
@@ -1065,6 +1164,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     gmail.add_argument("--label")
     gmail.add_argument("--mailbox", default="INBOX")
+    reconnect = sub.add_parser(
+        "email-reconnect-gmail",
+        help="renew one saved Google email source using its client in Keychain",
+    )
+    reconnect.add_argument("account_id")
     email_test = sub.add_parser(
         "email-test", help="test a saved read-only IMAP account"
     )
@@ -1123,7 +1227,10 @@ def _parser() -> argparse.ArgumentParser:
     cp = cs.add_parser("profiles")
     cp.add_argument("--root")
     ci = cs.add_parser("import")
-    ci.add_argument("--profile-dir", required=True)
+    ci.add_argument(
+        "--profile-dir",
+        help="optional Chrome user-data root; only its Default profile is used",
+    )
     ci.add_argument("--password-csv")
     ci.add_argument(
         "--allow-password-import",
@@ -1134,11 +1241,17 @@ def _parser() -> argparse.ArgumentParser:
         "password-manager",
         help="import Chrome Password Manager entries through macOS Keychain",
     )
-    cpm.add_argument("--profile-dir", required=True)
+    cpm.add_argument(
+        "--profile-dir",
+        help="optional Chrome user-data root; only its Default profile is used",
+    )
     cpm.add_argument(
         "--confirm-import",
         action="store_true",
-        help="required acknowledgement for importing encrypted Chrome credentials",
+        help=(
+            "required acknowledgement that approved Chrome credentials will be "
+            "sealed in this local Agent Autofill database only"
+        ),
     )
     cpm.add_argument(
         "--preview",
@@ -1213,9 +1326,56 @@ def _parser() -> argparse.ArgumentParser:
     doctor.add_argument(
         "--json", action="store_true", help="print the value-free diagnostics as JSON"
     )
+    for command in (quickstart, doctor):
+        command.add_argument(
+            "--task", choices=("profile", "login", "email", "messages"),
+            default="profile", help="check only the prerequisites for this task",
+        )
     web = sub.add_parser("inbox-web", help="serve the local access review page")
     web.add_argument("--host", default="127.0.0.1")
     web.add_argument("--port", type=int, default=8765)
+    review = sub.add_parser("review", help="try the local profile-meaning review in an isolated trial")
+    review_source = review.add_mutually_exclusive_group()
+    review_source.add_argument("--sample", action="store_true", help="use synthetic data (default)")
+    review_source.add_argument("--profile-snapshot", action="store_true", help="copy only ordinary profile records into a new encrypted trial; live data is unchanged")
+    review_source.add_argument("--resume", type=Path, help="resume a previously created encrypted review trial")
+    review.add_argument("--port", type=int, default=0, help="loopback port; default chooses an available port")
+    onboard = sub.add_parser("review-agent", help="agent-led conversation over an isolated profile trial")
+    onboard_source = onboard.add_mutually_exclusive_group()
+    onboard_source.add_argument("--sample", action="store_true", help="inspect synthetic data (default)")
+    onboard_source.add_argument("--profile-snapshot", action="store_true", help="create a new encrypted ordinary-profile trial")
+    onboard_source.add_argument("--resume", type=Path, help="resume an existing encrypted trial")
+    onboard.add_argument("--task", choices=["delivery", "contact", "all"], default="all")
+    onboard_action = onboard.add_mutually_exclusive_group()
+    onboard_action.add_argument("--propose", action="store_true", help="freeze exact meanings from JSON on stdin; does not confirm them")
+    onboard_action.add_argument("--confirm", metavar="PROPOSAL_ID", help="save an exact user-approved proposal to the trial")
+    onboard_action.add_argument("--query", action="store_true", help="read task context from a resumed trial using JSON on stdin; values require read_values=true")
+    onboard_action.add_argument("--apply-to-live", action="store_true", help="promote confirmed trial meanings into the live vault after user approval")
+    onboard.add_argument("--approved", action="store_true", help="host assertion that the user approved the displayed proposal")
+    mcp_install = sub.add_parser(
+        "mcp-install",
+        help="print or write the local MCP server configuration for Claude, Cursor, Codex, or Antigravity",
+    )
+    mcp_install.add_argument(
+        "--client",
+        choices=["claude", "cursor", "codex", "antigravity"],
+        default="claude",
+        help="target MCP client (default: claude)",
+    )
+    mcp_install.add_argument(
+        "--service",
+        help="local service identity name (defaults to --client)",
+    )
+    mcp_install.add_argument(
+        "--config-path",
+        type=Path,
+        help="explicit MCP JSON config file path",
+    )
+    mcp_install.add_argument(
+        "--write",
+        action="store_true",
+        help="pair the local service and merge the agent-autofill MCP entry into the client config file",
+    )
     serve = sub.add_parser("serve", help="run the local JSON-lines MCP transport")
     serve.add_argument(
         "--service",
@@ -1228,6 +1388,9 @@ def _parser() -> argparse.ArgumentParser:
     fill = sub.add_parser(
         "fill-server", help="run the loopback browser credential-fill bridge"
     )
+    pairing = sub.add_parser("pair-browser", help="pair one browser session to an agent for eight hours")
+    pairing.add_argument("--agent-id", required=True)
+    pairing.add_argument("--extension-id", required=True)
     fill.add_argument("--host", default="127.0.0.1")
     fill.add_argument("--port", type=int, default=8766)
     return p
@@ -1235,6 +1398,41 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "review-agent":
+        from .agent_onboarding import run
+
+        return run(args)
+    if args.command == "review":
+        from .review import (
+            ReviewSession,
+            create_trial,
+            make_server,
+            resume_trial,
+            sample_trial,
+        )
+
+        try:
+            trial_path = None
+            if args.resume:
+                trial_path = args.resume.resolve()
+                store = resume_trial(trial_path)
+            elif args.profile_snapshot:
+                source = None if args.db == "agent-autofill.sqlite3" else args.db
+                store, trial_path = create_trial(source)
+            else:
+                store = sample_trial()
+            server, url = make_server(ReviewSession(store), port=args.port)
+        except Exception:  # noqa: BLE001 - setup errors may include private provider details
+            raise SystemExit("Could not start the isolated review. Check Keychain access and the selected trial/source. Your live vault is unchanged.") from None
+        print(json.dumps({"url": url, "trial_path": str(trial_path) if trial_path else None, "mode": "isolated trial"}), flush=True)
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            server.server_close()
+            store.db.close()
+        return 0
     if args.command == "serve":
         from .server import main as serve_main
 
@@ -1280,6 +1478,90 @@ def main(argv=None) -> int:
         finally:
             connection.close()
         return 0
+    if args.command == "mcp-install":
+        import platform
+
+        from .local import connect_service
+
+        service_name = (args.service or args.client).strip()
+        default_paths = {
+            "claude": (
+                Path.home()
+                / "Library/Application Support/Claude/claude_desktop_config.json"
+                if platform.system() == "Darwin"
+                else Path.home() / ".config/Claude/claude_desktop_config.json"
+            ),
+            "cursor": Path.home() / ".cursor/mcp.json",
+            "codex": Path.home() / ".codex/mcp.json",
+            "antigravity": Path.home() / ".gemini/config/mcp_config.json",
+        }
+        target_path = (args.config_path or default_paths[args.client]).expanduser()
+        server_args = ["--service", service_name]
+        if args.db != "agent-autofill.sqlite3":
+            server_args.extend(["--db", str(Path(args.db).expanduser().resolve())])
+        entry = {
+            "command": "agent-autofill-server",
+            "args": server_args,
+        }
+        if not args.write:
+            print(
+                json.dumps(
+                    {
+                        "client": args.client,
+                        "service": service_name,
+                        "config_path": str(target_path),
+                        "written": False,
+                        "mcpServers": {"agent-autofill": entry},
+                    },
+                    indent=2,
+                )
+            )
+            return 0
+        db_arg = None if args.db == "agent-autofill.sqlite3" else args.db
+        try:
+            connection = connect_service(service_name, db_arg)
+            connection.close()
+        except RuntimeError as exc:
+            raise SystemExit(str(exc)) from exc
+        existing: dict[str, Any] = {}
+        if target_path.exists():
+            try:
+                loaded = json.loads(target_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    existing = loaded
+            except (OSError, ValueError) as exc:
+                raise SystemExit(f"Could not parse existing MCP config: {target_path}") from exc
+        servers = existing.get("mcpServers")
+        if not isinstance(servers, dict):
+            servers = {}
+            existing["mcpServers"] = servers
+        servers["agent-autofill"] = entry
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
+        print(
+            json.dumps(
+                {
+                    "client": args.client,
+                    "service": service_name,
+                    "config_path": str(target_path),
+                    "written": True,
+                    "mcpServers": {"agent-autofill": entry},
+                },
+                indent=2,
+            )
+        )
+        return 0
+    if args.command == "pair-browser":
+        from .fill_server import pair_browser
+
+        print("This extension session may discover approved login requests for this agent for eight hours.")
+        code = getpass.getpass("Pairing code from the extension (not echoed): ")
+        try:
+            pair_browser(_broker(args.db), args.agent_id, args.extension_id, code)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        print("Browser session paired. Refresh requests in the extension.")
+        return 0
     if args.command == "fill-server":
         from .fill_server import serve as fill_serve
 
@@ -1299,6 +1581,10 @@ def main(argv=None) -> int:
                 "No user database, Keychain, browser, mailbox, or Messages data was opened.",
             )
             _print_status(snapshot, "Agent Autofill demo")
+            demo = cast(dict[str, Any], snapshot["demo"])
+            for step in demo["walkthrough"]:
+                print(f"Passed: {step['step']}")
+            print(demo["scope"])
             _print_next("agent-autofill start")
         return 0
     if args.command == "email-test-thunderbird":
@@ -1310,8 +1596,10 @@ def main(argv=None) -> int:
         print(json.dumps(run.public_dict(), indent=2))
         return 0
     if args.command == "chrome" and args.chrome_command == "profiles":
-        for path in discover_profiles(args.root):
-            print(path)
+        try:
+            print(default_profile(args.root))
+        except ChromeImportError as exc:
+            raise SystemExit(str(exc)) from exc
         return 0
     try:
         broker = _broker(args.db)
@@ -1333,11 +1621,35 @@ def main(argv=None) -> int:
                     "block before continuing with setup or data access."
                 )
             elif args.command in {"start", "onboard"} and not getattr(args, "json", False):
-                _print_fix("Unlock the login Keychain, then rerun `agent-autofill start`.")
+                _print_fix(str(snapshot["next_action"]))
             return 0
         raise SystemExit(str(exc)) from exc
     if args.command == "init":
         print(f"Initialized encrypted broker database at {Path(args.db).absolute()}")
+    elif args.command == "policy":
+        if args.policy_command != "form-submission":
+            raise SystemExit("Unknown policy command")
+        policy = (
+            set_form_submission_policy(broker, args.confirmation)
+            if args.confirmation
+            else get_form_submission_policy(broker)
+        )
+        result = {
+            **policy.to_dict(),
+            "requires_confirmation_for_financial": policy.requires_confirmation(
+                financial=True
+            ),
+            "requires_confirmation_for_ordinary": policy.requires_confirmation(
+                financial=False
+            ),
+        }
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True))
+        else:
+            print(
+                "Form submission policy: "
+                f"{policy.confirmation}; financial confirmation is always required."
+            )
     elif args.command == "profile":
         if args.profile_command == "set":
             broker.put_profile(
@@ -1359,6 +1671,7 @@ def main(argv=None) -> int:
                         category=args.category,
                         query=args.query,
                         limit=args.limit,
+                        offset=args.offset,
                     ),
                     indent=2,
                 )
@@ -1404,17 +1717,19 @@ def main(argv=None) -> int:
                 else "a verification link"
             )
             prompt = f"Consent required before requesting {response_name}: confirm "
-            print(prompt + "the exact recipient, target origin, purpose, and freshness window.")
             if args.operation == "email.verification_link":
+                print(prompt + "the exact recipient, mailbox, target origin, purpose, and freshness window.")
                 print(
                     "Next step (authenticated MCP): "
                     "request_verification_link_for_recipient(recipient, target_origin, "
                     "purpose, max_age_seconds=300)."
                 )
             else:
+                print(prompt + "the exact recipient, mailbox, and freshness window.")
                 print(
                     "Next step (authenticated MCP): request_auth_code_for_recipient("
-                    "recipient, target_origin, purpose, max_age_seconds=300)."
+                    "recipient, max_age_seconds=300, "
+                    "target_origin='https://service.example', origin_policy='target-origin')."
                 )
                 print(
                     "Verification-link flows use the separate "
@@ -1473,6 +1788,7 @@ def main(argv=None) -> int:
                     target_origin=args.target_origin,
                     username_hint=args.username_hint,
                     limit=args.limit,
+                    offset=args.offset,
                 ),
                 indent=2,
             )
@@ -1489,15 +1805,21 @@ def main(argv=None) -> int:
             if value is not None
         }
         records = (
-            broker.match_financial_records(kind=args.kind, matching_hints=hints)
-            if args.kind or hints
+            broker.match_financial_records(
+                kind=args.kind, matching_hints=hints,
+                card_suffix=args.card_suffix, query=args.query,
+            )
+            if args.kind or hints or args.card_suffix
             else broker.list_financial_records(
                 query=args.query,
                 limit=args.limit,
+                offset=args.offset,
             )
         )
-        if args.kind or hints:
-            records = records[: max(1, min(args.limit, 100))]
+        if args.kind or hints or args.card_suffix:
+            if args.offset < 0:
+                raise SystemExit("offset must be nonnegative")
+            records = records[args.offset: args.offset + max(1, min(args.limit, 100))]
         print(json.dumps(records, indent=2))
     elif args.command == "payment-card-add":
         _configure_payment_card(
@@ -1575,15 +1897,24 @@ def main(argv=None) -> int:
             _keyring_for(broker),
         )
         print(
-            "Configured read-only Gmail source "
-            f"{config['source_id']} ({config['host']}:{config['port']}/"
+            "Configured read-only Gmail API source "
+            f"{config['source_id']} ({config['host']}/"
             f"{config['mailbox']}, {config['username']}, {config['auth_kind']})"
         )
+    elif args.command == "email-reconnect-gmail":
+        config = _connector_flows._reconnect_gmail(
+            broker, args.db, args.account_id, _keyring_for(broker),
+        )
+        print(f"Reconnected read-only Gmail source {config['source_id']}")
     elif args.command == "email-test":
         config = _test_saved_imap(broker, args.account_id, _keyring_for(broker))
+        provider = "Gmail API" if config.get("kind") == "gmail" else "IMAP"
+        endpoint = config['host']
+        if config.get("kind") != "gmail":
+            endpoint += f":{config.get('port', 993)}"
         print(
-            "Read-only IMAP source is reachable "
-            f"{config['source_id']} ({config['host']}:{config.get('port', 993)}/"
+            f"Read-only {provider} source is reachable "
+            f"{config['source_id']} ({endpoint}/"
             f"{config.get('mailbox', 'INBOX')}, {config['username']}, "
             f"{config.get('auth_kind', 'password')})"
         )
@@ -1619,11 +1950,11 @@ def main(argv=None) -> int:
     elif args.command == "grants":
         print(json.dumps(broker.list_grants(), indent=2))
     elif args.command in {"quickstart", "status"}:
-        _print_status(_status_snapshot(broker), "Agent Autofill quickstart", as_json=args.json)
+        _print_status(_status_snapshot(broker, args.task), "Agent Autofill quickstart", as_json=args.json)
         if not args.json:
             _print_next("agent-autofill start (or `profile add` for one field)")
     elif args.command == "doctor":
-        _print_status(_status_snapshot(broker), "Agent Autofill doctor", as_json=args.json)
+        _print_status(_status_snapshot(broker, args.task), "Agent Autofill doctor", as_json=args.json)
     elif args.command == "inbox":
         print(
             json.dumps(
@@ -1677,7 +2008,10 @@ def main(argv=None) -> int:
                 "Values, tokens, and secrets are omitted.",
             )
             print(json.dumps({"agents": agents, "grants": grants}, indent=2))
-            _print_next("agent-autofill inbox-web to review or revoke access")
+            print("trusted-local-read: ongoing reads until the agent is revoked; not limited to one task.")
+            print("grant-required: only operations covered by an active matching grant.")
+            print("Revocation stops future broker reads; existing website sessions and delivered values remain.")
+            _print_next("agent-autofill revoke-agent AGENT_ID to stop an agent's access")
     elif args.command == "inbox-web":
         from .inbox import serve
 
@@ -1686,11 +2020,14 @@ def main(argv=None) -> int:
         print(f"Agent Inbox available at http://{args.host}:{args.port}/")
         serve(broker, args.host, args.port)
     elif args.command == "chrome":
+        profile_dir = _default_setup_profile(args.profile_dir)
+        if not profile_dir:
+            raise SystemExit("Chrome Default profile is required for this command")
         if args.chrome_command == "password-manager":
             if args.preview:
                 print(
                     json.dumps(
-                        preview_chrome_password_manager(args.profile_dir, broker),
+                        preview_chrome_password_manager(profile_dir, broker),
                         indent=2,
                     )
                 )
@@ -1702,7 +2039,7 @@ def main(argv=None) -> int:
             print(
                 json.dumps(
                     sync_chrome_password_manager(
-                        args.profile_dir,
+                        profile_dir,
                         broker,
                         approved=True,
                         remove_stale=args.remove_stale,
@@ -1715,7 +2052,7 @@ def main(argv=None) -> int:
             raise SystemExit(
                 "Refusing password import: re-run with --allow-password-import after confirming the CSV is user-exported"
             )
-        result = cold_start(args.profile_dir, broker, args.password_csv)
+        result = cold_start(profile_dir, broker, args.password_csv)
         print(json.dumps(result, indent=2))
     elif args.command in {"setup", "start", "onboard"}:
         if args.command in {"start", "onboard"}:
@@ -1728,7 +2065,7 @@ def main(argv=None) -> int:
             print(
                 f"Agent {agent_id} token (save once; it will not be shown again):\n{token}"
             )
-        profile_dir = _select_setup_profile(args.profile_dir)
+        profile_dir = _default_setup_profile(args.profile_dir)
         result = {"autofill_fields": 0, "login_metadata": 0, "passwords": 0}
         if profile_dir:
             csv_path = (
@@ -1785,7 +2122,3 @@ def main(argv=None) -> int:
                 f"agent-autofill --db {args.db} status; open `inbox-web` for a visual inventory"
             )
     return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

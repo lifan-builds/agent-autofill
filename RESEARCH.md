@@ -257,3 +257,25 @@ A GitHub repository search on 2026-09-12 found no obvious maintained project tha
 | [imsg](https://github.com/steipete/imsg) | Local macOS Messages access through the Messages database/automation ecosystem | Useful local text backend; Mac permissions remain broad |
 
 The GitHub evidence reinforces the product thesis: there are personal-assistant shells, email MCP servers, local-context systems, and approval UIs, but they do not converge on a user-owned capability broker. The most practical open-source composition is a local companion built from a maintained email MCP server, a narrow Messages adapter, an encrypted profile store, and an Agent Inbox-style approval service, all behind one policy gateway.
+
+## November 2026 update: Grok Bot Vault, OpenClaw, and MCP Vault protocols
+
+Between October and November 2026, four new entrants validated the demand for an agent-facing personal vault while exposing critical architectural trade-offs:
+
+1. **xAI Grok Bot Vault (`v0.75.2` / `v0.75.5`):**
+   - **What shipped:** xAI introduced a built-in **Vault** inside Grok Bot for storing **Logins, Payment Cards, and Contact Info**, paired with natural-language **Hints** (e.g., `"Use for work purchases"`), a **Just-in-Time Secure Form** when a bot hits a login or checkout wall, and `<5 MB` CSV import from Chrome/Safari/1Password/Bitwarden.
+   - **Architectural gaps where Agent Autofill wins:**
+     - *No-approval card checkout footgun:* xAI's documentation notes that once a payment card is saved in Grok Bot Vault, the bot can fill and complete checkout **without a separate payment confirmation step**. Agent Autofill enforces explicit `origin + purpose` grants and a mandatory pre-submit human confirmation gate.
+     - *Account-wide scope:* Grok Bot Vault entries are shared across all Bots on the user's xAI account with no per-agent, per-origin, or expiring grants.
+     - *Vendor lock-in and cloud custody:* Grok Bot Vault is proprietary to xAI's runtime and does not expose an MCP server for Claude Code, Codex, Cursor, or OpenClaw.
+     - *Plaintext CSV import hazard:* Grok Bot Vault requires exporting plaintext password CSVs to disk, whereas Agent Autofill decrypts Chrome `Login Data` directly in memory via macOS Keychain Safe Storage (`agent-autofill chrome password-manager`).
+     - *No 2FA/OTP extraction:* Grok Bot pauses and hands control back to the human on email or SMS 2FA challenges, whereas Agent Autofill provides origin/recipient-scoped email OTP/magic-link retrieval and read-only macOS Messages access (including modern macOS `attributedBody` decoding).
+2. **OpenClaw (formerly Clawdbot / Moltbot):**
+   - **What shipped:** A fast-growing open-source autonomous agent (`100k+` GitHub stars) whose default credential guidance relies on plaintext `.env` files, JSON configs, or raw CLI bridges—making OpenClaw workspaces a prime target for infostealers (`Lumma`, `RedLine`).
+   - **Where Agent Autofill fits:** Agent Autofill serves as the drop-in local encrypted vault and MCP broker for OpenClaw, replacing plaintext `.env` secrets and unguarded mailbox tools.
+3. **Personal Context Protocol (`personal-vault-mcp` / `pcp-mcp`):**
+   - **What shipped:** A local-first SQLite MCP server for personal facts (`identity.*`, `Preferences`, `Sizes`) with `allow / ask / deny` permissions.
+   - **Gap:** Explicitly excludes passwords, payment cards, email OTPs, and iMessage.
+4. **Agent Vault Protocol (`agentvault-mcp-server`):**
+   - **What shipped:** Zero-knowledge proxy injection (`vault://...`) for developer API keys and environment variables (`http_request`, `exec_with_secrets`).
+   - **Gap:** Designed for backend REST calls and CLI env vars; does not solve browser form mapping, Chrome intake, payment card suffix matching, or 2FA codes.

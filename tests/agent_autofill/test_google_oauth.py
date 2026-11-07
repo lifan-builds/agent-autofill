@@ -1,4 +1,5 @@
 import json
+from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
 from urllib.request import urlopen
 
@@ -7,13 +8,13 @@ import pytest
 from agent_autofill.google_oauth import (
     CALLBACK_PATH,
     GMAIL_SCOPE,
+    MICROSOFT_TOKEN_ENDPOINT,
     GoogleOAuthAuthorizationError,
     GoogleOAuthClient,
     GoogleOAuthConfigurationError,
     GoogleOAuthTokenError,
     GoogleOAuthTokenProvider,
     MicrosoftOAuthTokenProvider,
-    MICROSOFT_TOKEN_ENDPOINT,
     authorize_google_desktop,
     build_authorization_url,
     generate_pkce,
@@ -54,6 +55,7 @@ def test_pkce_and_authorization_url_use_gmail_scope_and_offline_access():
 
     assert len(verifier) >= 43
     assert query["scope"] == [GMAIL_SCOPE]
+    assert GMAIL_SCOPE == "https://www.googleapis.com/auth/gmail.readonly"
     assert query["access_type"] == ["offline"]
     assert query["response_type"] == ["code"]
     assert query["state"] == ["state-value"]
@@ -113,13 +115,11 @@ def test_authorize_desktop_rejects_wrong_state_and_times_out():
     def wrong_state(url):
         query = parse_qs(urlsplit(url).query)
         callback = query["redirect_uri"][0]
-        try:
+        with pytest.raises(HTTPError):
             urlopen(
                 callback + "?code=authorization-code-fixture&state=wrong-state",
                 timeout=2,
             ).read()
-        except Exception:
-            pass
         return True
 
     with pytest.raises(
@@ -219,13 +219,11 @@ def test_exchange_and_refresh_normalize_arbitrary_oauth_errors():
     def complete_browser(url):
         query = parse_qs(urlsplit(url).query)
         callback = query["redirect_uri"][0]
-        try:
-            urlopen(
-                callback + "?code=authorization-code-fixture&state=" + query["state"][0],
-                timeout=2,
-            ).read()
-        except Exception:
-            pass
+        with urlopen(
+            callback + "?code=authorization-code-fixture&state=" + query["state"][0],
+            timeout=2,
+        ) as response:
+            assert response.status == 200
         return True
 
     with pytest.raises(GoogleOAuthTokenError, match="token exchange failed") as exchange:

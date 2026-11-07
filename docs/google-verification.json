@@ -1,0 +1,52 @@
+{
+  "prepared_on": "2026-10-26",
+  "app_name": "Agent Autofill",
+  "homepage": "https://clifan.com/agent-autofill/",
+  "privacy_policy": "https://clifan.com/agent-autofill/privacy.html",
+  "authorized_domain": "clifan.com",
+  "scope": "https://www.googleapis.com/auth/gmail.readonly",
+  "intended_data_usage": "Email productivity",
+  "scope_justification": "Agent Autofill provides user-directed email productivity through a local broker. An authorized agent can search and read messages in a user-selected Gmail label or retrieve a recent sign-in code for an exact recipient and task. Message-body access is required; gmail.metadata cannot supply bodies. The app does not send, modify, or delete email, so gmail.modify and mail.google.com are unnecessary. OAuth credentials remain in the operating-system credential store. The broker enforces authenticated task permissions before returning selected data. An external acting agent may transmit returned content to its model provider; the homepage and privacy policy disclose this data flow.",
+  "data_flow": [
+    "The user supplies a Desktop OAuth client and authorizes Gmail in Google's browser consent flow.",
+    "A temporary loopback listener receives the authorization code; state and PKCE protect the exchange.",
+    "Client and refresh state remain in the operating-system credential store. Access tokens remain in process memory.",
+    "The Gmail API adapter checks account identity and the configured label, then issues read-only GET requests.",
+    "The broker applies its authenticated task access policy before returning selected information to the acting agent.",
+    "An external agent may transmit returned content to its model provider. Reviewer materials must disclose this and the provider configuration; do not claim all processing stays on device or assume an assessment exemption."
+  ],
+  "demo_recording_required": [
+    "Show the product homepage and privacy policy.",
+    "Show the actual Desktop OAuth flow, app name, requested read-only permission, and consent using a dedicated test mailbox.",
+    "Show a successful connection to the same account and label.",
+    "Demonstrate an authorized email search/read using synthetic test messages; do not record real private messages or OTPs.",
+    "Show a denied unauthorized request, disconnection, and where Google access can be revoked.",
+    "Identify the actual external agent/model data flow and applicable data-use settings."
+  ],
+  "verification_status": "Production publishing and https://clifan.com/ ownership verification completed. Branding is verified, published, and being shown to users, as confirmed live on 2026-10-26. Gmail read-only data access remains unverified. Restricted-scope verification has not been submitted: Google requires a YouTube demo URL before it enables saving the scope justification and intended data usage. These fields are prepared in this file; the unsaved browser entries were cleared during account recovery. Any Google-required assessment remains outstanding.",
+  "submission_blockers": [
+    "The user selected their existing Gmail account. An isolated Agent-Autofill-Demo label and synthetic unsent itinerary draft have been created; use only this label for the demonstration.",
+    "The real OAuth flow and synthetic-message broker checks succeeded, but consent was not recorded. Record a complete walkthrough including the actual consent screen and scope use; user interaction is needed at the warning/consent handoff.",
+    "Supply the resulting YouTube video URL, save the scope justification and intended data usage, then complete the verification submission. Do not substitute a placeholder URL or simulated OAuth approval."
+  ],
+  "demo_setup": {
+    "mailbox_label": "Agent-Autofill-Demo",
+    "source_id": "verification-demo-gmail",
+    "synthetic_draft_subject": "Agent Autofill verification demo — synthetic itinerary",
+    "authorization": "User completed real OAuth consent. Callback exchange and saved Gmail API connector verified; requested scope was gmail.readonly.",
+    "isolation": "Moved the demo connector into a separate encrypted verification database with credentials in the OS credential store. Removed its duplicate routing entry from the normal database after checking the destination connection.",
+    "existing_connection": "personal-gmail left unchanged",
+    "video": "Not recorded or uploaded"
+  },
+  "validation": {
+    "focused_oauth_recheck": "73 Gmail adapter, Google OAuth, and CLI tests passed on 2026-10-26; Ruff passed",
+    "real_demo_check": "Saved connector reached the exact demo label. Authenticated broker search and read returned the one synthetic itinerary; requests without grants and after agent revocation were denied. No external model was called.",
+    "cli_fix": "Gmail API setup and connection-test output now identify the API correctly and no longer display an IMAP port; new Gmail configurations use HTTPS port 443.",
+    "python_tests": "305 passed",
+    "ruff": "passed",
+    "mypy": "21 source files passed",
+    "installed_connector": "Gmail API adapter and read-only OAuth scope verified after reinstall",
+    "real_account_check": "Existing personal-gmail credential authenticated the expected account and resolved its mailbox through Gmail API; no messages read and no saved connector changed.",
+    "legacy_connection_check": "personal-gmail IMAP email-test passed"
+  }
+}

@@ -1,9 +1,14 @@
-# Local Chrome intake recipes
+# Local Chrome autofill intake recipes
 
 Read this reference only after the host agent has selected a Chrome profile and
 the user has authorized this read. The snippets are executable recipes, not a
 new broker API. They use the existing local `Broker.put_profile` administrative
 path and keep candidate data in the current agent execution until final review.
+
+This reference covers ordinary structured autofill fields only. Saved-password
+intake is a separate, opt-in operation documented in
+[password-intake.md](password-intake.md); do not read a Password Manager
+database while following this recipe.
 
 The supported source is the `Web Data` database's structured address pair:
 `addresses` (the source record's `guid`) and `address_type_tokens` (the
@@ -32,6 +37,14 @@ a best-effort guess. The integer field ids and table layout follow Chromium's
 [`field_types.h`](https://chromium.googlesource.com/chromium/src/+/main/components/autofill/core/browser/field_types.h)
 and
 [`address_autofill_table.h`](https://chromium.googlesource.com/chromium/src/+/main/components/autofill/core/browser/webdata/addresses/address_autofill_table.h).
+
+Run `organize_structured_candidates(read_structured_addresses(profile_dir))`
+before asking classification questions. It groups by the opaque source
+profile/group pair, adds a deterministic `normalized_value` for matching, and
+marks `needs_review` for unsplit names, duplicate street representations,
+instruction-like text, or repeated normalized values across source groups. It
+never merges groups or changes the source `value`; the host agent uses the
+normalized value for comparison and the source value for review.
 
 The save recipe accepts proposal rows shaped like this (the host may add
 review-only columns, but only these fields are consumed):
@@ -120,6 +133,16 @@ _INTEGER_FIELD_TYPES = {
     77: "street",
 }
 _READABLE_FIELD_TYPES = set(_INTEGER_FIELD_TYPES.values())
+_INSTRUCTION_MARKERS = (
+    "ignore previous",
+    "system message",
+    "assistant",
+    "run ",
+    "execute ",
+    "upload ",
+    "send ",
+    "click ",
+)
 
 
 def _canonical_field_type(raw: object, *, integer_schema: bool) -> str | None:
@@ -287,6 +310,86 @@ def read_structured_addresses(profile_dir: str | Path) -> list[dict[str, Any]]:
             db.close()
 
 
+def _normalized_value(field_type: str, value: str) -> str:
+    collapsed = " ".join(value.split())
+    if field_type == "email":
+        return collapsed.casefold()
+    if field_type == "postcode":
+        return collapsed.upper()
+    if field_type == "phone":
+        digits = "".join(char for char in collapsed if char.isdigit())
+        return f"+{digits}" if collapsed.startswith("+") else digits
+    return collapsed
+
+
+def _review_flags(field_type: str, value: str) -> list[str]:
+    lowered = value.casefold()
+    flags: list[str] = []
+    if field_type == "name":
+        flags.append("unsplit_name")
+    if any(marker in lowered for marker in _INSTRUCTION_MARKERS):
+        flags.append("instruction_like")
+    if len(value) > 512:
+        flags.append("oversized_value")
+    return flags
+
+
+def organize_structured_candidates(
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Group and lightly normalize extracted values without merging people."""
+
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    for candidate in candidates:
+        profile_id = candidate["source_profile_id"]
+        source_guid = candidate["source_guid"]
+        field_type = candidate["field_type"]
+        value = candidate["value"]
+        normalized = _normalized_value(field_type, value)
+        flags = _review_flags(field_type, value)
+        field = {
+            **candidate,
+            "normalized_value": normalized,
+            "review_flags": flags,
+        }
+        key = (profile_id, source_guid)
+        group = groups.setdefault(
+            key,
+            {
+                "source_profile_id": profile_id,
+                "source_guid": source_guid,
+                "fields": [],
+                "review_flags": [],
+                "needs_review": False,
+            },
+        )
+        group["fields"].append(field)
+        group["review_flags"].extend(flags)
+
+    by_value: dict[tuple[str, str], set[tuple[str, str]]] = {}
+    for group in groups.values():
+        for field in group["fields"]:
+            by_value.setdefault(
+                (field["field_type"], field["normalized_value"]), set()
+            ).add((group["source_profile_id"], group["source_guid"]))
+    for group in groups.values():
+        field_types = {field["field_type"] for field in group["fields"]}
+        if "street" in field_types and "street_line1" in field_types:
+            group["review_flags"].append("street_representation_conflict")
+        for field in group["fields"]:
+            owners = by_value[(field["field_type"], field["normalized_value"])]
+            if len(owners) > 1:
+                group["review_flags"].append("possible_cross_group_duplicate")
+                field["review_flags"].append("possible_cross_group_duplicate")
+        group["review_flags"] = sorted(set(group["review_flags"]))
+        group["needs_review"] = bool(group["review_flags"])
+        group["fields"].sort(key=lambda field: (field["field_type"], field["candidate_id"]))
+    return sorted(
+        groups.values(),
+        key=lambda group: (group["source_profile_id"], group["source_guid"]),
+    )
+
+
 def _metadata_by_id(broker: Any) -> dict[str, Mapping[str, Any]]:
     rows = broker.list_profile_fields()
     if not isinstance(rows, list):
@@ -409,6 +512,8 @@ def save_approved_profiles(
     broker: Any,
     proposals: Iterable[Mapping[str, Any]],
     approved_ids: Iterable[str] | None = None,
+    *,
+    context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Save only exact approved add/update profile proposals.
 
@@ -513,6 +618,42 @@ def save_approved_profiles(
             result["held_ids"].append(candidate_id)
         else:
             result["skipped_ids"].append(candidate_id)
+
+    if context is not None:
+        # Commit the exact approved facts and reviewed meaning together. Never
+        # fall back to individual writes after a scope or revision failure.
+        from agent_autofill.context_memory import ContextMemory
+
+        try:
+            metadata = _metadata_by_id(broker)
+            for row in approved_rows:
+                matches, _ = _expected_metadata_matches(row, row["field_id"], metadata.get(row["field_id"]))
+                if not matches:
+                    raise ValueError("proposal changed")
+            entries = [{
+                "record": {
+                    "record_type": "profile", "field_id": row["field_id"],
+                    "category": row["category"], "display_name": row["display_name"],
+                    "value": row["value"], "sensitivity": row["sensitivity"],
+                    "allowed_origins": list(row["allowed_origins"]),
+                    "allowed_purposes": list(row["allowed_purposes"]),
+                    "provenance": _safe_provenance(row),
+                },
+                "expected_updated_at": metadata.get(row["field_id"], {}).get("updated_at"),
+            } for row in approved_rows]
+            saved = ContextMemory(broker).write(
+                context["agent_id"], kind="bundle", record_id=context["record_id"],
+                data=context["data"], expected_revision=context["expected_revision"],
+                target_origin=context["target_origin"], purpose=context["purpose"],
+                confirmed=context.get("confirmed", False), profile_entries=entries or None,
+            )
+        except Exception:
+            result["status"] = "rejected"
+            result["held_ids"].extend(row["candidate_id"] for row in approved_rows)
+            return result
+        result["saved_ids"] = [row["field_id"] for row in approved_rows]
+        result["context_revision"] = saved["revision"]
+        return result
 
     for index, row in enumerate(approved_rows):
         candidate_id = row["candidate_id"]

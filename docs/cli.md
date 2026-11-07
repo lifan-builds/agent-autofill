@@ -17,7 +17,8 @@ subcommands. The installed console script is the single supported entry point.
 | --- | --- |
 | Create or open the encrypted store | `af init` |
 | See the next safe action | `af quickstart` |
-| Diagnose readiness | `af doctor` |
+| Diagnose one task | `af doctor --task profile` (or `login`, `email`, `messages`) |
+| Try a synthetic read, handoff, and revocation | `af demo` |
 | Review the local inventory | `af inbox` or `af inbox-web` (dashboard only) |
 | Add or edit a profile field | `af profile add <field>` / `af profile edit <field>` |
 | List safe credential metadata | `af credentials list --target-origin <origin>` |
@@ -26,6 +27,7 @@ subcommands. The installed console script is the single supported entry point.
 | Inspect agents and grants | `af agents` / `af grants` |
 | Start the MCP transport | `af serve --service <name>` |
 | Start the optional fill bridge | `af fill-server` |
+| Pair the extension session | `af pair-browser --agent-id <agent> --extension-id <extension>` |
 
 ## First run
 
@@ -71,8 +73,15 @@ Use metadata before requesting a credential value:
 ```bash
 af credentials list --target-origin https://example.test
 af financial-records --kind payment_card --last4 1234
+af financial-records --kind payment_card --query "Business Platinum" --card-suffix 51234 --expiration-year 2031
 af email-match owner@example.test
 ```
+
+`--card-suffix` accepts exactly four or five ending digits and compares them
+inside the vault. Results contain masked metadata only. Combine name, suffix,
+and expiry when saved cards share the same last four digits; multiple matches
+remain ambiguous. Do not request a full card number merely to identify a card
+already saved at checkout.
 
 The list and match commands intentionally omit raw values.
 
@@ -88,6 +97,13 @@ af grant-site codex https://example.test "account setup" --delivery extension
 Use `direct` when the acting agent is allowed to receive selected fields. Use
 `extension` when a local Chrome handoff should keep the password out of agent
 input. The extension is optional; neither mode navigates or submits a page.
+
+To avoid copying handles for each request, generate a pairing code in the
+extension and run `pair-browser` with the same database as `fill-server`.
+Paste the code only into the hidden local prompt. Pairing lasts eight hours
+and exposes only approved requests for that agent and the active site's
+origin. Use **Forget pairing** in the extension to clear its session code;
+`af revoke-agent <agent>` also blocks future discovery and consumption.
 
 ## Email and source health
 
@@ -119,6 +135,25 @@ af serve --service my-agent
 The local service uses its Keychain-bound identity for trusted read paths.
 Legacy or remote clients can use explicit short-lived grants. Keep any token
 outside source control and process listings where practical.
+
+Email OTP requests default to `target-origin`, requiring a target website and
+matching its sender domain. `mailbox-read` is an explicit mode for mailbox-wide
+selection; never use it as an automatic fallback. General
+`search_email` and `get_email_message` calls remain read-only, account-scoped,
+and bounded, without a target-domain filter.
+
+`doctor` reports the package version, a source build fingerprint, package path,
+and resolved Python executable, including when Keychain cannot open. Compare
+these fields between `uv run agent-autofill doctor --json` and the installed
+`agent-autofill doctor --json` when behavior differs. Update a local installation
+with `uv tool install --force --no-cache .` from the reviewed repository.
+If source files were removed, move aside the generated `build/` directory before
+reinstalling: setuptools can otherwise retain deleted modules in the package.
+After installation, rerun both doctor commands and compare their build fingerprints.
+
+Profile, credential, and financial metadata lists accept `--offset` and
+`--limit` (up to 100 per page). Continue at offset 100, 200, and so on until an
+empty page. `doctor` inventory counts cover all saved records.
 
 ## Optional browser bridge
 
