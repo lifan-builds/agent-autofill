@@ -469,3 +469,45 @@ def test_new_sensitive_tools_reject_unauthenticated_requests(name, params):
     broker = Broker(Store(":memory:", key=b"u" * 32))
     with pytest.raises(BrokerError, match="authentication"):
         _call(broker, name, {"agent_id": "codex", **params})
+
+
+def test_mcp_introspection_succeeds_without_touching_os_credential_store(
+    monkeypatch, capsys
+):
+    def fail_keyring(*_args, **_kwargs):
+        raise RuntimeError("OS credential store unavailable")
+
+    monkeypatch.setattr(server, "KeyringProvider", fail_keyring)
+    monkeypatch.setattr(server, "connect_service", fail_keyring)
+    monkeypatch.setattr(
+        server.sys,
+        "stdin",
+        io.StringIO(
+            "\n".join(
+                json.dumps(req)
+                for req in [
+                    {"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+                    {"jsonrpc": "2.0", "method": "notifications/initialized"},
+                    {"jsonrpc": "2.0", "id": 2, "method": "ping"},
+                    {"jsonrpc": "2.0", "id": 3, "method": "tools/list"},
+                    {"jsonrpc": "2.0", "id": 4, "method": "resources/list"},
+                    {"jsonrpc": "2.0", "id": 5, "method": "resources/templates/list"},
+                    {"jsonrpc": "2.0", "id": 6, "method": "prompts/list"},
+                ]
+            )
+            + "\n"
+        ),
+    )
+
+    server.main([])
+
+    captured = capsys.readouterr()
+    replies = [json.loads(line) for line in captured.out.splitlines()]
+    assert [r["id"] for r in replies] == [1, 2, 3, 4, 5, 6]
+    assert replies[0]["result"]["serverInfo"]["name"] == "agent-autofill"
+    assert replies[1]["result"] == {}
+    assert len(replies[2]["result"]["tools"]) == len(TOOLS)
+    assert replies[3]["result"] == {"resources": []}
+    assert replies[4]["result"] == {"resourceTemplates": []}
+    assert replies[5]["result"] == {"prompts": []}
+    assert not captured.err

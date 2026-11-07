@@ -189,19 +189,29 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
     connection = None
-    try:
-        if args.service:
-            connection = connect_service(args.service, args.db)
-            keyring = connection.keyring
-            broker = connection.broker
-        else:
-            keyring = KeyringProvider()
-            db_path = default_database_path(args.db)
-            key_name = args.key_name or db_path.expanduser().absolute().as_posix()
-            broker = Broker(Store(db_path, key_provider=keyring, key_name=key_name))
-    except RuntimeError as exc:
-        raise SystemExit(str(exc)) from exc
-    _register_connections(broker, keyring)
+    broker = None
+
+    def _ensure_broker() -> tuple[Broker, LocalConnection | None]:
+        nonlocal connection, broker
+        if broker is not None:
+            return broker, connection
+        try:
+            if args.service:
+                connection = connect_service(args.service, args.db)
+                keyring = connection.keyring
+                broker = connection.broker
+            else:
+                keyring = KeyringProvider()
+                db_path = default_database_path(args.db)
+                key_name = args.key_name or db_path.expanduser().absolute().as_posix()
+                broker = Broker(
+                    Store(db_path, key_provider=keyring, key_name=key_name)
+                )
+        except RuntimeError as exc:
+            raise SystemExit(str(exc)) from exc
+        _register_connections(broker, keyring)
+        return broker, connection
+
     try:
         for line in sys.stdin:
             req = {}
@@ -220,16 +230,31 @@ def main(argv=None):
                 if not isinstance(req.get("params", {}), dict):
                     raise BrokerError("params must be an object")
                 p = dict(req.get("params", {}))
-                if name == "notifications/initialized":
+                if name.startswith("notifications/"):
                     continue
                 if name == "initialize":
                     result = {
                         "protocolVersion": "2025-06-18",
-                        "capabilities": {"tools": {"listChanged": False}},
-                        "serverInfo": {"name": "agent-autofill", "version": version("agent-autofill")},
+                        "capabilities": {
+                            "tools": {"listChanged": False},
+                            "resources": {"listChanged": False},
+                            "prompts": {"listChanged": False},
+                        },
+                        "serverInfo": {
+                            "name": "agent-autofill",
+                            "version": version("agent-autofill"),
+                        },
                     }
+                elif name == "ping":
+                    result = {}
                 elif name == "tools/list":
                     result = {"tools": TOOLS}
+                elif name == "resources/list":
+                    result = {"resources": []}
+                elif name == "resources/templates/list":
+                    result = {"resourceTemplates": []}
+                elif name == "prompts/list":
+                    result = {"prompts": []}
                 elif name == "tools/call":
                     tool_name = p.get("name")
                     if not isinstance(tool_name, str):
@@ -237,19 +262,26 @@ def main(argv=None):
                     if not isinstance(p.get("arguments", {}), dict):
                         raise BrokerError("tool arguments must be an object")
                     arguments = dict(p.get("arguments", {}))
+                    active_broker, active_conn = _ensure_broker()
                     result = {
                         "content": [
                             {
                                 "type": "text",
                                 "text": json.dumps(
-                                    _call(broker, tool_name, arguments, connection)
+                                    _call(
+                                        active_broker,
+                                        tool_name,
+                                        arguments,
+                                        active_conn,
+                                    )
                                 ),
                             }
                         ],
                         "isError": False,
                     }
                 else:
-                    result = _call(broker, name, p, connection)
+                    active_broker, active_conn = _ensure_broker()
+                    result = _call(active_broker, name, p, connection=active_conn)
                 if req_id is not None:
                     print(
                         json.dumps({"jsonrpc": "2.0", "id": req_id, "result": result}),
@@ -280,5 +312,5 @@ def main(argv=None):
     finally:
         if connection is not None:
             connection.close()
-        else:
+        elif broker is not None:
             broker.store.db.close()
