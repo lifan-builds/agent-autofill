@@ -1,0 +1,14 @@
+# Smithery configuration file: https://smithery.ai/docs/config#smitheryyaml
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties:
+      dbPath:
+        type: string
+        description: Optional path to the encrypted SQLite vault (defaults to ~/.agent-autofill.sqlite3)
+  commandFunction: |-
+    (config) => ({
+      command: "agent-autofill-server",
+      args: config && config.dbPath ? ["--db", config.dbPath] : []
+    })

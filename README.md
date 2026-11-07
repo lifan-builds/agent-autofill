@@ -540,3 +540,5 @@ artifacts.
   If this project helps your local agent work, consider starring it and sharing
   a safe evaluation case.
 </p>
+
+<!-- mcp-name: io.github.lifan-builds/agent-autofill -->

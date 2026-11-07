@@ -1,0 +1,22 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.lifan-builds/agent-autofill",
+  "title": "Agent Autofill",
+  "description": "Local-first personal vault and MCP broker for AI agents on macOS",
+  "version": "0.1.2",
+  "repository": {
+    "url": "https://github.com/lifan-builds/agent-autofill",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "agent-autofill",
+      "version": "0.1.2",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
