@@ -3,11 +3,552 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="refresh" content="0; url=/demo/">
-  <meta name="description" content="Agent Autofill · macOS-first local personal-data broker">
-  <title>Agent Autofill · macOS-first demo</title>
+  <meta name="description" content="Agent Autofill is a local-first personal vault and MCP broker for AI agents on macOS: Chrome intake, origin-bound credential handoff, and scoped 2FA retrieval.">
+  <meta property="og:title" content="Agent Autofill — Give your agent the exact information it needs">
+  <meta property="og:description" content="Local-first personal vault and MCP broker for AI agents on macOS. Share selected fields, origin-bound logins, and 2FA codes with explicit approval.">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="assets/agent-autofill-tour.jpg">
+  <meta name="twitter:card" content="summary_large_image">
+  <title>Agent Autofill — Local personal-data broker for AI agents</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f8fafc;
+      --surface: #ffffff;
+      --surface-subtle: #f1f5f9;
+      --ink: #0f172a;
+      --muted: #475569;
+      --line: #e2e8f0;
+      --line-strong: #cbd5e1;
+      --accent: #1d4ed8;
+      --accent-hover: #1e40af;
+      --accent-soft: #eff6ff;
+      --teal: #0f766e;
+      --teal-soft: #f0fdfa;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    ::selection {
+      background: #dbeafe;
+      color: var(--ink);
+    }
+
+    body {
+      margin: 0;
+      background-color: var(--bg);
+      color: var(--ink);
+      font-size: 16px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a {
+      color: inherit;
+      text-underline-offset: 0.2em;
+    }
+
+    a:focus-visible,
+    button:focus-visible,
+    summary:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 3px;
+      border-radius: 6px;
+    }
+
+    .shell {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 24px 20px 72px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 16px;
+      text-decoration: none;
+      letter-spacing: -0.01em;
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      background-color: var(--accent);
+      color: #ffffff;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 10px;
+      border-radius: 999px;
+      background-color: var(--teal-soft);
+      border: 1px solid #99f6e4;
+      color: var(--teal);
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--muted);
+    }
+
+    .nav-links a {
+      text-decoration: none;
+    }
+
+    .nav-links a:hover {
+      color: var(--ink);
+    }
+
+    .hero {
+      padding: 56px 0 40px;
+    }
+
+    h1 {
+      margin: 0 0 16px;
+      max-width: 18ch;
+      font-size: clamp(2.25rem, 4.8vw, 3.5rem);
+      line-height: 1.08;
+      letter-spacing: -0.035em;
+      font-weight: 750;
+    }
+
+    .lede {
+      margin: 0 0 28px;
+      max-width: 64ch;
+      color: var(--muted);
+      font-size: 18px;
+      line-height: 1.6;
+    }
+
+    .install-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      max-width: 680px;
+      padding: 10px 12px 10px 16px;
+      background-color: var(--surface);
+      border: 1px solid var(--line-strong);
+      border-radius: 12px;
+      margin-bottom: 20px;
+    }
+
+    .install-bar code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 13.5px;
+      color: var(--ink);
+      overflow-x: auto;
+      white-space: nowrap;
+    }
+
+    .copy-btn {
+      flex: none;
+      padding: 6px 12px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background-color: var(--surface-subtle);
+      color: var(--ink);
+      font: inherit;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background-color 150ms ease;
+    }
+
+    .copy-btn:hover {
+      background-color: var(--line);
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 10px 18px;
+      border-radius: 10px;
+      font-size: 14.5px;
+      font-weight: 600;
+      text-decoration: none;
+      transition: background-color 150ms ease, border-color 150ms ease;
+    }
+
+    .btn-primary {
+      background-color: var(--accent);
+      color: #ffffff;
+      border: 1px solid var(--accent);
+    }
+
+    .btn-primary:hover {
+      background-color: var(--accent-hover);
+    }
+
+    .btn-secondary {
+      background-color: var(--surface);
+      color: var(--ink);
+      border: 1px solid var(--line-strong);
+    }
+
+    .btn-secondary:hover {
+      background-color: var(--surface-subtle);
+    }
+
+    .media-frame {
+      margin: 8px 0 48px;
+      padding: 12px;
+      background-color: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+    }
+
+    .media-frame video {
+      display: block;
+      width: 100%;
+      height: auto;
+      border-radius: 10px;
+    }
+
+    .media-meta {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 4px 4px;
+      color: var(--muted);
+      font-size: 13.5px;
+    }
+
+    details.transcript {
+      margin-top: 8px;
+      padding: 10px 14px;
+      background-color: var(--surface-subtle);
+      border-radius: 10px;
+      font-size: 14px;
+      color: var(--muted);
+    }
+
+    details.transcript summary {
+      cursor: pointer;
+      font-weight: 600;
+      color: var(--ink);
+    }
+
+    details.transcript p {
+      margin: 10px 0 0;
+      max-width: 68ch;
+    }
+
+    .section {
+      padding: 36px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .section h2 {
+      margin: 0 0 8px;
+      font-size: 22px;
+      letter-spacing: -0.02em;
+    }
+
+    .section-intro {
+      margin: 0 0 24px;
+      color: var(--muted);
+      max-width: 62ch;
+      font-size: 15px;
+    }
+
+    .steps-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+
+    .step-item {
+      padding: 20px;
+      background-color: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+    }
+
+    .step-item h3 {
+      margin: 0 0 8px;
+      font-size: 16px;
+      letter-spacing: -0.01em;
+    }
+
+    .step-item p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    .step-item code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12.5px;
+      padding: 1px 5px;
+      border-radius: 5px;
+      background-color: var(--surface-subtle);
+      color: var(--ink);
+    }
+
+    .docs-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+
+    .doc-link {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px;
+      background-color: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      text-decoration: none;
+      transition: border-color 150ms ease, background-color 150ms ease;
+    }
+
+    .doc-link:hover {
+      border-color: var(--accent);
+      background-color: var(--accent-soft);
+    }
+
+    .doc-link strong {
+      font-size: 15px;
+      color: var(--ink);
+    }
+
+    .doc-link span {
+      font-size: 13.5px;
+      color: var(--muted);
+      text-align: right;
+    }
+
+    .trust-note {
+      margin-top: 20px;
+      padding: 14px 16px;
+      border-radius: 12px;
+      background-color: var(--surface);
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13.5px;
+    }
+
+    .trust-note strong {
+      color: var(--ink);
+    }
+
+    .footer {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 16px;
+      margin-top: 40px;
+      padding-top: 24px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13.5px;
+    }
+
+    .footer-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    @media (max-width: 760px) {
+      .steps-grid,
+      .docs-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .topbar {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+
+      .hero {
+        padding: 36px 0 28px;
+      }
+
+      .doc-link {
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .doc-link span {
+        text-align: left;
+      }
+    }
+  </style>
 </head>
 <body>
-  <p>Opening the <a href="/demo/">Agent Autofill demo</a>…</p>
+  <main class="shell">
+    <header class="topbar">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <a class="brand" href="./">
+          <span class="brand-mark" aria-hidden="true">A</span>
+          <span>Agent Autofill</span>
+        </a>
+        <span class="badge">macOS · Open Source · v0.1.2</span>
+      </div>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="demo/">Interactive demo</a>
+        <a href="getting-started.md">Docs</a>
+        <a href="cli.md">CLI</a>
+        <a href="https://github.com/lifan-builds/agent-autofill">GitHub ↗</a>
+      </nav>
+    </header>
+
+    <section class="hero" aria-labelledby="hero-title">
+      <h1 id="hero-title">Give your agent the exact information it needs.</h1>
+      <p class="lede">
+        A local-first personal vault and MCP broker for macOS. Share selected profile fields, one-time origin-bound logins, and 2FA codes with Claude, Codex, and Cursor—while keeping final submission in your hands.
+      </p>
+
+      <div class="install-bar" role="region" aria-label="Install command">
+        <code id="installCmd">uv tool install git+https://github.com/lifan-builds/agent-autofill.git</code>
+        <button type="button" class="copy-btn" id="copyBtn">Copy</button>
+      </div>
+
+      <div class="actions">
+        <a class="btn btn-primary" href="demo/">Try the 60-second interactive demo →</a>
+        <a class="btn btn-secondary" href="getting-started.md">Read getting started</a>
+        <a class="btn btn-secondary" href="https://github.com/lifan-builds/agent-autofill">View on GitHub ↗</a>
+      </div>
+    </section>
+
+    <section aria-label="Product walkthrough video">
+      <div class="media-frame">
+        <video controls playsinline preload="metadata" poster="assets/agent-autofill-tour.jpg" width="1920" height="1080" aria-label="Agent Autofill 33-second product tour">
+          <source src="assets/agent-autofill-tour.mp4" type="video/mp4">
+          <p><a href="assets/agent-autofill-tour.mp4">Download the 33-second product tour (MP4)</a>.</p>
+        </video>
+        <div class="media-meta">
+          <span>0:33 synthetic walkthrough · Chrome intake, origin-bound credential handoff, and 2FA retrieval</span>
+          <a href="demo/">Step through interactively →</a>
+        </div>
+        <details class="transcript">
+          <summary>Read the video transcript</summary>
+          <p>Every time an AI agent hits a form, you end up retyping your address, pasting a password into chat, or hunting down a verification code. Agent Autofill is a local-first personal vault for AI agents on your Mac. Start from Chrome: it organizes saved addresses, confirms Home versus Work, and remembers those meanings across tasks. When a site needs a login or a two-factor code, it hands off a one-time, origin-bound token and pulls the code from connected email or Messages so your raw password never enters model context. And before anything is submitted, you stay in control.</p>
+        </details>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="how-title">
+      <h2 id="how-title">How it works</h2>
+      <p class="section-intro">Three local boundaries keep credentials out of chat logs and keep form submissions human-approved.</p>
+      <div class="steps-grid">
+        <article class="step-item">
+          <h3>1. Import locally from Chrome</h3>
+          <p>Bootstrap saved addresses and logins into an AES-GCM encrypted SQLite vault with keys stored in the macOS Keychain—no plaintext CSV exports.</p>
+        </article>
+        <article class="step-item">
+          <h3>2. Pair MCP with scoped grants</h3>
+          <p>Run <code>agent-autofill mcp-install</code> for Claude, Codex, Cursor, or Antigravity. Approve only the requested fields or use <code>credential.use</code> for an origin-bound fill.</p>
+        </article>
+        <article class="step-item">
+          <h3>3. Confirm before submission</h3>
+          <p>The broker is strictly information-only: it never navigates, submits forms, or makes purchases. Your acting agent pauses for confirmation before clicking submit.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="docs-title">
+      <h2 id="docs-title">Documentation</h2>
+      <p class="section-intro">Start with a value-free inventory and connect sources only when a task needs them.</p>
+      <div class="docs-grid">
+        <a class="doc-link" href="getting-started.md">
+          <strong>Getting started</strong>
+          <span>First install, inbox check, and vault unlock →</span>
+        </a>
+        <a class="doc-link" href="chrome-seed-onboarding.md">
+          <strong>Chrome seed onboarding</strong>
+          <span>Import addresses and saved passwords locally →</span>
+        </a>
+        <a class="doc-link" href="access-modes.md">
+          <strong>Access modes</strong>
+          <span>Direct field delivery vs. extension handoff →</span>
+        </a>
+        <a class="doc-link" href="cli.md">
+          <strong>CLI cookbook</strong>
+          <span>Copy-paste commands for daily operation →</span>
+        </a>
+        <a class="doc-link" href="agent-autofill.md">
+          <strong>Operator &amp; MCP reference</strong>
+          <span>Read-only Gmail (<code>gmail.readonly</code>), Messages, and scopes →</span>
+        </a>
+        <a class="doc-link" href="demo/">
+          <strong>Interactive synthetic demo</strong>
+          <span>Walk through approval and revocation in the browser →</span>
+        </a>
+      </div>
+      <div class="trust-note">
+        <strong>Privacy boundary:</strong> Saved records stay encrypted in local SQLite on your Mac, and vault keys live in the macOS Keychain. Using the Chrome extension handoff (<code>credential.use</code>) keeps website passwords out of model context.
+      </div>
+    </section>
+
+    <footer class="footer">
+      <span>Agent Autofill · Built by <a href="https://clifan.com">Lifan Chen</a></span>
+      <div class="footer-links">
+        <a href="demo/">Interactive Demo</a>
+        <a href="index.md">Docs Index</a>
+        <a href="gtm.md">GTM Brief</a>
+        <a href="https://github.com/lifan-builds/agent-autofill">GitHub</a>
+      </div>
+    </footer>
+  </main>
+
+  <script>
+    (() => {
+      const btn = document.getElementById("copyBtn");
+      const cmd = document.getElementById("installCmd");
+      if (!btn || !cmd) return;
+      btn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(cmd.textContent.trim());
+          btn.textContent = "Copied";
+          setTimeout(() => { btn.textContent = "Copy"; }, 1800);
+        } catch {
+          btn.textContent = "Select above";
+        }
+      });
+    })();
+  </script>
 </body>
 </html>
