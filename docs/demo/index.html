@@ -4,124 +4,457 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Synthetic macOS-first Agent Autofill interactive product walkthrough">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231d4ed8'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-size='18' font-weight='700' fill='%23fff'%3EA%3C/text%3E%3C/svg%3E">
   <title>Agent Autofill · Interactive Walkthrough</title>
   <style>
     :root {
       color-scheme: light;
-      --ink: #0f172a;
-      --muted: #475569;
-      --line: #e2e8f0;
-      --line-strong: #cbd5e1;
-      --paper: #f8fafc;
+      --ink: #0c1720;
+      --muted: #344b5c;
+      --bar-neutral: #7c93a6;
+      --line: #c4d1dc;
+      --line-strong: #9fb2c2;
+      --paper: #eaf0f4;
+      --surface: #f7fafc;
       --white: #ffffff;
+      --code-bg: #101c26;
+      --code-sub: #0c1720;
+      --code-ink: #e6f0f7;
+      --code-control: #203444;
+      --code-control-hover: #2b4559;
+      --code-border: #38556b;
       --blue: #1d4ed8;
       --blue-dark: #1e3a8a;
       --blue-soft: #eff6ff;
-      --green: #0f766e;
-      --green-soft: #f0fdfa;
+      --green: #095c49;
+      --green-soft: #d7efe8;
       --amber: #92400e;
-      --amber-soft: #fffbeb;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      --signal: #b53f15;
+      --tok-fn: #7cc4fa;
+      --tok-num: #f7c873;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      --font-mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, ui-monospace, monospace;
     }
+
     * { box-sizing: border-box; }
-    ::selection { background: #dbeafe; color: var(--ink); }
-    body { margin: 0; color: var(--ink); background-color: var(--paper); font-size: 15.5px; line-height: 1.6; }
+    ::selection { background: var(--blue); color: var(--white); }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background-color: var(--paper);
+      font-family: var(--font-sans);
+      font-size: 15.5px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
     button { font: inherit; }
-    a { color: inherit; text-underline-offset: 0.2em; }
-    a:focus-visible, button:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; border-radius: 6px; }
-    .shell { max-width: 1040px; margin: 0 auto; padding: 24px 20px 60px; }
-    .topbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding-bottom: 18px; border-bottom: 1px solid var(--line); margin-bottom: 32px; }
-    .brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 700; text-decoration: none; }
-    .mark { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; color: #ffffff; background-color: var(--blue); font-size: 13px; font-weight: 700; }
-    .toplinks { display: flex; align-items: center; gap: 16px; color: var(--muted); font-size: 14px; }
-    .platform { display: inline-flex; align-items: center; gap: 6px; color: var(--green); background-color: var(--green-soft); border: 1px solid #99f6e4; border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 600; }
-    .intro { max-width: 680px; margin-bottom: 28px; }
-    h1 { margin: 0 0 10px; font-size: clamp(28px, 4vw, 40px); line-height: 1.12; letter-spacing: -0.03em; }
-    .lede { margin: 0; color: var(--muted); font-size: 16.5px; }
-    .demo { scroll-margin-top: 18px; display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 20px; align-items: start; }
-    .steps { position: sticky; top: 18px; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background-color: var(--white); }
+    a { color: var(--blue); text-underline-offset: 0.2em; }
+    a:focus-visible, button:focus-visible { outline: 2.5px solid var(--signal); outline-offset: 3px; border-radius: 6px; }
+    code { font-family: var(--font-mono); font-size: 12.5px; }
+
+    .shell { max-width: 1080px; margin: 0 auto; padding: 24px 20px 60px; }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 32px;
+    }
+
+    .brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 700; color: var(--ink); text-decoration: none; }
+    .mark { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; color: #ffffff; background-color: var(--blue); font-size: 13px; font-weight: 700; }
+    .toplinks { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 14px; font-weight: 600; }
+    .toplinks a { color: var(--muted); text-decoration: none; }
+    .toplinks a:hover { color: var(--ink); text-decoration: underline; }
+    .platform { display: inline-flex; align-items: center; gap: 6px; color: var(--green); background-color: var(--green-soft); border-radius: 6px; padding: 4px 10px; font-family: var(--font-mono); font-size: 12px; font-weight: 600; }
+
+    .intro {
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+      gap: 24px;
+      align-items: end;
+      margin-bottom: 28px;
+    }
+
+    h1 { margin: 0 0 10px; font-size: clamp(28px, 3.8vw, 38px); line-height: 1.12; letter-spacing: -0.03em; font-weight: 800; }
+    .lede { margin: 0; color: var(--muted); font-size: 16px; max-width: 58ch; }
+
+    /* Install Command Bar */
+    .install-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      background: var(--code-bg);
+      color: var(--code-ink);
+      border: 1px solid var(--code-border);
+      border-radius: 10px;
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+    }
+
+    .prompt-char { color: #6bc2ad; font-weight: 700; user-select: none; }
+    .install-bar code { flex: 1; min-width: 0; color: var(--code-ink); overflow-wrap: anywhere; }
+
+    .copy-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+      background: var(--code-control);
+      color: var(--code-ink);
+      border: 1px solid var(--code-border);
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-family: var(--font-sans);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background-color 140ms ease, border-color 140ms ease;
+    }
+
+    .copy-btn:hover { background: var(--code-control-hover); }
+    .copy-btn .icon-check { display: none; }
+    .copy-btn.is-copied { border-color: #26997f; color: #b0e2d5; }
+    .copy-btn.is-copied .icon-clip { display: none; }
+    .copy-btn.is-copied .icon-check { display: block; }
+
+    /* Recessed Segmented Pill Controls */
+    .tab-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      flex-wrap: wrap;
+      background: var(--paper);
+      padding: 3.5px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+    }
+
+    .mode-tab {
+      background: transparent;
+      color: var(--muted);
+      border: none;
+      border-radius: 6px;
+      padding: 5px 11px;
+      font-family: var(--font-sans);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background-color 140ms ease, color 140ms ease;
+    }
+
+    .mode-tab:hover { color: var(--ink); }
+    .mode-tab[aria-selected="true"] { background: var(--blue); color: var(--white); }
+
+    .demo {
+      scroll-margin-top: 18px;
+      display: grid;
+      grid-template-columns: 230px minmax(0, 1fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .steps {
+      position: sticky;
+      top: 18px;
+      padding: 18px;
+      border: 1px solid var(--line-strong);
+      border-radius: 14px;
+      background-color: var(--white);
+    }
+
     .steps-heading { margin: 0 0 12px; font-size: 14px; font-weight: 700; color: var(--ink); }
-    .step { width: 100%; display: grid; grid-template-columns: 28px 1fr; gap: 10px; padding: 8px 0; border: 0; color: var(--muted); background: transparent; text-align: left; cursor: pointer; }
-    .step-number { display: grid; place-items: center; width: 26px; height: 26px; border: 1px solid var(--line-strong); border-radius: 50%; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .step { width: 100%; display: grid; grid-template-columns: 28px 1fr; gap: 10px; padding: 7px 0; border: 0; color: var(--muted); background: transparent; text-align: left; cursor: pointer; }
+    .step-number { display: grid; place-items: center; width: 25px; height: 25px; border: 1px solid var(--line-strong); border-radius: 6px; font-family: var(--font-mono); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
     .step-label { padding-top: 2px; font-size: 13.5px; font-weight: 600; }
     .step.active { color: var(--blue-dark); }
     .step.active .step-number { color: #ffffff; background-color: var(--blue); border-color: var(--blue); }
-    .step.done .step-number { color: var(--green); border-color: #5eead4; background-color: var(--green-soft); }
+    .step.done .step-number { color: var(--green); border-color: #26997f; background-color: var(--green-soft); font-size: 0; }
     .step.done .step-number::before { content: "✓"; font-size: 12px; }
-    .step.done .step-number { font-size: 0; }
-    .progress { height: 5px; margin: 14px 0 12px; overflow: hidden; border-radius: 99px; background-color: #e2e8f0; }
+    .progress { height: 5px; margin: 14px 0 12px; overflow: hidden; border-radius: 6px; background-color: var(--paper); }
     .progress-bar { height: 100%; width: 20%; border-radius: inherit; background-color: var(--blue); transition: width .2s ease; }
     .steps-note { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
-    .stage { min-width: 0; padding: 28px; border: 1px solid var(--line); border-radius: 16px; background-color: var(--white); }
-    .stage-head { display: flex; justify-content: space-between; gap: 16px; align-items: start; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
-    .stage-head h2 { margin: 0; font-size: clamp(22px, 2.6vw, 28px); line-height: 1.2; letter-spacing: -0.025em; }
-    .stage-head p { max-width: 560px; margin: 6px 0 0; color: var(--muted); font-size: 15px; }
-    .stage-badge { flex: none; padding: 5px 10px; color: var(--green); background-color: var(--green-soft); border: 1px solid #99f6e4; border-radius: 8px; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
-    .stage-body { min-height: 250px; padding: 22px 0 8px; }
-    .section-heading { margin: 0 0 10px; color: var(--muted); font-size: 13px; font-weight: 700; }
-    .inventory { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
-    .inventory-card { display: flex; align-items: center; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; }
-    .inventory-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; color: var(--blue-dark); background-color: var(--blue-soft); font-size: 13px; font-weight: 700; }
-    .inventory-card strong { display: block; font-size: 14px; }
-    .inventory-card span { display: block; color: var(--muted); font-size: 12.5px; }
-    .status-row { display: flex; align-items: center; gap: 8px; margin-top: 18px; color: var(--green); font-size: 13.5px; font-weight: 600; }
-    .status-row::before { content: ""; display: block; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
-    .request-card { padding: 16px; border: 1px solid #bfdbfe; border-radius: 12px; background-color: #f8fafc; }
-    .request-head { display: flex; justify-content: space-between; gap: 10px; align-items: start; }
-    .request-head strong { font-size: 16px; }
-    .request-head span.sub { display: block; color: var(--muted); font-size: 13px; }
-    .request-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px 20px; margin-top: 14px; }
-    .request-item dt { color: var(--muted); font-size: 12px; font-weight: 600; }
-    .request-item dd { margin: 2px 0 0; font-size: 14px; font-weight: 600; }
-    .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
-    .chip { padding: 3px 8px; color: var(--blue-dark); background-color: #dbeafe; border-radius: 6px; font-size: 12px; font-weight: 600; }
-    .choice-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 18px; }
-    .choice { padding: 13px; border: 1px solid var(--line-strong); border-radius: 10px; background-color: var(--white); text-align: left; cursor: pointer; }
-    .choice.selected { border-color: var(--blue); background-color: var(--blue-soft); }
-    .choice strong { display: block; margin-bottom: 3px; font-size: 14px; }
-    .choice span { display: block; color: var(--muted); font-size: 12.5px; }
-    .approval { padding: 16px; border: 1px solid #99f6e4; border-radius: 12px; background-color: var(--green-soft); }
-    .approval h3 { margin: 0 0 4px; font-size: 17px; }
-    .approval p { margin: 0; color: var(--muted); font-size: 13.5px; }
-    .approval-list { display: grid; gap: 8px; margin-top: 14px; }
-    .approval-line { display: flex; justify-content: space-between; gap: 12px; padding-bottom: 7px; border-bottom: 1px dashed #99f6e4; font-size: 13.5px; }
-    .approval-line span { color: var(--muted); }
-    .approval-line strong { text-align: right; }
-    .delivery { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: stretch; }
-    .delivery-card { padding: 16px; border: 1px solid var(--line); border-radius: 12px; }
-    .delivery-card.highlight { border-color: var(--blue); background-color: var(--blue-soft); }
-    .delivery-card h3 { margin: 0 0 4px; font-size: 16px; }
-    .delivery-card p { min-height: 40px; margin: 0; color: var(--muted); font-size: 13.5px; }
-    .field-preview { margin-top: 14px; padding: 10px; border-radius: 8px; background-color: #f1f5f9; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; color: var(--ink); }
-    .handle-preview { color: var(--ink); word-break: break-all; }
-    .success { display: flex; gap: 12px; align-items: start; padding: 15px; color: #115e59; border: 1px solid #99f6e4; border-radius: 12px; background-color: var(--green-soft); }
-    .success-icon { display: grid; place-items: center; flex: none; width: 26px; height: 26px; border-radius: 50%; color: #ffffff; background-color: var(--green); font-weight: 700; font-size: 13px; }
-    .success h3 { margin: 0 0 3px; font-size: 16px; }
-    .success p { margin: 0; font-size: 13.5px; }
-    .revoke { margin-top: 14px; color: #7f1d1d; border: 1px solid #fecaca; background-color: #fef2f2; }
-    .revoke strong { display: block; }
-    .stage-actions { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding-top: 18px; border-top: 1px solid var(--line); }
+
+    /* Unified Stage Ledger (Zero Nested Card-in-Card Boxes) */
+    .stage {
+      min-width: 0;
+      border: 1px solid var(--line-strong);
+      border-radius: 14px;
+      background-color: var(--white);
+      overflow: hidden;
+    }
+
+    .stage-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+      align-items: start;
+      padding: 18px 22px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .stage-head h2 { margin: 0; font-size: clamp(20px, 2.4vw, 24px); line-height: 1.2; letter-spacing: -0.02em; }
+    .stage-head p { max-width: 54ch; margin: 4px 0 0; color: var(--muted); font-size: 14.5px; }
+    .stage-meta-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .stage-badge { flex: none; padding: 5px 10px; color: var(--green); background-color: var(--green-soft); border-radius: 6px; font-family: var(--font-mono); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+    .stage-split {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .stage-body {
+      min-width: 0;
+      padding: 18px 22px;
+    }
+
+    .stage-code-col {
+      min-width: 0;
+      background: var(--code-bg);
+      color: var(--code-ink);
+      border-left: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .code-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 9px 14px;
+      background: var(--code-sub);
+      border-bottom: 1px solid var(--code-border);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--code-ink);
+    }
+
+    .trace-code {
+      margin: 0;
+      padding: 10px 0;
+      background: var(--code-bg);
+      color: var(--code-ink);
+      font-family: var(--font-mono);
+      font-variant-numeric: tabular-nums;
+      font-size: 12px;
+      line-height: 1.55;
+      overflow-x: auto;
+      white-space: normal;
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+    }
+
+    .code-line {
+      display: block;
+      white-space: pre-wrap;
+      overflow-wrap: break-word;
+      padding: 1px 14px 1px 36px;
+      position: relative;
+    }
+
+    .code-line::before {
+      content: attr(data-line);
+      position: absolute;
+      left: 8px;
+      width: 20px;
+      text-align: right;
+      color: var(--bar-neutral);
+      font-size: 11.5px;
+      user-select: none;
+    }
+
+    .tok-comment { color: var(--line-strong); font-style: italic; }
+    .tok-kw { color: #f0a68b; font-weight: 600; }
+    .tok-fn { color: var(--tok-fn); }
+    .tok-str { color: #6bc2ad; }
+    .tok-num { color: var(--tok-num); font-weight: 600; }
+
+    /* Flat Ledger Rows inside stage-body (No Nested Boxes) */
+    .ledger-list {
+      display: grid;
+      margin: 0;
+      padding: 0;
+    }
+
+    .ledger-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+      padding: 9px 0;
+      border-bottom: 1px solid var(--line);
+      font-size: 13.5px;
+    }
+
+    .ledger-row:first-child { padding-top: 0; }
+    .ledger-row span { color: var(--muted); }
+    .ledger-row strong { color: var(--ink); text-align: right; font-family: var(--font-mono); font-size: 12.5px; }
+
+    .choice-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .choice {
+      padding: 7px 12px;
+      border: 1px solid var(--line-strong);
+      border-radius: 7px;
+      background-color: var(--surface);
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .choice.selected {
+      border-color: var(--blue);
+      background-color: var(--blue-soft);
+      color: var(--blue-dark);
+    }
+
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 14px;
+      color: var(--green);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .status-row::before {
+      content: "";
+      display: block;
+      width: 8px;
+      height: 8px;
+      border-radius: 4px;
+      background: currentColor;
+    }
+
+    .stage-actions {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+      padding: 14px 22px;
+      background: var(--surface);
+    }
+
     .stage-actions .hint { color: var(--muted); font-size: 13px; }
-    .primary, .quiet { cursor: pointer; border-radius: 9px; padding: 9px 15px; font-size: 14px; font-weight: 600; }
+    .primary, .quiet { cursor: pointer; border-radius: 8px; padding: 8px 14px; font-size: 13.5px; font-weight: 600; }
     .primary { color: #ffffff; background-color: var(--blue); border: 1px solid var(--blue); }
     .primary:hover { background-color: var(--blue-dark); }
     .quiet { color: var(--ink); background-color: var(--white); border: 1px solid var(--line-strong); }
-    .quiet:hover { background-color: #f1f5f9; }
-    .footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16px; margin-top: 28px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
-    @media (max-width: 800px) { .demo { grid-template-columns: 1fr; } .steps { position: static; } .step { display: inline-grid; width: auto; margin-right: 12px; } .steps-heading, .steps-note { display: none; } .steps .progress { margin-top: 4px; } .stage { padding: 20px; } }
-    @media (max-width: 520px) { .shell { padding: 18px 14px 42px; } .inventory, .choice-row, .delivery, .request-grid { grid-template-columns: 1fr; } .stage-head { flex-direction: column; } }
+    .quiet:hover { background-color: var(--paper); }
+
+    /* 3 Architecture / Consent Boundary Pillars with Inline SVG Schematics */
+    .pillars-section {
+      margin-top: 36px;
+      padding-top: 28px;
+      border-top: 1px solid var(--line);
+    }
+
+    .pillars-section h2 {
+      margin: 0 0 14px;
+      font-size: 20px;
+      letter-spacing: -0.02em;
+    }
+
+    .arch-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      background-color: var(--white);
+      border: 1px solid var(--line-strong);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+
+    .arch-col { padding: 18px 20px; min-width: 0; }
+    .arch-col + .arch-col { border-left: 1px solid var(--line); }
+
+    .arch-schematic {
+      display: block;
+      width: 100%;
+      height: auto;
+      margin-bottom: 12px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .arch-col h3 { margin: 0 0 6px; font-size: 15.5px; }
+    .arch-col p { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.5; }
+
+    .footer {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 16px;
+      margin-top: 32px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 860px) {
+      .intro,
+      .demo,
+      .stage-split,
+      .arch-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .steps { position: static; }
+      .step { display: inline-grid; width: auto; margin-right: 12px; }
+      .steps-heading, .steps-note { display: none; }
+      .steps .progress { margin-top: 4px; }
+      .stage-code-col { border-left: none; border-top: 1px solid var(--line); }
+      .arch-col + .arch-col { border-left: none; border-top: 1px solid var(--line); }
+    }
   </style>
 </head>
 <body>
   <main class="shell">
     <header class="topbar">
       <a class="brand" href="../"><span class="mark" aria-hidden="true">A</span> Agent Autofill</a>
-      <div class="toplinks"><a href="../">← Product overview</a><span class="platform">Synthetic walkthrough · offline</span></div>
+      <nav class="toplinks" aria-label="Walkthrough navigation">
+        <a href="../">← Product overview</a>
+        <a href="../getting-started.md">Docs</a>
+        <span class="platform">Synthetic walkthrough · offline</span>
+      </nav>
     </header>
 
     <section class="intro" aria-labelledby="hero-title">
-      <h1 id="hero-title">Step through a scoped autofill request.</h1>
-      <p class="lede">Walk through the 6-stage consent boundary: value-free inventory, metadata preview, human approval, missing-field resolution, origin-bound delivery, and revocation.</p>
+      <div>
+        <h1 id="hero-title">Step through a scoped autofill request.</h1>
+        <p class="lede">Walk through the 6-stage consent boundary: value-free inventory, metadata preview, human approval, missing-field resolution, origin-bound delivery, and revocation.</p>
+      </div>
+      <div class="install-bar" role="region" aria-label="Install command">
+        <span class="prompt-char" aria-hidden="true">$</span>
+        <code id="installCmd" aria-live="polite">uv tool install git+https://github.com/lifan-builds/agent-autofill.git</code>
+        <button type="button" class="copy-btn" data-copy-target="installCmd" aria-live="polite">
+          <svg class="copy-icon" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+            <path class="icon-clip" fill="currentColor" d="M5.75 1a.75.75 0 0 0-.75.75v3c0 .414.336.75.75.75h4.5a.75.75 0 0 0 .75-.75v-3a.75.75 0 0 0-.75-.75h-4.5Zm.75 3V2.5h3V4h-3Zm-2.874-.467a.75.75 0 0 0-.752-1.298A1.75 1.75 0 0 0 2 3.75v9.5c0 .966.784 1.75 1.75 1.75h8.5A1.75 1.75 0 0 0 14 13.25v-9.5a1.75 1.75 0 0 0-.874-1.515.75.75 0 1 0-.752 1.298.25.25 0 0 1 .126.217v9.5a.25.25 0 0 1-.25.25h-8.5a.25.25 0 0 1-.25-.25v-9.5a.25.25 0 0 1 .126-.217Z"/>
+            <path class="icon-check" fill="currentColor" d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/>
+          </svg>
+          <span class="copy-label">Copy</span>
+        </button>
+      </div>
     </section>
 
     <section class="demo" id="demo" aria-labelledby="demo-title">
@@ -134,7 +467,7 @@
         <button class="step" data-step="4"><span class="step-number">5</span><span class="step-label">Deliver selected data</span></button>
         <button class="step" data-step="5"><span class="step-number">6</span><span class="step-label">Revoke access</span></button>
         <div class="progress" aria-hidden="true"><div class="progress-bar" id="progressBar"></div></div>
-        <p class="steps-note">Every value in this walkthrough is synthetic. Nothing reads your files or leaves this page.</p>
+        <p class="steps-note">Synthetic values only. Nothing reads your files or leaves this page.</p>
       </nav>
 
       <article class="stage" aria-live="polite">
@@ -143,11 +476,88 @@
             <h2 id="stageTitle">Start with a value-free inventory</h2>
             <p id="stageDescription">See what is ready before an agent asks for anything.</p>
           </div>
-          <div class="stage-badge" id="stageEyebrow">Step 1 of 6</div>
+          <div class="stage-meta-right">
+            <div class="tab-group" role="tablist" aria-label="Delivery mode">
+              <button type="button" class="mode-tab" role="tab" aria-selected="true" data-mode="extension">Extension Handoff</button>
+              <button type="button" class="mode-tab" role="tab" aria-selected="false" data-mode="direct">Direct Fields</button>
+            </div>
+            <div class="stage-badge" id="stageStepBadge">Step 1 of 6</div>
+          </div>
         </div>
-        <div class="stage-body" id="stageBody"></div>
-        <div class="stage-actions"><span class="hint" id="stageHint">No account data is opened.</span><div><button class="quiet" id="resetDemo">Reset</button> <button class="primary" id="nextStep">Preview request</button></div></div>
+
+        <div class="stage-split">
+          <div class="stage-body" id="stageBody"></div>
+          <div class="stage-code-col">
+            <div class="code-toolbar">
+              <span id="stageCodeLabel">MCP Broker Trace</span>
+              <button type="button" class="copy-btn" data-copy-target="stageCode" aria-live="polite">
+                <svg class="copy-icon" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                  <path class="icon-clip" fill="currentColor" d="M5.75 1a.75.75 0 0 0-.75.75v3c0 .414.336.75.75.75h4.5a.75.75 0 0 0 .75-.75v-3a.75.75 0 0 0-.75-.75h-4.5Zm.75 3V2.5h3V4h-3Zm-2.874-.467a.75.75 0 0 0-.752-1.298A1.75 1.75 0 0 0 2 3.75v9.5c0 .966.784 1.75 1.75 1.75h8.5A1.75 1.75 0 0 0 14 13.25v-9.5a1.75 1.75 0 0 0-.874-1.515.75.75 0 1 0-.752 1.298.25.25 0 0 1 .126.217v9.5a.25.25 0 0 1-.25.25h-8.5a.25.25 0 0 1-.25-.25v-9.5a.25.25 0 0 1 .126-.217Z"/>
+                  <path class="icon-check" fill="currentColor" d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/>
+                </svg>
+                <span class="copy-label">Copy</span>
+              </button>
+            </div>
+            <pre class="trace-code" id="stageCode"></pre>
+          </div>
+        </div>
+
+        <div class="stage-actions">
+          <span class="hint" id="stageHint">No account data is opened.</span>
+          <div>
+            <button class="quiet" id="resetDemo">Reset</button>
+            <button class="primary" id="nextStep">Preview request</button>
+          </div>
+        </div>
       </article>
+    </section>
+
+    <section class="pillars-section" aria-labelledby="pillars-title">
+      <h2 id="pillars-title">Three Consent Boundaries</h2>
+      <div class="arch-grid">
+        <article class="arch-col">
+          <svg class="arch-schematic" viewBox="0 0 320 76" aria-hidden="true">
+            <rect x="0" y="0" width="320" height="76" rx="6" fill="#eaf0f4"/>
+            <rect x="10" y="14" width="88" height="48" rx="5" fill="#101c26"/>
+            <text x="54" y="34" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="700" fill="#6bc2ad">status --json</text>
+            <text x="54" y="49" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="7.5" fill="#e6f0f7">0 raw values</text>
+            <line x1="98" y1="38" x2="132" y2="38" stroke="#095c49" stroke-width="1.5"/>
+            <rect x="134" y="14" width="176" height="48" rx="5" fill="#ffffff" stroke="#9fb2c2" stroke-width="1"/>
+            <text x="144" y="34" font-family="JetBrains Mono, monospace" font-size="8" font-weight="700" fill="#095c49">12 profile · 2 site records</text>
+            <text x="144" y="49" font-family="JetBrains Mono, monospace" font-size="7.5" fill="#344b5c">Metadata inventory only</text>
+          </svg>
+          <h3>1. Value-free readiness</h3>
+          <p>Inspect field counts and source health before any secret or profile value is unlocked.</p>
+        </article>
+        <article class="arch-col">
+          <svg class="arch-schematic" viewBox="0 0 320 76" aria-hidden="true">
+            <rect x="0" y="0" width="320" height="76" rx="6" fill="#eaf0f4"/>
+            <rect x="10" y="14" width="88" height="48" rx="5" fill="#101c26"/>
+            <text x="54" y="34" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="700" fill="#7cc4fa">credential.use</text>
+            <text x="54" y="49" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="7.5" fill="#e6f0f7">10m TTL</text>
+            <line x1="98" y1="38" x2="132" y2="38" stroke="#1d4ed8" stroke-width="1.5"/>
+            <rect x="134" y="14" width="176" height="48" rx="5" fill="#ffffff" stroke="#9fb2c2" stroke-width="1"/>
+            <text x="144" y="34" font-family="JetBrains Mono, monospace" font-size="8" font-weight="700" fill="#1d4ed8">Origin: example.test</text>
+            <text x="144" y="49" font-family="JetBrains Mono, monospace" font-size="7.5" fill="#344b5c">1-time extension handle</text>
+          </svg>
+          <h3>2. Origin-bound handoff</h3>
+          <p>Bind each grant to a single target origin and purpose with a short expiration window.</p>
+        </article>
+        <article class="arch-col">
+          <svg class="arch-schematic" viewBox="0 0 320 76" aria-hidden="true">
+            <rect x="0" y="0" width="320" height="76" rx="6" fill="#eaf0f4"/>
+            <rect x="10" y="14" width="88" height="48" rx="5" fill="#101c26"/>
+            <text x="54" y="34" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="700" fill="#f7c873">grant.revoke</text>
+            <text x="54" y="49" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="7.5" fill="#e6f0f7">Instant block</text>
+            <line x1="98" y1="38" x2="132" y2="38" stroke="#095c49" stroke-width="1.5"/>
+            <rect x="134" y="14" width="176" height="48" rx="5" fill="#ffffff" stroke="#095c49" stroke-width="1"/>
+            <text x="144" y="34" font-family="JetBrains Mono, monospace" font-size="8" font-weight="700" fill="#095c49">Human Submit Gate</text>
+            <text x="144" y="49" font-family="JetBrains Mono, monospace" font-size="7.5" fill="#344b5c">Broker never clicks submit</text>
+          </svg>
+          <h3>3. Revocable &amp; non-acting</h3>
+          <p>Revoke grants immediately after task completion; final form submission always stays with you.</p>
+        </article>
+      </div>
     </section>
 
     <footer class="footer">
@@ -164,92 +574,244 @@
       const body = $("#stageBody");
       const title = $("#stageTitle");
       const description = $("#stageDescription");
-      const eyebrow = $("#stageEyebrow");
+      const badge = $("#stageStepBadge");
       const hint = $("#stageHint");
       const next = $("#nextStep");
       const progress = $("#progressBar");
+      const codeEl = $("#stageCode");
+      const codeLabel = $("#stageCodeLabel");
       const steps = [...document.querySelectorAll(".step")];
+      const modeTabs = [...document.querySelectorAll(".mode-tab")];
+
+      const TOKEN_REGEX = /("(?:[^"\\]|\\.)*"(?=\s*:))|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\b(?:const|await|return|true|false|null)\b|\b(?:callTool|status|origin|purpose|fields|delivery|ttl_seconds|handle|revoked)\b|\b\d+\b)/g;
+
+      function highlightLine(lineText) {
+        const escaped = lineText.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        if (/^\s*(?:\/\/|#)/.test(escaped)) {
+          return `<span class="tok-comment">${escaped}</span>`;
+        }
+        return escaped.replace(TOKEN_REGEX, (match, jsonKey, tok) => {
+          if (jsonKey) return `<span class="tok-fn">${jsonKey}</span>`;
+          if (!tok) return match;
+          if (tok.startsWith('"') || tok.startsWith("'")) return `<span class="tok-str">${tok}</span>`;
+          if (/^(const|await|return|true|false|null)$/.test(tok)) return `<span class="tok-kw">${tok}</span>`;
+          if (/^\d+$/.test(tok)) return `<span class="tok-num">${tok}</span>`;
+          return `<span class="tok-fn">${tok}</span>`;
+        });
+      }
+
+      function renderCode(rawCode) {
+        codeEl.dataset.rawCode = rawCode;
+        codeEl.innerHTML = rawCode
+          .split("\n")
+          .map((line, i) => `<span class="code-line" data-line="${i + 1}">${highlightLine(line) || " "}</span>`)
+          .join("\n");
+      }
 
       const screens = [
         {
-          eyebrow: "Step 1 of 6",
+          badge: "Step 1 of 6",
           title: "Start with a value-free inventory",
           description: "See what is ready before an agent asks for anything.",
           hint: "No account data is opened.",
           button: "Preview request",
-          render: () => `<p class="section-heading">Synthetic local inventory</p><div class="inventory"><div class="inventory-card"><div class="inventory-icon">ID</div><div><strong>Profile fields</strong><span>12 approved fields · metadata only</span></div></div><div class="inventory-card"><div class="inventory-icon">ML</div><div><strong>Email source</strong><span>1 read-only inbox · health ready</span></div></div><div class="inventory-card"><div class="inventory-icon">PW</div><div><strong>Credential records</strong><span>2 sites · no passwords shown</span></div></div><div class="inventory-card"><div class="inventory-icon">GR</div><div><strong>Access grants</strong><span>${state.revoked ? "0 active · last grant revoked" : "0 active · nothing shared yet"}</span></div></div></div><div class="status-row">Encrypted broker ready · loopback review surface</div>`,
+          codeLabel: "status.inventory (metadata only)",
+          code: () => `// 1. Check readiness without exposing values
+const status = await mcp.callTool("status", {});
+{
+  "profile_fields": 12,
+  "credential_sites": 2,
+  "active_grants": ${state.revoked ? 0 : 0},
+  "values_exposed": false
+}`,
+          render: () => `<div class="ledger-list">
+            <div class="ledger-row"><span>Profile fields</span><strong>12 approved · metadata only</strong></div>
+            <div class="ledger-row"><span>Email source</span><strong>1 read-only inbox · ready</strong></div>
+            <div class="ledger-row"><span>Credential records</span><strong>2 sites · 0 passwords shown</strong></div>
+            <div class="ledger-row"><span>Access grants</span><strong>${state.revoked ? "0 active · last revoked" : "0 active · nothing shared"}</strong></div>
+          </div>
+          <div class="status-row">Encrypted broker ready · loopback review surface</div>`,
         },
         {
-          eyebrow: "Step 2 of 6",
+          badge: "Step 2 of 6",
           title: "Preview the exact request",
           description: "The agent names the origin, purpose, fields, expiry, and delivery mode before any value is returned.",
-          hint: "Change delivery mode to compare exposure.",
+          hint: "Switch delivery mode above or below to compare exposure.",
           button: "Review approval",
-          render: () => `<div class="request-card"><div class="request-head"><div><strong>Travel form helper</strong><span class="sub">Requesting agent · synthetic-agent-01</span></div><span class="chip">awaiting approval</span></div><dl class="request-grid"><div class="request-item"><dt>Target origin</dt><dd>https://example.test</dd></div><div class="request-item"><dt>Purpose</dt><dd>Complete traveler profile</dd></div><div class="request-item"><dt>Fields</dt><dd><div class="chips"><span class="chip">display_name</span><span class="chip">postal_code</span></div></dd></div><div class="request-item"><dt>Expiry</dt><dd>10 minutes · one task</dd></div></dl><div class="choice-row"><button class="choice ${state.delivery === "direct" ? "selected" : ""}" data-delivery="direct"><strong>Direct selected fields</strong><span>Values appear in the authenticated agent response.</span></button><button class="choice ${state.delivery === "extension" ? "selected" : ""}" data-delivery="extension"><strong>Extension handoff</strong><span>One-time origin-bound handle; password stays out of agent input.</span></button></div></div>`,
+          codeLabel: "autofill.preview_request",
+          code: () => `// 2. Agent declares exact scope & delivery mode
+const req = await mcp.callTool("profile.get", {
+  origin: "https://example.test",
+  purpose: "Complete traveler profile",
+  fields: ["display_name", "postal_code"],
+  delivery: "${state.delivery}",
+  ttl_seconds: 600
+});`,
+          render: () => `<div class="ledger-list">
+            <div class="ledger-row"><span>Requesting agent</span><strong>synthetic-agent-01</strong></div>
+            <div class="ledger-row"><span>Target origin</span><strong>https://example.test</strong></div>
+            <div class="ledger-row"><span>Purpose</span><strong>Complete traveler profile</strong></div>
+            <div class="ledger-row"><span>Requested fields</span><strong>display_name, postal_code</strong></div>
+            <div class="ledger-row"><span>Expiry</span><strong>10 minutes · one task</strong></div>
+          </div>
+          <div class="choice-strip">
+            <button class="choice ${state.delivery === "extension" ? "selected" : ""}" data-delivery="extension">Extension handoff (0 context secrets)</button>
+            <button class="choice ${state.delivery === "direct" ? "selected" : ""}" data-delivery="direct">Direct selected fields</button>
+          </div>`,
         },
         {
-          eyebrow: "Step 3 of 6",
+          badge: "Step 3 of 6",
           title: "Approve the smallest useful grant",
-          description: "A clear approval card makes the consent boundary visible and reversible.",
+          description: "A clear approval ledger makes the consent boundary visible and reversible.",
           hint: state.approved ? "Grant approved; delivery is ready." : "Nothing is shared until you approve.",
-          button: state.approved ? "Deliver selected data" : "Approve exact grant",
-          render: () => `<div class="approval"><h3>Allow this request?</h3><p>Review every part before the grant is written.</p><div class="approval-list"><div class="approval-line"><span>Agent</span><strong>synthetic-agent-01</strong></div><div class="approval-line"><span>Origin</span><strong>example.test</strong></div><div class="approval-line"><span>Purpose</span><strong>Complete traveler profile</strong></div><div class="approval-line"><span>Fields</span><strong>display_name, postal_code</strong></div><div class="approval-line"><span>Delivery</span><strong>${state.delivery === "direct" ? "direct selected fields" : "one-time extension handoff"}</strong></div><div class="approval-line"><span>Expires</span><strong>in 10 minutes</strong></div></div></div><div class="status-row" style="color:${state.approved ? "var(--green)" : "var(--amber)"}">${state.approved ? "Grant active · revocable at any time" : "Waiting for your approval"}</div>`,
+          button: state.approved ? "Resolve missing field" : "Approve exact grant",
+          codeLabel: "grant.approve",
+          code: () => `// 3. Human approval writes a time-bounded grant
+{
+  "agent": "synthetic-agent-01",
+  "origin": "example.test",
+  "fields": ["display_name", "postal_code"],
+  "delivery": "${state.delivery}",
+  "approved": ${state.approved},
+  "ttl_seconds": 600
+}`,
+          render: () => `<div class="ledger-list">
+            <div class="ledger-row"><span>Agent</span><strong>synthetic-agent-01</strong></div>
+            <div class="ledger-row"><span>Origin</span><strong>example.test</strong></div>
+            <div class="ledger-row"><span>Fields</span><strong>display_name, postal_code</strong></div>
+            <div class="ledger-row"><span>Delivery</span><strong>${state.delivery === "direct" ? "direct selected fields" : "one-time extension handoff"}</strong></div>
+            <div class="ledger-row"><span>Expires</span><strong>in 10 minutes</strong></div>
+          </div>
+          <div class="status-row" style="color:${state.approved ? "var(--green)" : "var(--amber)"}">${state.approved ? "Grant active · revocable at any time" : "Waiting for your approval"}</div>`,
         },
         {
-          eyebrow: "Step 4 of 6",
+          badge: "Step 4 of 6",
           title: "Choose once or remember it",
-          description: "The complete answer, reusable record scope, and narrow write scope are visible before you make one decision.",
-          hint: state.missingChoice === "skip" ? "The form is paused; choose use once or save in the card to continue." : "One choice completes the missing-field step. Submission remains separate.",
-          button: "Choose an option above",
-          render: () => `<div class="request-card"><div class="request-head"><div><strong>One field is missing</strong><span class="sub">Required by the synthetic job-application form · one decision</span></div><span class="chip">synthetic value</span></div><dl class="request-grid"><div class="request-item"><dt>Field ID</dt><dd>company_name</dd></div><div class="request-item"><dt>Category</dt><dd>organization</dd></div><div class="request-item"><dt>Display name</dt><dd>Company name</dd></div><div class="request-item"><dt>Exact value</dt><dd>Synthetic Example Co</dd></div><div class="request-item"><dt>Source</dt><dd>user supplied now</dd></div><div class="request-item"><dt>Sensitivity</dt><dd>normal profile</dd></div><div class="request-item"><dt>Saved record scope</dt><dd>any future authorized origin/purpose</dd></div><div class="request-item"><dt>Current form scope</dt><dd>example.test · job application</dd></div></dl><div class="approval" style="margin-top:16px"><div class="approval-line"><span>Exact write grant, if needed</span><strong>profile.write · company_name · example.test</strong></div><p style="margin-top:8px">Save is the single approval for this reusable record and this narrow grant. Future reads still require their own matching checks.</p></div><div class="choice-row"><button class="choice ${state.missingChoice === "once" ? "selected" : ""}" data-missing="once"><strong>Use once</strong><span>Continue now; discard this answer after the form.</span></button><button class="choice ${state.missingChoice === "save" ? "selected" : ""}" data-missing="save"><strong>Save to Agent Autofill</strong><span>Store this reusable record for later authorized forms.</span></button></div><button class="quiet" style="margin-top:10px" data-missing="skip">Skip this field</button></div>${state.missingChoice === "skip" ? `<div class="success revoke" style="margin-top:14px"><div class="success-icon" style="background:#991b1b">!</div><div><strong>Form paused</strong><p>No value is guessed or saved. Choose use once or Save to Agent Autofill to continue.</p></div></div>` : ""}`,
+          description: "Decide whether a newly supplied field is used once or saved for future authorized forms.",
+          hint: state.missingChoice === "skip" ? "Form paused; choose Use once or Save to continue." : "One choice completes the missing-field step.",
+          button: "Choose an option in the stage",
+          codeLabel: "profile.resolve_missing",
+          code: () => `// 4. Resolve missing field with narrow write scope
+{
+  "field_id": "company_name",
+  "value": "Synthetic Example Co",
+  "origin": "example.test",
+  "resolution": "${state.missingChoice}"
+}`,
+          render: () => `<div class="ledger-list">
+            <div class="ledger-row"><span>Missing field</span><strong>company_name (Organization)</strong></div>
+            <div class="ledger-row"><span>Supplied value</span><strong>Synthetic Example Co</strong></div>
+            <div class="ledger-row"><span>Write grant scope</span><strong>profile.write · example.test</strong></div>
+          </div>
+          <div class="choice-strip">
+            <button class="choice ${state.missingChoice === "once" ? "selected" : ""}" data-missing="once">Use once</button>
+            <button class="choice ${state.missingChoice === "save" ? "selected" : ""}" data-missing="save">Save to Agent Autofill</button>
+            <button class="choice ${state.missingChoice === "skip" ? "selected" : ""}" data-missing="skip">Skip field</button>
+          </div>
+          ${state.missingChoice === "skip" ? `<div class="status-row" style="color:var(--signal)">Form paused · choose Use once or Save to continue</div>` : ""}`,
         },
         {
-          eyebrow: "Step 5 of 6",
+          badge: "Step 5 of 6",
           title: state.delivery === "direct" ? "Return only the selected fields" : "Keep the password out of agent input",
-          description: state.delivery === "direct" ? "The authenticated response contains only the two approved synthetic fields and safe provenance." : "The local extension receives a one-time, origin-bound handle. It never navigates or submits.",
+          description: state.delivery === "direct" ? "The response contains only the approved synthetic fields and provenance." : "The local extension receives a one-time, origin-bound handle.",
           hint: "The acting agent or user owns the next action.",
           button: "Revoke grant",
-          render: () => `<div class="delivery"><div class="delivery-card ${state.delivery === "direct" ? "highlight" : ""}"><h3>Direct response</h3><p>Selected fields plus provenance. No password, token, or unrelated record.</p><div class="field-preview">display_name: Demo User<br>postal_code: 98101</div></div><div class="delivery-card ${state.delivery === "extension" ? "highlight" : ""}"><h3>Extension handoff</h3><p>Short-lived handle bound to <strong>example.test</strong>; consumed once.</p><div class="field-preview handle-preview">handle: demo-only · consumed after origin check</div></div></div><div class="success" style="margin-top:16px"><div class="success-icon">✓</div><div><h3>Scoped delivery complete</h3><p>Provenance: synthetic-demo · origin: example.test · purpose: traveler profile</p></div></div>`,
+          codeLabel: "delivery.response",
+          code: () => state.delivery === "direct"
+            ? `// 5. Direct selected field payload
+{
+  "origin": "example.test",
+  "fields": {
+    "display_name": "Demo User",
+    "postal_code": "98101"
+  }
+}`
+            : `// 5. Extension handoff payload (0 raw secrets in chat)
+{
+  "origin": "example.test",
+  "handle": "hnd_demo_9f8a1c_one_time",
+  "consumed_on_origin_check": true,
+  "submit_allowed": false
+}`,
+          render: () => `<div class="ledger-list">
+            <div class="ledger-row"><span>Active mode</span><strong>${state.delivery === "direct" ? "Direct response" : "Extension handoff"}</strong></div>
+            <div class="ledger-row"><span>Delivered payload</span><strong>${state.delivery === "direct" ? "display_name, postal_code" : "handle: demo-only (1-time)"}</strong></div>
+            <div class="ledger-row"><span>Origin lock</span><strong>example.test · traveler profile</strong></div>
+            <div class="ledger-row"><span>Submission gate</span><strong>Paused for human confirmation</strong></div>
+          </div>
+          <div class="status-row">Scoped delivery complete · 0 raw passwords in chat</div>`,
         },
         {
-          eyebrow: "Step 6 of 6",
+          badge: "Step 6 of 6",
           title: "Revoke when the task is done",
-          description: "A short-lived grant should disappear cleanly instead of becoming a standing permission.",
+          description: "A short-lived grant disappears cleanly instead of becoming a standing permission.",
           hint: "Reset the tour to run it again.",
           button: "Reset demo",
-          render: () => `<div class="success"><div class="success-icon">✓</div><div><h3>Grant revoked</h3><p>Future requests from synthetic-agent-01 for this scope are blocked. The local vault remains intact.</p></div></div><div class="success revoke"><div class="success-icon" style="background:#991b1b">!</div><div><strong>The stopping point is deliberate</strong><p>The acting agent owns browser actions and must obtain a fresh submission confirmation; financial information always requires it.</p></div></div>`,
+          codeLabel: "grant.revoke",
+          code: () => `// 6. Revoke grant immediately after task completion
+await mcp.callTool("grant.revoke", {
+  agent: "synthetic-agent-01",
+  origin: "example.test"
+});
+// Subsequent reads return 403 Grant Revoked`,
+          render: () => `<div class="ledger-list">
+            <div class="ledger-row"><span>Grant status</span><strong>Revoked · 0 active grants</strong></div>
+            <div class="ledger-row"><span>Subsequent agent reads</span><strong>Blocked (re-approval required)</strong></div>
+            <div class="ledger-row"><span>Final form submission</span><strong>Owned by user confirmation</strong></div>
+          </div>
+          <div class="status-row">Grant revoked · local vault remains locked</div>`,
         },
       ];
 
+      function syncModeTabs() {
+        for (const tab of modeTabs) {
+          const active = tab.dataset.mode === state.delivery;
+          tab.setAttribute("aria-selected", active ? "true" : "false");
+        }
+      }
+
       function render() {
         const screen = screens[state.step];
-        eyebrow.textContent = screen.eyebrow;
-        const deliveryTitle = state.step === 4 && state.delivery === "direct"
-          ? "Return only the selected fields"
-          : screen.title;
-        const deliveryDescription = state.step === 4 && state.delivery === "direct"
-          ? "The authenticated response contains only the two approved synthetic fields and safe provenance."
+        badge.textContent = screen.badge;
+        title.textContent = state.step === 4 && state.delivery === "direct" ? "Return only the selected fields" : screen.title;
+        description.textContent = state.step === 4 && state.delivery === "direct"
+          ? "The response contains only the approved synthetic fields and provenance."
           : screen.description;
-        title.textContent = deliveryTitle;
-        description.textContent = deliveryDescription;
         hint.textContent = screen.hint;
         next.textContent = screen.button;
+        codeLabel.textContent = screen.codeLabel;
         body.innerHTML = screen.render();
+        renderCode(screen.code());
+        syncModeTabs();
         progress.style.width = `${((state.step + 1) / screens.length) * 100}%`;
         steps.forEach((button, index) => {
           button.classList.toggle("active", index === state.step);
           button.classList.toggle("done", index < state.step || (index === 5 && state.revoked));
         });
-        document.querySelectorAll("[data-delivery]").forEach((button) => button.addEventListener("click", () => { state.delivery = button.dataset.delivery; render(); }));
-        document.querySelectorAll("[data-missing]").forEach((button) => button.addEventListener("click", () => {
-          state.missingChoice = button.dataset.missing;
-          if (state.missingChoice === "once" || state.missingChoice === "save") {
-            state.delivered = true;
-            state.step = 4;
-          }
-          render();
-        }));
+        document.querySelectorAll("[data-delivery]").forEach((button) =>
+          button.addEventListener("click", () => {
+            state.delivery = button.dataset.delivery;
+            render();
+          })
+        );
+        document.querySelectorAll("[data-missing]").forEach((button) =>
+          button.addEventListener("click", () => {
+            state.missingChoice = button.dataset.missing;
+            if (state.missingChoice === "once" || state.missingChoice === "save") {
+              state.delivered = true;
+              state.step = 4;
+            }
+            render();
+          })
+        );
       }
+
+      modeTabs.forEach((tab) => {
+        tab.addEventListener("click", () => {
+          state.delivery = tab.dataset.mode;
+          render();
+        });
+      });
 
       function advance() {
         if (state.step === 0) state.step = 1;
@@ -264,10 +826,70 @@
         else reset();
         render();
       }
-      function reset() { state.step = 0; state.delivery = "extension"; state.approved = false; state.missingChoice = "pending"; state.delivered = false; state.revoked = false; }
-      next.addEventListener("click", () => { advance(); $("#demo").scrollIntoView({ behavior: "smooth", block: "start" }); });
+
+      function reset() {
+        state.step = 0;
+        state.delivery = "extension";
+        state.approved = false;
+        state.missingChoice = "pending";
+        state.delivered = false;
+        state.revoked = false;
+      }
+
+      next.addEventListener("click", () => {
+        advance();
+        $("#demo").scrollIntoView({ behavior: "smooth", block: "start" });
+      });
       $("#resetDemo").addEventListener("click", () => { reset(); render(); });
-      steps.forEach((button) => button.addEventListener("click", () => { const requested = Number(button.dataset.step); const missingReady = state.missingChoice === "once" || state.missingChoice === "save"; if (requested <= state.step || (requested === state.step + 1 && state.step < 5 && (state.step !== 3 || missingReady))) { state.step = requested; render(); } }));
+      steps.forEach((button) =>
+        button.addEventListener("click", () => {
+          const requested = Number(button.dataset.step);
+          const missingReady = state.missingChoice === "once" || state.missingChoice === "save";
+          if (requested <= state.step || (requested === state.step + 1 && state.step < 5 && (state.step !== 3 || missingReady))) {
+            state.step = requested;
+            render();
+          }
+        })
+      );
+
+      async function writeClipboardText(text) {
+        if (navigator.clipboard?.writeText) {
+          try {
+            await navigator.clipboard.writeText(text);
+            return true;
+          } catch (_) {}
+        }
+        const area = document.createElement("textarea");
+        area.value = text;
+        area.setAttribute("readonly", "");
+        area.style.position = "fixed";
+        area.style.opacity = "0";
+        document.body.append(area);
+        area.select();
+        let ok = false;
+        try { ok = document.execCommand("copy"); } catch (_) { ok = false; }
+        area.remove();
+        return ok;
+      }
+
+      for (const copyBtn of document.querySelectorAll("[data-copy-target]")) {
+        const labelSpan = copyBtn.querySelector(".copy-label");
+        const defaultLabel = labelSpan ? labelSpan.textContent : "Copy";
+        copyBtn.addEventListener("click", async () => {
+          const target = document.getElementById(copyBtn.dataset.copyTarget);
+          if (!target) return;
+          const rawText = (target.dataset.rawCode || target.textContent || "").trim();
+          copyBtn.classList.add("is-copied");
+          if (labelSpan) labelSpan.textContent = "Copied";
+          clearTimeout(copyBtn._resetTimer);
+          copyBtn._resetTimer = setTimeout(() => {
+            copyBtn.classList.remove("is-copied");
+            if (labelSpan) labelSpan.textContent = defaultLabel;
+          }, 1600);
+          await writeClipboardText(rawText);
+        });
+      }
+
       render();
     })();
   </script>
