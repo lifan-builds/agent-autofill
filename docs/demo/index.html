@@ -152,6 +152,7 @@
 
     .mode-tab:hover { color: var(--ink); }
     .mode-tab[aria-selected="true"] { background: var(--blue); color: var(--white); }
+    .copy-btn:active, .mode-tab:active, .choice:active, .primary:active, .quiet:active { transform: translateY(1px); }
 
     .demo {
       scroll-margin-top: 18px;
@@ -172,6 +173,7 @@
 
     .steps-heading { margin: 0 0 12px; font-size: 14px; font-weight: 700; color: var(--ink); }
     .step { width: 100%; display: grid; grid-template-columns: 28px 1fr; gap: 10px; padding: 7px 0; border: 0; color: var(--muted); background: transparent; text-align: left; cursor: pointer; }
+    .step[aria-disabled="true"] { opacity: 0.52; cursor: not-allowed; }
     .step-number { display: grid; place-items: center; width: 25px; height: 25px; border: 1px solid var(--line-strong); border-radius: 6px; font-family: var(--font-mono); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
     .step-label { padding-top: 2px; font-size: 13.5px; font-weight: 600; }
     .step.active { color: var(--blue-dark); }
@@ -478,14 +480,14 @@
           </div>
           <div class="stage-meta-right">
             <div class="tab-group" role="tablist" aria-label="Delivery mode">
-              <button type="button" class="mode-tab" role="tab" aria-selected="true" data-mode="extension">Extension Handoff</button>
-              <button type="button" class="mode-tab" role="tab" aria-selected="false" data-mode="direct">Direct Fields</button>
+              <button type="button" class="mode-tab" id="tab-mode-extension" role="tab" aria-selected="true" aria-controls="stageSplit" tabindex="0" data-mode="extension">Extension Handoff</button>
+              <button type="button" class="mode-tab" id="tab-mode-direct" role="tab" aria-selected="false" aria-controls="stageSplit" tabindex="-1" data-mode="direct">Direct Fields</button>
             </div>
             <div class="stage-badge" id="stageStepBadge">Step 1 of 6</div>
           </div>
         </div>
 
-        <div class="stage-split">
+        <div class="stage-split" id="stageSplit">
           <div class="stage-body" id="stageBody"></div>
           <div class="stage-code-col">
             <div class="code-toolbar">
@@ -521,7 +523,8 @@
             <rect x="10" y="14" width="88" height="48" rx="5" fill="#101c26"/>
             <text x="54" y="34" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="700" fill="#6bc2ad">status --json</text>
             <text x="54" y="49" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="7.5" fill="#e6f0f7">0 raw values</text>
-            <line x1="98" y1="38" x2="132" y2="38" stroke="#095c49" stroke-width="1.5"/>
+            <line x1="98" y1="38" x2="126" y2="38" stroke="#095c49" stroke-width="1.5"/>
+            <polygon points="126,34 133,38 126,42" fill="#095c49"/>
             <rect x="134" y="14" width="176" height="48" rx="5" fill="#ffffff" stroke="#9fb2c2" stroke-width="1"/>
             <text x="144" y="34" font-family="JetBrains Mono, monospace" font-size="8" font-weight="700" fill="#095c49">12 profile · 2 site records</text>
             <text x="144" y="49" font-family="JetBrains Mono, monospace" font-size="7.5" fill="#344b5c">Metadata inventory only</text>
@@ -535,7 +538,8 @@
             <rect x="10" y="14" width="88" height="48" rx="5" fill="#101c26"/>
             <text x="54" y="34" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="700" fill="#7cc4fa">credential.use</text>
             <text x="54" y="49" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="7.5" fill="#e6f0f7">10m TTL</text>
-            <line x1="98" y1="38" x2="132" y2="38" stroke="#1d4ed8" stroke-width="1.5"/>
+            <line x1="98" y1="38" x2="126" y2="38" stroke="#1d4ed8" stroke-width="1.5"/>
+            <polygon points="126,34 133,38 126,42" fill="#1d4ed8"/>
             <rect x="134" y="14" width="176" height="48" rx="5" fill="#ffffff" stroke="#9fb2c2" stroke-width="1"/>
             <text x="144" y="34" font-family="JetBrains Mono, monospace" font-size="8" font-weight="700" fill="#1d4ed8">Origin: example.test</text>
             <text x="144" y="49" font-family="JetBrains Mono, monospace" font-size="7.5" fill="#344b5c">1-time extension handle</text>
@@ -549,7 +553,8 @@
             <rect x="10" y="14" width="88" height="48" rx="5" fill="#101c26"/>
             <text x="54" y="34" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="700" fill="#f7c873">grant.revoke</text>
             <text x="54" y="49" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="7.5" fill="#e6f0f7">Instant block</text>
-            <line x1="98" y1="38" x2="132" y2="38" stroke="#095c49" stroke-width="1.5"/>
+            <line x1="98" y1="38" x2="126" y2="38" stroke="#095c49" stroke-width="1.5"/>
+            <polygon points="126,34 133,38 126,42" fill="#095c49"/>
             <rect x="134" y="14" width="176" height="48" rx="5" fill="#ffffff" stroke="#095c49" stroke-width="1"/>
             <text x="144" y="34" font-family="JetBrains Mono, monospace" font-size="8" font-weight="700" fill="#095c49">Human Submit Gate</text>
             <text x="144" y="49" font-family="JetBrains Mono, monospace" font-size="7.5" fill="#344b5c">Broker never clicks submit</text>
@@ -569,7 +574,7 @@
   <script>
     (() => {
       "use strict";
-      const state = { step: 0, delivery: "extension", approved: false, missingChoice: "pending", delivered: false, revoked: false };
+      const state = { step: 0, maxVisited: 0, delivery: "extension", approved: false, missingChoice: "pending", delivered: false, revoked: false };
       const $ = (selector) => document.querySelector(selector);
       const body = $("#stageBody");
       const title = $("#stageTitle");
@@ -608,36 +613,55 @@
           .join("\n");
       }
 
+      function activeGrantCount() {
+        return state.approved && !state.revoked ? 1 : 0;
+      }
+
+      function isMissingReady() {
+        return state.missingChoice === "once" || state.missingChoice === "save";
+      }
+
+      function canReachStep(idx) {
+        if (idx === 0) return true;
+        if (idx === 1) return true;
+        if (idx === 2) return state.maxVisited >= 1 || state.step >= 1;
+        if (idx === 3) return state.approved;
+        if (idx === 4) return state.approved && isMissingReady();
+        if (idx === 5) return state.revoked;
+        return false;
+      }
+
       const screens = [
         {
           badge: "Step 1 of 6",
-          title: "Start with a value-free inventory",
-          description: "See what is ready before an agent asks for anything.",
-          hint: "No account data is opened.",
-          button: "Preview request",
+          title: () => "Start with a value-free inventory",
+          description: () => "See what is ready before an agent asks for anything.",
+          hint: () => "No account data is opened.",
+          button: () => "Preview request",
           codeLabel: "status.inventory (metadata only)",
           code: () => `// 1. Check readiness without exposing values
 const status = await mcp.callTool("status", {});
 {
   "profile_fields": 12,
   "credential_sites": 2,
-  "active_grants": ${state.revoked ? 0 : 0},
+  "default_delivery": "${state.delivery}",
+  "active_grants": ${activeGrantCount()},
   "values_exposed": false
 }`,
           render: () => `<div class="ledger-list">
             <div class="ledger-row"><span>Profile fields</span><strong>12 approved · metadata only</strong></div>
-            <div class="ledger-row"><span>Email source</span><strong>1 read-only inbox · ready</strong></div>
             <div class="ledger-row"><span>Credential records</span><strong>2 sites · 0 passwords shown</strong></div>
-            <div class="ledger-row"><span>Access grants</span><strong>${state.revoked ? "0 active · last revoked" : "0 active · nothing shared"}</strong></div>
+            <div class="ledger-row"><span>Delivery policy</span><strong>${state.delivery === "direct" ? "Direct selected fields" : "Extension handoff (default)"}</strong></div>
+            <div class="ledger-row"><span>Access grants</span><strong>${state.revoked ? "0 active · last revoked" : state.approved ? "1 active · revocable" : "0 active · nothing shared"}</strong></div>
           </div>
           <div class="status-row">Encrypted broker ready · loopback review surface</div>`,
         },
         {
           badge: "Step 2 of 6",
-          title: "Preview the exact request",
-          description: "The agent names the origin, purpose, fields, expiry, and delivery mode before any value is returned.",
-          hint: "Switch delivery mode above or below to compare exposure.",
-          button: "Review approval",
+          title: () => "Preview the exact request",
+          description: () => "The agent names the origin, purpose, fields, expiry, and delivery mode before any value is returned.",
+          hint: () => "Switch delivery mode above or below to compare exposure.",
+          button: () => "Review approval",
           codeLabel: "autofill.preview_request",
           code: () => `// 2. Agent declares exact scope & delivery mode
 const req = await mcp.callTool("profile.get", {
@@ -661,10 +685,14 @@ const req = await mcp.callTool("profile.get", {
         },
         {
           badge: "Step 3 of 6",
-          title: "Approve the smallest useful grant",
-          description: "A clear approval ledger makes the consent boundary visible and reversible.",
-          hint: state.approved ? "Grant approved; delivery is ready." : "Nothing is shared until you approve.",
-          button: state.approved ? "Resolve missing field" : "Approve exact grant",
+          title: () => "Approve the smallest useful grant",
+          description: () => "A clear approval ledger makes the consent boundary visible and reversible.",
+          hint: () => state.revoked
+            ? "Grant was revoked in Step 6."
+            : state.approved
+              ? "Grant approved; delivery is ready."
+              : "Nothing is shared until you approve.",
+          button: () => state.approved ? "Resolve missing field" : "Approve exact grant",
           codeLabel: "grant.approve",
           code: () => `// 3. Human approval writes a time-bounded grant
 {
@@ -672,7 +700,7 @@ const req = await mcp.callTool("profile.get", {
   "origin": "example.test",
   "fields": ["display_name", "postal_code"],
   "delivery": "${state.delivery}",
-  "approved": ${state.approved},
+  "approved": ${state.approved && !state.revoked},
   "ttl_seconds": 600
 }`,
           render: () => `<div class="ledger-list">
@@ -682,20 +710,23 @@ const req = await mcp.callTool("profile.get", {
             <div class="ledger-row"><span>Delivery</span><strong>${state.delivery === "direct" ? "direct selected fields" : "one-time extension handoff"}</strong></div>
             <div class="ledger-row"><span>Expires</span><strong>in 10 minutes</strong></div>
           </div>
-          <div class="status-row" style="color:${state.approved ? "var(--green)" : "var(--amber)"}">${state.approved ? "Grant active · revocable at any time" : "Waiting for your approval"}</div>`,
+          <div class="status-row" style="color:${state.revoked ? "var(--signal)" : state.approved ? "var(--green)" : "var(--amber)"}">${state.revoked ? "Grant revoked · re-approval required" : state.approved ? "Grant active · revocable at any time" : "Waiting for your approval"}</div>`,
         },
         {
           badge: "Step 4 of 6",
-          title: "Choose once or remember it",
-          description: "Decide whether a newly supplied field is used once or saved for future authorized forms.",
-          hint: state.missingChoice === "skip" ? "Form paused; choose Use once or Save to continue." : "One choice completes the missing-field step.",
-          button: "Choose an option in the stage",
+          title: () => "Choose once or remember it",
+          description: () => "Decide whether a newly supplied field is used once or saved for future authorized forms.",
+          hint: () => state.missingChoice === "skip"
+            ? "Form paused; choose Use once or Save to continue."
+            : "One choice completes the missing-field step.",
+          button: () => isMissingReady() ? "Deliver selected data" : "Choose an option in the stage",
           codeLabel: "profile.resolve_missing",
           code: () => `// 4. Resolve missing field with narrow write scope
 {
   "field_id": "company_name",
   "value": "Synthetic Example Co",
   "origin": "example.test",
+  "delivery": "${state.delivery}",
   "resolution": "${state.missingChoice}"
 }`,
           render: () => `<div class="ledger-list">
@@ -712,10 +743,12 @@ const req = await mcp.callTool("profile.get", {
         },
         {
           badge: "Step 5 of 6",
-          title: state.delivery === "direct" ? "Return only the selected fields" : "Keep the password out of agent input",
-          description: state.delivery === "direct" ? "The response contains only the approved synthetic fields and provenance." : "The local extension receives a one-time, origin-bound handle.",
-          hint: "The acting agent or user owns the next action.",
-          button: "Revoke grant",
+          title: () => state.delivery === "direct" ? "Return only the selected fields" : "Keep the password out of agent input",
+          description: () => state.delivery === "direct"
+            ? "The response contains only the approved synthetic fields and provenance."
+            : "The local extension receives a one-time, origin-bound handle.",
+          hint: () => "The acting agent or user owns the next action.",
+          button: () => state.revoked ? "View revocation" : "Revoke grant",
           codeLabel: "delivery.response",
           code: () => state.delivery === "direct"
             ? `// 5. Direct selected field payload
@@ -743,19 +776,21 @@ const req = await mcp.callTool("profile.get", {
         },
         {
           badge: "Step 6 of 6",
-          title: "Revoke when the task is done",
-          description: "A short-lived grant disappears cleanly instead of becoming a standing permission.",
-          hint: "Reset the tour to run it again.",
-          button: "Reset demo",
+          title: () => "Revoke when the task is done",
+          description: () => "A short-lived grant disappears cleanly instead of becoming a standing permission.",
+          hint: () => "Reset the tour to run it again.",
+          button: () => "Reset demo",
           codeLabel: "grant.revoke",
           code: () => `// 6. Revoke grant immediately after task completion
 await mcp.callTool("grant.revoke", {
   agent: "synthetic-agent-01",
-  origin: "example.test"
+  origin: "example.test",
+  delivery: "${state.delivery}"
 });
 // Subsequent reads return 403 Grant Revoked`,
           render: () => `<div class="ledger-list">
             <div class="ledger-row"><span>Grant status</span><strong>Revoked · 0 active grants</strong></div>
+            <div class="ledger-row"><span>Invalidated mode</span><strong>${state.delivery === "direct" ? "Direct field grant" : "Extension handoff handle"}</strong></div>
             <div class="ledger-row"><span>Subsequent agent reads</span><strong>Blocked (re-approval required)</strong></div>
             <div class="ledger-row"><span>Final form submission</span><strong>Owned by user confirmation</strong></div>
           </div>
@@ -767,18 +802,18 @@ await mcp.callTool("grant.revoke", {
         for (const tab of modeTabs) {
           const active = tab.dataset.mode === state.delivery;
           tab.setAttribute("aria-selected", active ? "true" : "false");
+          tab.setAttribute("tabindex", active ? "0" : "-1");
         }
       }
 
       function render() {
+        state.maxVisited = Math.max(state.maxVisited, state.step);
         const screen = screens[state.step];
         badge.textContent = screen.badge;
-        title.textContent = state.step === 4 && state.delivery === "direct" ? "Return only the selected fields" : screen.title;
-        description.textContent = state.step === 4 && state.delivery === "direct"
-          ? "The response contains only the approved synthetic fields and provenance."
-          : screen.description;
-        hint.textContent = screen.hint;
-        next.textContent = screen.button;
+        title.textContent = screen.title();
+        description.textContent = screen.description();
+        hint.textContent = screen.hint();
+        next.textContent = screen.button();
         codeLabel.textContent = screen.codeLabel;
         body.innerHTML = screen.render();
         renderCode(screen.code());
@@ -786,7 +821,15 @@ await mcp.callTool("grant.revoke", {
         progress.style.width = `${((state.step + 1) / screens.length) * 100}%`;
         steps.forEach((button, index) => {
           button.classList.toggle("active", index === state.step);
-          button.classList.toggle("done", index < state.step || (index === 5 && state.revoked));
+          const done =
+            (index === 0 && state.maxVisited > 0) ||
+            (index === 1 && state.maxVisited > 1) ||
+            (index === 2 && state.approved) ||
+            (index === 3 && state.approved && isMissingReady()) ||
+            (index === 4 && state.delivered && (state.step > 4 || state.revoked)) ||
+            (index === 5 && state.revoked);
+          button.classList.toggle("done", done && index !== state.step);
+          button.setAttribute("aria-disabled", canReachStep(index) ? "false" : "true");
         });
         document.querySelectorAll("[data-delivery]").forEach((button) =>
           button.addEventListener("click", () => {
@@ -797,7 +840,7 @@ await mcp.callTool("grant.revoke", {
         document.querySelectorAll("[data-missing]").forEach((button) =>
           button.addEventListener("click", () => {
             state.missingChoice = button.dataset.missing;
-            if (state.missingChoice === "once" || state.missingChoice === "save") {
+            if (isMissingReady()) {
               state.delivered = true;
               state.step = 4;
             }
@@ -806,19 +849,32 @@ await mcp.callTool("grant.revoke", {
         );
       }
 
-      modeTabs.forEach((tab) => {
+      modeTabs.forEach((tab, idx) => {
         tab.addEventListener("click", () => {
           state.delivery = tab.dataset.mode;
           render();
+        });
+        tab.addEventListener("keydown", (e) => {
+          let nextIdx = null;
+          if (e.key === "ArrowRight" || e.key === "ArrowDown") nextIdx = (idx + 1) % modeTabs.length;
+          else if (e.key === "ArrowLeft" || e.key === "ArrowUp") nextIdx = (idx - 1 + modeTabs.length) % modeTabs.length;
+          else if (e.key === "Home") nextIdx = 0;
+          else if (e.key === "End") nextIdx = modeTabs.length - 1;
+          if (nextIdx !== null) {
+            e.preventDefault();
+            state.delivery = modeTabs[nextIdx].dataset.mode;
+            render();
+            modeTabs[nextIdx].focus();
+          }
         });
       });
 
       function advance() {
         if (state.step === 0) state.step = 1;
         else if (state.step === 1) state.step = 2;
-        else if (state.step === 2) { state.approved = true; state.step = 3; }
+        else if (state.step === 2) { state.approved = true; state.revoked = false; state.step = 3; }
         else if (state.step === 3) {
-          if (state.missingChoice !== "once" && state.missingChoice !== "save") return;
+          if (!isMissingReady()) return;
           state.delivered = true;
           state.step = 4;
         }
@@ -829,6 +885,7 @@ await mcp.callTool("grant.revoke", {
 
       function reset() {
         state.step = 0;
+        state.maxVisited = 0;
         state.delivery = "extension";
         state.approved = false;
         state.missingChoice = "pending";
@@ -844,10 +901,14 @@ await mcp.callTool("grant.revoke", {
       steps.forEach((button) =>
         button.addEventListener("click", () => {
           const requested = Number(button.dataset.step);
-          const missingReady = state.missingChoice === "once" || state.missingChoice === "save";
-          if (requested <= state.step || (requested === state.step + 1 && state.step < 5 && (state.step !== 3 || missingReady))) {
+          if (canReachStep(requested)) {
+            if (requested === 4) state.delivered = true;
             state.step = requested;
             render();
+          } else if (state.step === 2 && !state.approved) {
+            hint.textContent = "Approve the exact grant first to unlock Step 4.";
+          } else if (state.step === 3 && !isMissingReady()) {
+            hint.textContent = "Choose Use once or Save in the stage to unlock delivery.";
           }
         })
       );

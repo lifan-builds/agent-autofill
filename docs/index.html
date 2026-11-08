@@ -288,6 +288,13 @@
       background: var(--code-control-hover);
     }
 
+    .copy-btn:active,
+    .install-tab:active,
+    .config-tab:active,
+    .btn:active {
+      transform: translateY(1px);
+    }
+
     .copy-btn .icon-check {
       display: none;
     }
@@ -702,7 +709,7 @@
     <section class="hero" aria-labelledby="hero-title">
       <h1 id="hero-title">Give your agent the exact information it needs.</h1>
       <p class="lede">
-        A local-first personal vault and MCP broker for macOS. Share selected profile fields, one-time origin-bound logins, and 2FA codes with Claude, Codex, and Cursor—while keeping final submission in your hands.
+        A local-first personal vault and MCP broker for macOS. Share selected profile fields, origin-bound logins, and 2FA codes with Claude, Codex, and Cursor—while keeping final submission yours.
       </p>
 
       <div class="install-widget" role="region" aria-label="Install command">
@@ -729,7 +736,6 @@
 
       <div class="actions">
         <a class="btn btn-primary" href="demo/">Try the 60-second interactive demo →</a>
-        <a class="btn btn-secondary" href="getting-started.md">Read getting started</a>
         <a class="btn btn-secondary" href="https://github.com/lifan-builds/agent-autofill">View on GitHub ↗</a>
       </div>
     </section>
@@ -798,16 +804,19 @@
         <article class="arch-col">
           <svg class="arch-schematic" viewBox="0 0 320 76" aria-hidden="true">
             <rect x="0" y="0" width="320" height="76" rx="6" fill="#eaf0f4"/>
-            <rect x="10" y="14" width="84" height="48" rx="5" fill="#101c26"/>
-            <text x="52" y="34" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="700" fill="#f7c873">2FA Inbox</text>
-            <text x="52" y="49" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="7.5" fill="#e6f0f7">Gmail · SMS</text>
-            <line x1="94" y1="38" x2="122" y2="38" stroke="#1d4ed8" stroke-width="1.5"/>
-            <rect x="122" y="14" width="102" height="48" rx="5" fill="#eff6ff" stroke="#1d4ed8" stroke-width="1"/>
-            <text x="173" y="34" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" font-weight="700" fill="#1d4ed8">Origin Fill</text>
-            <text x="173" y="49" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="7.5" fill="#344b5c">example.test</text>
-            <rect x="230" y="14" width="80" height="48" rx="5" fill="#ffffff" stroke="#095c49" stroke-width="1"/>
-            <text x="270" y="34" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" font-weight="700" fill="#095c49">Human Gate</text>
-            <text x="270" y="49" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" font-weight="700" fill="#0c1720">Confirm</text>
+            <rect x="10" y="14" width="78" height="48" rx="5" fill="#101c26"/>
+            <text x="49" y="34" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="700" fill="#f7c873">2FA Inbox</text>
+            <text x="49" y="49" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="7.5" fill="#e6f0f7">Gmail · SMS</text>
+            <line x1="88" y1="38" x2="105" y2="38" stroke="#1d4ed8" stroke-width="1.5"/>
+            <polygon points="105,34 112,38 105,42" fill="#1d4ed8"/>
+            <rect x="113" y="14" width="94" height="48" rx="5" fill="#eff6ff" stroke="#1d4ed8" stroke-width="1"/>
+            <text x="160" y="34" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" font-weight="700" fill="#1d4ed8">Origin Fill</text>
+            <text x="160" y="49" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="7.5" fill="#344b5c">example.test</text>
+            <line x1="207" y1="38" x2="224" y2="38" stroke="#095c49" stroke-width="1.5"/>
+            <polygon points="224,34 231,38 224,42" fill="#095c49"/>
+            <rect x="232" y="14" width="78" height="48" rx="5" fill="#ffffff" stroke="#095c49" stroke-width="1"/>
+            <text x="271" y="34" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" font-weight="700" fill="#095c49">Human Gate</text>
+            <text x="271" y="49" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" font-weight="700" fill="#0c1720">Confirm</text>
           </svg>
           <h3>3. Confirm before submission</h3>
           <p>The broker is strictly information-only: it never navigates, submits forms, or makes purchases. Your acting agent pauses for confirmation before clicking submit.</p>
@@ -822,15 +831,15 @@
           <p class="section-intro">Pair your coding agent with origin-bound credential handoff and recipient-scoped 2FA retrieval.</p>
         </div>
         <div class="tab-group" role="tablist" aria-label="Select workflow snippet">
-          <button type="button" class="config-tab" id="tab-cfg-mcp" role="tab" aria-selected="true" aria-controls="config-panel" tabindex="0" data-config="mcp">MCP JSON</button>
-          <button type="button" class="config-tab" id="tab-cfg-cred" role="tab" aria-selected="false" aria-controls="config-panel" tabindex="-1" data-config="cred">Origin-Bound Login</button>
+          <button type="button" class="config-tab" id="tab-cfg-cred" role="tab" aria-selected="true" aria-controls="config-panel" tabindex="0" data-config="cred">Origin-Bound Login</button>
+          <button type="button" class="config-tab" id="tab-cfg-mcp" role="tab" aria-selected="false" aria-controls="config-panel" tabindex="-1" data-config="mcp">MCP JSON</button>
           <button type="button" class="config-tab" id="tab-cfg-cli" role="tab" aria-selected="false" aria-controls="config-panel" tabindex="-1" data-config="cli">CLI &amp; 2FA</button>
         </div>
       </div>
 
-      <div class="config-box" id="config-panel" role="tabpanel" aria-labelledby="tab-cfg-mcp">
+      <div class="config-box" id="config-panel" role="tabpanel" aria-labelledby="tab-cfg-cred">
         <div class="code-toolbar">
-          <span id="config-label">mcp_config.json / .cursor/mcp.json</span>
+          <span id="config-label">Origin-bound credential handoff (0 passwords in model context)</span>
           <button type="button" class="copy-btn" data-copy-target="config-code" aria-live="polite">
             <svg class="copy-icon" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
               <path class="icon-clip" fill="currentColor" d="M5.75 1a.75.75 0 0 0-.75.75v3c0 .414.336.75.75.75h4.5a.75.75 0 0 0 .75-.75v-3a.75.75 0 0 0-.75-.75h-4.5Zm.75 3V2.5h3V4h-3Zm-2.874-.467a.75.75 0 0 0-.752-1.298A1.75 1.75 0 0 0 2 3.75v9.5c0 .966.784 1.75 1.75 1.75h8.5A1.75 1.75 0 0 0 14 13.25v-9.5a1.75 1.75 0 0 0-.874-1.515.75.75 0 1 0-.752 1.298.25.25 0 0 1 .126.217v9.5a.25.25 0 0 1-.25.25h-8.5a.25.25 0 0 1-.25-.25v-9.5a.25.25 0 0 1 .126-.217Z"/>
@@ -923,11 +932,11 @@ const handoff = await mcp.callTool("credential.use", {
 agent-autofill status --json
 
 # 2. Fetch latest 6-digit OTP scoped to recipient and sender
-agent-autofill verification-code --recipient dev@example.com --sender github.com`
+agent-autofill verification-code --recipient "dev@example.com" --sender "github.com"`
         }
       };
 
-      const TOKEN_REGEX = /("(?:[^"\\]|\\.)*"(?=\s*:))|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\b(?:const|await|return|true|false|agent-autofill|uv|tool|install)\b|\b(?:mcpServers|command|args|callTool|origin|purpose|delivery|ttl_seconds|status|verification-code)\b|\b\d+\b)/g;
+      const TOKEN_REGEX = /("(?:[^"\\]|\\.)*"(?=\s*:))|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|(?:\B--[a-z-]+)|\b(?:const|await|return|true|false|agent-autofill|uv|tool|install)\b|\b(?:mcpServers|command|args|callTool|origin|purpose|delivery|ttl_seconds|status|verification-code)\b|\b\d+\b)/g;
 
       function highlightLine(lineText) {
         const escaped = lineText
@@ -1050,7 +1059,7 @@ agent-autofill verification-code --recipient dev@example.com --sender github.com
         });
       }
 
-      renderCodeBlock(document.getElementById("config-code"), SNIPPETS.mcp.code);
+      renderCodeBlock(document.getElementById("config-code"), SNIPPETS.cred.code);
     })();
   </script>
 </body>
