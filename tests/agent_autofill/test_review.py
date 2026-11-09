@@ -113,7 +113,7 @@ def test_task_preference_can_reference_shared_bundle_but_stays_scoped():
 
 class MemoryKeys:
     def __init__(self, source):
-        self.keys = {str(source): b"s" * 32}
+        self.keys = {source.as_posix(): b"s" * 32}
 
     def load_existing(self, name):
         return self.keys[name]

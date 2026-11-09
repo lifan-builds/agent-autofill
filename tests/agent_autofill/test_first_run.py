@@ -169,7 +169,7 @@ def first_run(tmp_path, monkeypatch, capsys):
     assert '"passwords": 0' in output.out
     assert len(state.instances) == 1
     assert state.checks == [0]
-    assert list(keyring.keys) == [str(state.path)]
+    assert list(keyring.keys) == [state.path.as_posix()]
     yield state
 
 

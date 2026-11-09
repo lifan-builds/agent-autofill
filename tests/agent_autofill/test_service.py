@@ -32,7 +32,7 @@ def setup():
             "no-reply@example.com",
             "Login code for example.com",
             "Your code is 123456",
-            datetime.now(UTC).isoformat(),
+            (datetime.now(UTC) - timedelta(seconds=5)).isoformat(),
         )
     ]
     b.texts = [

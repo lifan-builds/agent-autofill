@@ -1,9 +1,16 @@
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+
+_LAST_NOW: datetime | None = None
 
 
 def now_iso() -> str:
-    return datetime.now(UTC).isoformat()
+    global _LAST_NOW
+    current = datetime.now(UTC)
+    if _LAST_NOW is not None and current <= _LAST_NOW:
+        current = _LAST_NOW + timedelta(microseconds=1)
+    _LAST_NOW = current
+    return current.isoformat()
 
 
 @dataclass(frozen=True)

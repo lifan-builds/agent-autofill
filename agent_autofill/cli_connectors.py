@@ -283,6 +283,8 @@ def _reconnect_gmail(
         raise SystemExit("This source is not a saved Google OAuth email connector")
     try:
         saved = keyring.get_secret(config["secret_name"])
+        if saved is None:
+            raise ValueError("Missing secret")
         provider = oauth_provider_from_keychain_secret(saved)
         if type(provider) is not GoogleOAuthTokenProvider:
             raise ValueError("Unsupported provider")

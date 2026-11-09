@@ -1590,10 +1590,10 @@ def main(argv=None) -> int:
     if args.command == "email-test-thunderbird":
         try:
             profile = Path(args.profile).expanduser() if args.profile else discover_profile()
-            run = test_profile(profile, account_ids=args.account_id)
+            test_run = test_profile(profile, account_ids=args.account_id)
         except ThunderbirdError as exc:
             raise SystemExit(str(exc)) from exc
-        print(json.dumps(run.public_dict(), indent=2))
+        print(json.dumps(test_run.public_dict(), indent=2))
         return 0
     if args.command == "chrome" and args.chrome_command == "profiles":
         try:

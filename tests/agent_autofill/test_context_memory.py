@@ -310,7 +310,7 @@ def test_progressive_eval_and_profile_only_snapshot(tmp_path):
 
     class ExistingKey:
         def load_existing(self, name):
-            assert name == str(path)
+            assert name == path.as_posix()
             return b"k" * 32
 
     snapshot, _ = evaluation["profile_snapshot"](path, ExistingKey())

@@ -42,7 +42,10 @@ class UnavailableKeychain:
 def test_keyring_reports_host_keychain_access_guidance():
     provider = KeyringProvider(backend=UnavailableKeychain())
 
-    with pytest.raises(RuntimeError, match="host process with Keychain access"):
+    with pytest.raises(
+        RuntimeError,
+        match="host process with Keychain access|configure or unlock the operating-system credential store",
+    ):
         provider.load_or_create("/tmp/agent-autofill.sqlite3")
 
 
