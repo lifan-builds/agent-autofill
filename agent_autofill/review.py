@@ -315,6 +315,11 @@ def make_server(session, *, port=0):
                 self.reply(404, b"{}")
 
         def do_POST(self):
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                length = -1
+            body = self.rfile.read(length) if 0 < length <= 65536 else b""
             expected_origin = f"http://127.0.0.1:{self.server.server_port}"
             if not self.authorized() or self.headers.get("Origin") != expected_origin or self.headers.get("X-Review-Action") != "confirm":
                 self.reply(403, b'{"error":"Reopen the review and confirm from this page."}')
@@ -323,10 +328,9 @@ def make_server(session, *, port=0):
                 self.reply(404, b"{}")
                 return
             try:
-                length = int(self.headers.get("Content-Length", "0"))
                 if not 0 < length <= 65536 or self.headers.get("Content-Type") != "application/json":
                     raise ValueError("invalid request")
-                payload = json.loads(self.rfile.read(length))
+                payload = json.loads(body)
                 result = session.confirm(payload)
             except BrokerError as exc:
                 # Only the fixed public validation messages from this workflow.
