@@ -37,7 +37,7 @@ To retry migration for configured connectors:
 
 ```bash
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 keychain migrate
+  --db ~/.agent-autofill.sqlite3 keychain migrate
 ```
 
 The command prints only a count. Secret values never enter SQLite, logs, or
@@ -133,18 +133,18 @@ copied into Phoenix configuration.
 
 ```bash
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 init
+  --db ~/.agent-autofill.sqlite3 init
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 setup
+  --db ~/.agent-autofill.sqlite3 setup
 ```
 
 Before starting or resuming setup, inspect the value-free readiness summary:
 
 ```bash
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 quickstart
+  --db ~/.agent-autofill.sqlite3 quickstart
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 doctor
+  --db ~/.agent-autofill.sqlite3 doctor
 ```
 
 These commands check the encrypted broker, OS credential store, configured
@@ -167,7 +167,7 @@ If setup left the agent identity blank, create one explicitly:
 
 ```bash
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 agent-create codex
+  --db ~/.agent-autofill.sqlite3 agent-create codex
 ```
 
 Do not run `agent-create` again for an existing identity: the setup flow keeps
@@ -176,19 +176,19 @@ grants only when the identity and token are already available:
 
 ```bash
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 grant codex profile.read name \
+  --db ~/.agent-autofill.sqlite3 grant codex profile.read name \
   --origin example.com --purpose form
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 grant codex credential.use <credential-id> \
+  --db ~/.agent-autofill.sqlite3 grant codex credential.use <credential-id> \
   --origin https://example.com --purpose form
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 grant codex credential.read <credential-id> \
+  --db ~/.agent-autofill.sqlite3 grant codex credential.read <credential-id> \
   --origin https://example.com --purpose form
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 grant codex financial.read <financial-record-id> \
+  --db ~/.agent-autofill.sqlite3 grant codex financial.read <financial-record-id> \
   --origin https://example.com --purpose form
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 grant codex email.otp personal-mail
+  --db ~/.agent-autofill.sqlite3 grant codex email.otp personal-mail
 ```
 
 ### Optional first-run grants
@@ -226,13 +226,13 @@ Wizard grants expire after 600 seconds. Renew them with the existing
 
 ```bash
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 grant codex profile.read name \
+  --db ~/.agent-autofill.sqlite3 grant codex profile.read name \
   --origin https://example.test --purpose form --expires-in 600
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 grant codex email.search personal-mail \
+  --db ~/.agent-autofill.sqlite3 grant codex email.search personal-mail \
   --expires-in 600
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 grant codex email.otp personal-mail \
+  --db ~/.agent-autofill.sqlite3 grant codex email.otp personal-mail \
   --expires-in 600
 ```
 
@@ -245,9 +245,9 @@ write:
 
 ```bash
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 profile add legal_name
+  --db ~/.agent-autofill.sqlite3 profile add legal_name
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 profile edit legal_name
+  --db ~/.agent-autofill.sqlite3 profile edit legal_name
 ```
 
 The proposal includes the field ID, category, display name, sensitivity, and
@@ -266,8 +266,8 @@ does not create credentials.
 
 ```bash
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 chrome password-manager \
-  --profile-dir "/Users/lfan/Library/Application Support/Google/Chrome/Default" \
+  --db ~/.agent-autofill.sqlite3 chrome password-manager \
+  --profile-dir "$HOME/Library/Application Support/Google/Chrome/Default" \
   --confirm-import
 ```
 
@@ -290,8 +290,8 @@ Chrome before reading its profile files:
 
 ```bash
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 chrome password-manager \
-  --profile-dir "/Users/lfan/Library/Application Support/Google/Chrome/Default" \
+  --db ~/.agent-autofill.sqlite3 chrome password-manager \
+  --profile-dir "$HOME/Library/Application Support/Google/Chrome/Default" \
   --preview
 ```
 
@@ -332,7 +332,7 @@ guaranteed to be a durable browser selector.
 
 ```bash
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 grant-site codex \
+  --db ~/.agent-autofill.sqlite3 grant-site codex \
   https://www.hilton.com "hotel booking" --delivery extension
 ```
 
@@ -371,7 +371,7 @@ start the local bridge:
 
 ```bash
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 fill-server
+  --db ~/.agent-autofill.sqlite3 fill-server
 ```
 
 On the active HTTPS page, open the extension popup and review the displayed
@@ -390,10 +390,10 @@ metadata and an opaque Keychain lookup name:
 
 ```bash
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 email-add personal-mail \
+  --db ~/.agent-autofill.sqlite3 email-add personal-mail \
   imap.example.test user@example.test --mailbox INBOX
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 email-test personal-mail
+  --db ~/.agent-autofill.sqlite3 email-test personal-mail
 ```
 
 `email-test` reconnects with the saved Keychain secret and prints only source
@@ -412,10 +412,10 @@ bundle or publish a shared client:
 
 ```bash
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 email-add-gmail personal-gmail \
+  --db ~/.agent-autofill.sqlite3 email-add-gmail personal-gmail \
   user@gmail.com --client-secrets /private/path/client-secret.json
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 email-test personal-gmail
+  --db ~/.agent-autofill.sqlite3 email-test personal-gmail
 ```
 
 `email-add-gmail` opens Google Sign-In in the system browser, receives the
@@ -443,7 +443,7 @@ To verify OAuth accounts already configured in Thunderbird, run:
 
 ```bash
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 email-test-thunderbird
+  --db ~/.agent-autofill.sqlite3 email-test-thunderbird
 ```
 
 The command discovers the active macOS profile, excludes Local Folders, and
@@ -457,7 +457,7 @@ an explicit confirmation:
 
 ```bash
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 email-import-thunderbird \
+  --db ~/.agent-autofill.sqlite3 email-import-thunderbird \
   --confirm-import
 ```
 
@@ -510,7 +510,7 @@ For a human review page, run `inbox-web` and open the printed loopback URL:
 
 ```bash
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 inbox-web
+  --db ~/.agent-autofill.sqlite3 inbox-web
 ```
 
 The Agent Inbox dashboard first shows what is stored and what needs attention,
@@ -601,9 +601,9 @@ For local administration, list safe financial metadata or delete one record:
 
 ```bash
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 financial-records list
+  --db ~/.agent-autofill.sqlite3 financial-records list
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 record-delete financial <financial-record-id>
+  --db ~/.agent-autofill.sqlite3 record-delete financial <financial-record-id>
 ```
 
 To add or replace a payment card locally, use the review-first command below.
@@ -613,7 +613,7 @@ record is written to encrypted storage only after an explicit `y` response:
 
 ```bash
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 payment-card-add \
+  --db ~/.agent-autofill.sqlite3 payment-card-add \
   platinum-card "Travel Platinum" --network amex \
   --expiration-month 05 --expiration-year 2031 \
   --origin https://www.hilton.com --purpose "hotel booking"
@@ -635,7 +635,7 @@ for legacy/remote agents:
 
 ```bash
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 financial-records \
+  --db ~/.agent-autofill.sqlite3 financial-records \
   --kind payment_card --network amex --last4 1007 \
   --expiration-month 05 --expiration-year 2031
 ```
@@ -707,7 +707,7 @@ mailbox using safe metadata:
 
 ```bash
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 email-match owner@example.test
+  --db ~/.agent-autofill.sqlite3 email-match owner@example.test
 ```
 
 `email-match` calls `match_email_sources(recipient)` and prints only source
@@ -745,5 +745,5 @@ grants scoped to that source:
 
 ```bash
 agent-autofill \
-  --db /Users/lfan/.agent-autofill.sqlite3 source-remove personal-mail
+  --db ~/.agent-autofill.sqlite3 source-remove personal-mail
 ```
