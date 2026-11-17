@@ -64,7 +64,6 @@ def _imap_adapter(
 
 def _save_imap_configuration(
     broker: Broker,
-    db_path: str,
     account_id: str,
     config: dict,
     source: dict,
@@ -160,10 +159,8 @@ def _configure_imap(
         "secret_name": secret_name,
     }
     source = {"source_id": account_id, "kind": "email", "label": source_label}
-    config["secret_name"] = secret_name
     return _save_imap_configuration(
         broker,
-        db_path,
         account_id,
         config,
         source,
@@ -221,10 +218,6 @@ def _configure_gmail(
             raise SystemExit("Google authorization failed") from exc
         except GoogleOAuthTokenError as exc:
             raise SystemExit("Google OAuth token exchange failed") from exc
-        except GoogleOAuthError as exc:
-            raise SystemExit("Google OAuth setup failed") from exc
-        except (OSError, TypeError, ValueError) as exc:
-            raise SystemExit("Google OAuth setup failed") from exc
         except Exception as exc:
             raise SystemExit("Google OAuth setup failed") from exc
 
@@ -253,7 +246,6 @@ def _configure_gmail(
     source = {"source_id": account_id, "kind": "email", "label": source_label}
     return _save_imap_configuration(
         broker,
-        db_path,
         account_id,
         config,
         source,
@@ -305,6 +297,35 @@ def _reconnect_gmail(
     )
 
 
+def _build_saved_email_adapter(
+    source_id: str,
+    config: dict,
+    secret: bytes,
+    keyring: KeyringProvider,
+    *,
+    imap_cls=None,
+) -> IMAPEmailAdapter | GmailEmailAdapter:
+    imap_cls = imap_cls or IMAPEmailAdapter
+    host = config["host"]
+    username = config["username"]
+    port = config.get("port", 993)
+    mailbox = config.get("mailbox", "INBOX")
+    auth_kind = config.get("auth_kind")
+    secret_name: str = config["secret_name"]
+    if auth_kind in {"google_oauth", "microsoft_oauth"}:
+        provider = oauth_provider_from_keychain_secret(
+            secret, on_refresh=lambda value: keyring.set_secret(secret_name, value)
+        )
+        if config.get("kind") == "gmail":
+            return GmailEmailAdapter(source_id, username, provider, mailbox)
+        return imap_cls(
+            source_id, host, username, None, port, mailbox, None, provider,
+        )
+    if auth_kind == "oauth2":
+        return imap_cls(source_id, host, username, None, port, mailbox, secret.decode())
+    return imap_cls(source_id, host, username, secret.decode(), port, mailbox)
+
+
 def _test_saved_imap(broker: Broker, account_id: str, keyring: KeyringProvider) -> dict:
     config = broker.store.get("connection", account_id)
     if not config or config.get("kind") not in {"imap", "gmail"}:
@@ -319,34 +340,9 @@ def _test_saved_imap(broker: Broker, account_id: str, keyring: KeyringProvider) 
     if not secret:
         raise SystemExit("Saved IMAP connector secret is unavailable")
     try:
-        source_id = config.get("source_id", account_id)
-        host = config["host"]
-        username = config["username"]
-        port = config.get("port", 993)
-        mailbox = config.get("mailbox", "INBOX")
-        auth_kind = config.get("auth_kind")
-        if auth_kind in {"google_oauth", "microsoft_oauth"}:
-            provider = oauth_provider_from_keychain_secret(
-                secret, on_refresh=lambda value: keyring.set_secret(secret_name, value)
-            )
-            adapter: IMAPEmailAdapter | GmailEmailAdapter
-            if config.get("kind") == "gmail":
-                adapter = GmailEmailAdapter(source_id, username, provider, mailbox)
-            else:
-                adapter = IMAPEmailAdapter(
-                    source_id, host, username, None, port, mailbox, None, provider,
-                )
-        else:
-            value = secret.decode()
-            adapter = _imap_adapter(
-                source_id,
-                host,
-                username,
-                port,
-                mailbox,
-                value,
-                auth_kind == "oauth2",
-            )
+        adapter = _build_saved_email_adapter(
+            config.get("source_id", account_id), config, secret, keyring
+        )
     except GoogleOAuthConfigurationError as exc:
         raise SystemExit("Saved Google OAuth state is invalid") from exc
     except GoogleOAuthTokenError as exc:
@@ -439,7 +435,6 @@ def _import_thunderbird(
         }
         saved = _save_imap_configuration(
             broker,
-            db_path,
             source_id,
             config,
             source,

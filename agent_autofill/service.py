@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import ipaddress
 import re
 import secrets
 from datetime import UTC, datetime, timedelta
@@ -9,11 +10,15 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .form_memory import (
-    match_form_fields as _match_form_fields,
-)
-from .form_memory import (
+    build_group_summary,
+    masked_recipient_initials,
     normalize_form_label,
     profile_group_id,
+    safe_country_code,
+    safe_state_code,
+)
+from .form_memory import (
+    match_form_fields as _match_form_fields,
 )
 from .models import EmailMessage, Grant, TextMessage, now_iso
 from .storage import Store
@@ -145,6 +150,7 @@ _AUTH_CODE_BRANDED = re.compile(
 )
 _SAFE_HINT_KEYS = {
     "account_last4",
+    "aliases",
     "country",
     "currency",
     "expiration_month",
@@ -153,12 +159,14 @@ _SAFE_HINT_KEYS = {
     "institution",
     "last4",
     "network",
+    "nickname",
 }
 _FINANCIAL_RESERVED_FIELDS = {
     "allowed_origins",
     "allowed_purposes",
     "created_at",
     "display_name",
+    "is_default",
     "kind",
     "matching_hints",
     "provenance",
@@ -212,11 +220,136 @@ _RECORD_ENTRY_KEYS = {
         "display_name",
         "values",
         "matching_hints",
+        "is_default",
         "sensitivity",
         "allowed_origins",
         "allowed_purposes",
         "provenance",
     },
+}
+_SCOPE_PATCH_KEYS = {
+    "profile": {
+        "mode",
+        "record_type",
+        "record_id",
+        "field_id",
+        "group_id",
+        "category",
+        "display_name",
+        "sensitivity",
+        "allowed_origins",
+        "allowed_purposes",
+        "group_label",
+        "is_primary",
+        "provenance",
+    },
+    "credential": {
+        "mode",
+        "record_type",
+        "record_id",
+        "credential_id",
+        "name",
+        "origin",
+        "username",
+        "note",
+        "allowed_origins",
+        "allowed_purposes",
+        "provenance",
+    },
+    "financial": {
+        "mode",
+        "record_type",
+        "record_id",
+        "display_name",
+        "matching_hints",
+        "is_default",
+        "allowed_origins",
+        "allowed_purposes",
+        "provenance",
+    },
+}
+_FORBIDDEN_SCOPE_PATCH_SECRET_KEYS = {
+    "value",
+    "values",
+    "password",
+    "card_number",
+    "security_code",
+    "additional_security_code",
+    "cvv",
+    "cvc",
+    "account_number",
+    "bank_account_number",
+    "routing_number",
+}
+_MULTI_LABEL_PUBLIC_SUFFIXES = {
+    "co.uk",
+    "org.uk",
+    "gov.uk",
+    "ac.uk",
+    "me.uk",
+    "com.au",
+    "net.au",
+    "org.au",
+    "edu.au",
+    "gov.au",
+    "co.nz",
+    "org.nz",
+    "govt.nz",
+    "co.jp",
+    "ne.jp",
+    "or.jp",
+    "ac.jp",
+    "go.jp",
+    "com.br",
+    "org.br",
+    "com.cn",
+    "net.cn",
+    "org.cn",
+    "gov.cn",
+    "com.hk",
+    "com.sg",
+    "com.tw",
+    "co.kr",
+    "co.in",
+    "net.in",
+    "org.in",
+    "co.za",
+    "com.mx",
+    "com.ar",
+    "com.tr",
+    "co.il",
+}
+_SHARED_HOSTING_SUFFIXES = {
+    "github.io",
+    "gitlab.io",
+    "bitbucket.io",
+    "vercel.app",
+    "netlify.app",
+    "pages.dev",
+    "workers.dev",
+    "herokuapp.com",
+    "appspot.com",
+    "firebaseapp.com",
+    "web.app",
+    "cloudfront.net",
+    "azurewebsites.net",
+    "onrender.com",
+    "fly.dev",
+    "ngrok.io",
+    "ngrok-free.app",
+    "trycloudflare.com",
+    "surge.sh",
+}
+_SSO_SUBDOMAIN_PREFIXES = {
+    "auth",
+    "login",
+    "id",
+    "sso",
+    "signin",
+    "accounts",
+    "account",
+    "identity",
+    "oauth",
 }
 
 
@@ -384,6 +517,9 @@ def _scope_origins(value: Any, label: str) -> list[str]:
         return []
     if not isinstance(value, list) or len(value) > _MAX_SCOPE_ITEMS:
         raise BrokerError(f"{label} must be a list of at most {_MAX_SCOPE_ITEMS} origins")
+    for item in value:
+        if isinstance(item, str) and item.strip() == "*":
+            return []
     result = []
     for item in value:
         normalized = _normalize_origin(item, label)
@@ -399,6 +535,9 @@ def _scope_purposes(value: Any, label: str) -> list[str]:
         raise BrokerError(
             f"{label} must be a list of at most {_MAX_SCOPE_ITEMS} purposes"
         )
+    for item in value:
+        if isinstance(item, str) and item.strip() == "*":
+            return []
     result = []
     for item in value:
         purpose = _normal_text(item, label)
@@ -521,6 +660,40 @@ def _record_scope_allowed(
         raise AuthorizationError("purpose is not allowed for record")
 
 
+def _credential_scope_allowed(
+    item: dict[str, Any],
+    target_origin: str,
+    purpose: str,
+    *,
+    trusted_local: bool = False,
+) -> None:
+    if trusted_local:
+        return
+    allowed_origins: list[str] = list(item.get("allowed_origins") or [])
+    allowed_purposes: list[str] = list(item.get("allowed_purposes") or [])
+    if allowed_purposes and purpose not in allowed_purposes:
+        raise AuthorizationError("purpose is not allowed for record")
+    if not allowed_origins:
+        return
+    if any(_origin_matches(allowed, target_origin) for allowed in allowed_origins):
+        return
+    raw_origin = item.get("origin")
+    if isinstance(raw_origin, str) and raw_origin.strip():
+        try:
+            default_origin = _normalize_origin(raw_origin, "credential origin")
+            cred_host = _origin_hostname(default_origin)
+            target_host = _origin_hostname(target_origin)
+        except BrokerError:
+            default_origin = ""
+            cred_host = ""
+            target_host = ""
+        if allowed_origins == [default_origin] and _registrable_domains_match(
+            cred_host, target_host
+        ):
+            return
+    raise AuthorizationError("target origin is not allowed for record")
+
+
 def _bounded_limit(value) -> int:
     try:
         return max(1, min(int(value), 100))
@@ -533,6 +706,8 @@ def _origin_matches(left: str | None, right: str | None) -> bool:
         return right is None
     if right is None:
         return False
+    if left.strip() == "*":
+        return bool(right.strip())
 
     def parts(value):
         parsed = urlparse(value if "://" in value else "//" + value)
@@ -540,7 +715,13 @@ def _origin_matches(left: str | None, right: str | None) -> bool:
             port = parsed.port
         except ValueError:
             port = -1
-        return (parsed.scheme.lower(), (parsed.hostname or "").lower(), port)
+        host = (parsed.hostname or "").rstrip(".").lower()
+        scheme = parsed.scheme.lower()
+        if scheme == "https" and port == 443:
+            port = None
+        elif scheme == "http" and port == 80:
+            port = None
+        return (scheme, host, port)
 
     a, b = parts(left), parts(right)
     return a == b or (not a[0] or not b[0]) and a[1:] == b[1:]
@@ -552,6 +733,57 @@ def _origin_hostname(value: str) -> str:
     normalized = _normalize_origin(value)
     parsed = urlparse(normalized if "://" in normalized else "//" + normalized)
     return (parsed.hostname or "").lower()
+
+
+def _registrable_domain(hostname: str) -> str | None:
+    """Return the eTLD+1 registrable domain (or tenant domain on shared hosting)."""
+
+    host = hostname.strip().rstrip(".").lower()
+    if not host or "." not in host:
+        return None
+    try:
+        ipaddress.ip_address(host.strip("[]"))
+        return None
+    except ValueError:
+        pass
+    labels = [label for label in host.split(".") if label]
+    if len(labels) < 2 or labels[-1] == "localhost":
+        return None
+    two_label_suffix = ".".join(labels[-2:])
+    if two_label_suffix in _SHARED_HOSTING_SUFFIXES:
+        if len(labels) < 3:
+            return None
+        return ".".join(labels[-3:])
+    if two_label_suffix in _MULTI_LABEL_PUBLIC_SUFFIXES:
+        if len(labels) < 3:
+            return None
+        return ".".join(labels[-3:])
+    return two_label_suffix
+
+
+def _registrable_domains_match(left_host: str, right_host: str) -> bool:
+    left_reg = _registrable_domain(left_host)
+    if left_reg is None:
+        return False
+    return left_reg == _registrable_domain(right_host)
+
+
+def _sso_subdomain_rank(hostname: str, reg_domain: str) -> int:
+    """Rank canonical SSO/auth hosts (0), apex/www (1), then other sibling subdomains (2)."""
+
+    host = hostname.strip().rstrip(".").lower()
+    if host == reg_domain:
+        return 1
+    prefix = host[: -(len(reg_domain) + 1)] if host.endswith("." + reg_domain) else ""
+    sub_labels = [part for part in prefix.split(".") if part]
+    if sub_labels and (
+        sub_labels[0] in _SSO_SUBDOMAIN_PREFIXES
+        or sub_labels[-1] in _SSO_SUBDOMAIN_PREFIXES
+    ):
+        return 0
+    if sub_labels == ["www"]:
+        return 1
+    return 2
 
 
 def _normalize_otp_origin_policy(value: Any) -> str:
@@ -786,12 +1018,13 @@ class Broker:
 
         target = _normalize_origin(target_origin, "target_origin")
         target_host = _origin_hostname(target)
+        target_reg_domain = _registrable_domain(target_host)
         hint = (
             _normal_text(username_hint, "username_hint", required=False).casefold()
             if username_hint is not None
             else ""
         )
-        matches = []
+        ranked: list[tuple[tuple[int, int, str, str], dict[str, Any]]] = []
         for row in self.store.db.execute(
             "select key from kv where namespace='credential'"
         ):
@@ -800,23 +1033,45 @@ class Broker:
                 continue
             item = self._credential_defaults(row["key"], item)
             try:
-                host = _origin_hostname(item["origin"])
+                normalized_origin = _normalize_origin(item["origin"], "credential origin")
+                host = _origin_hostname(normalized_origin)
             except BrokerError:
                 continue
-            if host != target_host:
+            allowed_origins = item.get("allowed_origins") or []
+            if host == target_host or any(
+                _origin_matches(allowed, target) for allowed in allowed_origins
+            ):
+                match_kind = "exact-host" if host == target_host else "registrable-domain"
+                tier = 0 if host == target_host else 1
+                subtier = 0 if normalized_origin == target else 1
+            elif (
+                target_reg_domain is not None
+                and _registrable_domain(host) == target_reg_domain
+            ):
+                if allowed_origins and not any(
+                    _registrable_domain(_origin_hostname(allowed)) == target_reg_domain
+                    for allowed in allowed_origins
+                ):
+                    continue
+                match_kind = "registrable-domain"
+                tier = 1
+                subtier = _sso_subdomain_rank(host, target_reg_domain)
+            else:
                 continue
             username = item.get("username", "")
             if hint and hint not in username.casefold():
                 continue
             metadata = self._credential_metadata(item)
-            metadata["match"] = "exact-host"
-            matches.append(metadata)
-        matches.sort(
-            key=lambda item: (
-                item.get("username", "").casefold(),
-                item.get("credential_id", ""),
+            metadata["match"] = match_kind
+            sort_key = (
+                tier,
+                subtier,
+                username.casefold(),
+                metadata.get("credential_id", ""),
             )
-        )
+            ranked.append((sort_key, metadata))
+        ranked.sort(key=lambda pair: pair[0])
+        matches = [metadata for _, metadata in ranked]
         return _metadata_page(iter(matches), limit, offset)
 
     @staticmethod
@@ -1007,7 +1262,7 @@ class Broker:
 
     @staticmethod
     def _matching_hints(
-        kind: str, values: dict[str, str], supplied: Any
+        values: dict[str, str], supplied: Any
     ) -> dict[str, str]:
         if supplied is not None and not isinstance(supplied, dict):
             raise BrokerError("matching_hints must be an object")
@@ -1103,7 +1358,7 @@ class Broker:
             normalized_values[field_id] = raw_value
         result["values"] = normalized_values
         result["matching_hints"] = self._matching_hints(
-            result["kind"], result["values"], result.get("matching_hints")
+            result["values"], result.get("matching_hints")
         )
         result["allowed_origins"] = _scope_origins(
             result.get("allowed_origins"), "allowed_origins"
@@ -1111,6 +1366,7 @@ class Broker:
         result["allowed_purposes"] = _scope_purposes(
             result.get("allowed_purposes"), "allowed_purposes"
         )
+        result["is_default"] = bool(result.get("is_default", False))
         result["sensitivity"] = "financial"
         result["provenance"] = _safe_provenance(
             result.get("provenance"), default_source="local-financial-vault"
@@ -1145,6 +1401,9 @@ class Broker:
             if len(raw_value) > _MAX_TEXT_LENGTH:
                 raise BrokerError("financial value is too long")
             values[field_id] = raw_value
+        is_default = entry.get("is_default", False)
+        if not isinstance(is_default, bool):
+            raise BrokerError("is_default must be a boolean")
         sensitivity = _normal_text(
             entry.get("sensitivity", "financial"), "sensitivity"
         ).lower()
@@ -1156,8 +1415,9 @@ class Broker:
             "display_name": display_name,
             "values": values,
             "matching_hints": self._matching_hints(
-                kind, values, entry.get("matching_hints")
+                values, entry.get("matching_hints")
             ),
+            "is_default": is_default,
             "allowed_origins": _scope_origins(
                 entry.get("allowed_origins"), "allowed_origins"
             ),
@@ -1171,6 +1431,31 @@ class Broker:
             "created_at": now_iso(),
             "updated_at": now_iso(),
         }
+
+    def _clear_other_default_financial_writes(
+        self,
+        kind: str,
+        active_record_id: str,
+        *,
+        skip_ids: set[str] | None = None,
+    ) -> list[tuple[str, str, dict[str, Any]]]:
+        writes: list[tuple[str, str, dict[str, Any]]] = []
+        excluded = (skip_ids or set()) | {active_record_id}
+        for row in self.store.db.execute(
+            "select key from kv where namespace='financial' order by key"
+        ):
+            rid = row["key"]
+            if rid in excluded:
+                continue
+            other = self.store.get("financial", rid)
+            if not other:
+                continue
+            other = self._financial_defaults(rid, other)
+            if other["kind"] == kind and other.get("is_default") is True:
+                other["is_default"] = False
+                other["updated_at"] = now_iso()
+                writes.append(("financial", rid, other))
+        return writes
 
     @staticmethod
     def _same_record(left: dict[str, Any], right: dict[str, Any]) -> bool:
@@ -1187,6 +1472,8 @@ class Broker:
         allowed_origins: list[str] | None = None,
         allowed_purposes: list[str] | None = None,
         provenance: dict[str, Any] | None = None,
+        *,
+        is_default: bool = False,
     ) -> None:
         record = self._prepare_financial_record(
             {
@@ -1196,6 +1483,7 @@ class Broker:
                 "display_name": display_name,
                 "values": values,
                 "matching_hints": matching_hints,
+                "is_default": is_default,
                 "allowed_origins": allowed_origins,
                 "allowed_purposes": allowed_purposes,
                 "provenance": provenance,
@@ -1205,7 +1493,16 @@ class Broker:
         if existing:
             existing = self._financial_defaults(record["record_id"], existing)
             record["created_at"] = existing.get("created_at", record["created_at"])
-        self.store.put("financial", record["record_id"], record)
+        writes: list[tuple[str, str, dict[str, Any]]] = [
+            ("financial", record["record_id"], record)
+        ]
+        if record["is_default"]:
+            writes.extend(
+                self._clear_other_default_financial_writes(
+                    record["kind"], record["record_id"]
+                )
+            )
+        self.store.apply_changes(writes, [])
 
     def put_payment_card(
         self,
@@ -1222,6 +1519,10 @@ class Broker:
         allowed_origins: list[str] | None = None,
         allowed_purposes: list[str] | None = None,
         provenance: dict[str, Any] | None = None,
+        *,
+        hint: str | None = None,
+        institution: str | None = None,
+        is_default: bool = False,
     ) -> None:
         """Store a typed payment card in the encrypted financial namespace.
 
@@ -1252,18 +1553,23 @@ class Broker:
                 billing_postal_code, "billing postal code"
             )
 
-        matching_hints = None
+        hints_dict: dict[str, str] = {}
         if network is not None and network != "":
-            matching_hints = {"network": _normal_text(network, "card network")}
+            hints_dict["network"] = _normal_text(network, "card network")
+        if hint is not None and hint != "":
+            hints_dict["hint"] = _normal_text(hint, "card hint")
+        if institution is not None and institution != "":
+            hints_dict["institution"] = _normal_text(institution, "card institution")
         self.put_financial_record(
             record_id=record_id,
             kind="payment_card",
             display_name=display_name,
             values=values,
-            matching_hints=matching_hints,
+            matching_hints=hints_dict or None,
             allowed_origins=allowed_origins,
             allowed_purposes=allowed_purposes,
             provenance=provenance,
+            is_default=is_default,
         )
 
     def list_financial_records(
@@ -1271,14 +1577,25 @@ class Broker:
         *,
         kind: str | None = None,
         query: str | None = None,
+        is_default: bool | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
         """List bounded financial metadata without stored values."""
 
-        return _metadata_page(self._iter_financial_records(kind=kind, query=query), limit, offset)
+        return _metadata_page(
+            self._iter_financial_records(
+                kind=kind, query=query, is_default=is_default
+            ),
+            limit,
+            offset,
+        )
 
-    def _iter_financial_records(self, *, kind=None, query=None, card_suffix=None):
+    def _iter_financial_records(
+        self, *, kind=None, query=None, card_suffix=None, is_default=None
+    ):
+        if is_default is not None and not isinstance(is_default, bool):
+            raise BrokerError("is_default must be a boolean")
         normalized_kind = (
             _normal_text(kind, "financial kind").casefold()
             if kind is not None
@@ -1287,6 +1604,7 @@ class Broker:
         normalized_query = (
             _normal_text(query, "query").casefold() if query is not None else None
         )
+        items_out: list[dict[str, Any]] = []
         for row in self.store.db.execute(
             "select key from kv where namespace='financial' order by key"
         ):
@@ -1294,6 +1612,8 @@ class Broker:
             if not item:
                 continue
             item = self._financial_defaults(row["key"], item)
+            if is_default is not None and bool(item.get("is_default", False)) is not is_default:
+                continue
             if card_suffix is not None:
                 number = re.sub(r"[ -]", "", item["values"].get("card_number", ""))
                 if (item["kind"] != "payment_card"
@@ -1306,6 +1626,7 @@ class Broker:
                 "display_name": item["display_name"],
                 "field_ids": sorted(item["values"]),
                 "matching_hints": dict(item["matching_hints"]),
+                "is_default": bool(item.get("is_default", False)),
                 "allowed_origins": list(item["allowed_origins"]),
                 "allowed_purposes": list(item["allowed_purposes"]),
                 "sensitivity": "financial",
@@ -1322,19 +1643,27 @@ class Broker:
             ):
                 continue
             if normalized_query is not None:
+                hints_map = metadata.get("matching_hints") or {}
                 searchable = " ".join(
                     [
                         *(
                             str(metadata.get(key, ""))
                             for key in ("record_id", "kind", "display_name", "field_ids")
                         ),
-                        str((metadata.get("matching_hints") or {}).get("hint", "")),
+                        *(str(val) for val in hints_map.values()),
                         str((metadata.get("provenance") or {}).get("hint", "")),
                     ]
                 ).casefold()
                 if normalized_query not in searchable:
                     continue
-            yield metadata
+            items_out.append(metadata)
+        items_out.sort(
+            key=lambda entry: (
+                0 if entry.get("is_default") else 1,
+                entry["record_id"],
+            )
+        )
+        yield from items_out
 
     def match_financial_records(
         self,
@@ -1343,6 +1672,7 @@ class Broker:
         matching_hints: dict[str, str] | None = None,
         card_suffix: str | None = None,
         query: str | None = None,
+        is_default: bool | None = None,
     ) -> list[dict[str, Any]]:
         """Return metadata-only financial records matching safe card hints.
 
@@ -1363,10 +1693,13 @@ class Broker:
             if normalized_kind not in (None, "payment_card"):
                 raise BrokerError("card_suffix is only supported for payment cards")
         requested = self._matching_hints(
-            normalized_kind or "custom_financial", {}, matching_hints
+            {}, matching_hints
         )
         records = self._iter_financial_records(
-            kind=normalized_kind, query=query, card_suffix=card_suffix
+            kind=normalized_kind,
+            query=query,
+            card_suffix=card_suffix,
+            is_default=is_default,
         )
         result = []
         for item in records:
@@ -1379,6 +1712,478 @@ class Broker:
             ):
                 result.append(item)
         return result
+
+    def _prepare_scope_patch_entries(
+        self,
+        raw_entry: dict[str, Any],
+    ) -> list[tuple[str, str, dict[str, Any], dict[str, Any]]]:
+        """Validate one secret-free metadata/scope update and preserve stored values."""
+
+        if not isinstance(raw_entry, dict):
+            raise BrokerError("each entry must be an object")
+        record_type = _record_type(raw_entry.get("record_type"))
+        for key in raw_entry:
+            if not isinstance(key, str):
+                raise BrokerError("entry keys must be strings")
+            normalized_key = _normalize_snake_case(key)
+            if (
+                normalized_key in _FORBIDDEN_SCOPE_PATCH_SECRET_KEYS
+                or _forbidden_transient_name(key)
+            ):
+                raise BrokerError(
+                    "scope/metadata updates cannot include raw secrets or transient fields"
+                )
+            if key not in _SCOPE_PATCH_KEYS[record_type]:
+                raise BrokerError(f"unknown {record_type} scope update field: {key}")
+
+        if record_type == "profile":
+            group_id = raw_entry.get("group_id")
+            has_record_id = (
+                raw_entry.get("record_id") is not None
+                or raw_entry.get("field_id") is not None
+            )
+            if group_id is not None and has_record_id:
+                raise BrokerError("provide either record_id/field_id or group_id, not both")
+            target_items: list[tuple[str, dict[str, Any]]] = []
+            if group_id is not None:
+                normalized_gid = _normal_identifier(group_id, "group_id")
+                for row in self.store.db.execute(
+                    "select key from kv where namespace='profile' order by key"
+                ):
+                    stored = self.store.get("profile", row["key"])
+                    if not stored:
+                        continue
+                    defaults = self._profile_defaults(row["key"], stored)
+                    if profile_group_id(defaults) == normalized_gid:
+                        target_items.append((row["key"], defaults))
+                if not target_items:
+                    raise BrokerError(f"profile group not found: {normalized_gid}")
+            else:
+                fid = _entry_record_id(raw_entry, "profile")
+                stored = self.store.get("profile", fid)
+                if stored is None:
+                    raise BrokerError(f"profile record not found: {fid}")
+                target_items.append((fid, self._profile_defaults(fid, stored)))
+
+            out: list[tuple[str, str, dict[str, Any], dict[str, Any]]] = []
+            for fid, current in target_items:
+                updated = dict(current)
+                if "category" in raw_entry and raw_entry["category"] is not None:
+                    category = _normal_text(raw_entry["category"], "category")
+                    if _normalize_snake_case(category) in _FORBIDDEN_PROFILE_CATEGORIES:
+                        raise BrokerError("profile category is forbidden")
+                    updated["category"] = category
+                if "display_name" in raw_entry and raw_entry["display_name"] is not None:
+                    if group_id is not None and len(target_items) > 1:
+                        raise BrokerError(
+                            "display_name cannot be patched across a multi-field group; use group_label"
+                        )
+                    display_name = _normal_text(raw_entry["display_name"], "display_name")
+                    if _contains_raw_financial_number(display_name):
+                        raise BrokerError("display_name cannot contain a raw financial number")
+                    updated["display_name"] = display_name
+                if "sensitivity" in raw_entry and raw_entry["sensitivity"] is not None:
+                    sensitivity = _normal_text(raw_entry["sensitivity"], "sensitivity").lower()
+                    if sensitivity not in {"normal", "sensitive"}:
+                        raise BrokerError("profile sensitivity must be normal or sensitive")
+                    updated["sensitivity"] = sensitivity
+                if "allowed_origins" in raw_entry:
+                    updated["allowed_origins"] = _scope_origins(
+                        raw_entry["allowed_origins"], "allowed_origins"
+                    )
+                if "allowed_purposes" in raw_entry:
+                    updated["allowed_purposes"] = _scope_purposes(
+                        raw_entry["allowed_purposes"], "allowed_purposes"
+                    )
+                provenance = dict(updated.get("provenance") or {})
+                if "provenance" in raw_entry and raw_entry["provenance"] is not None:
+                    provenance.update(
+                        _safe_provenance(
+                            raw_entry["provenance"],
+                            default_source=str(provenance.get("source", "local-profile")),
+                        )
+                    )
+                if "group_label" in raw_entry:
+                    raw_label = raw_entry["group_label"]
+                    if raw_label is None or (isinstance(raw_label, str) and not raw_label.strip()):
+                        provenance.pop("group_label", None)
+                    else:
+                        label_text = _normal_text(raw_label, "group_label")
+                        if _contains_raw_financial_number(label_text):
+                            raise BrokerError("group_label cannot contain a raw financial number")
+                        provenance["group_label"] = label_text
+                if "is_primary" in raw_entry and raw_entry["is_primary"] is not None:
+                    if not isinstance(raw_entry["is_primary"], bool):
+                        raise BrokerError("is_primary must be a boolean")
+                    if raw_entry["is_primary"]:
+                        provenance["is_primary"] = True
+                    else:
+                        provenance.pop("is_primary", None)
+                updated["provenance"] = _safe_provenance(
+                    provenance,
+                    default_source=str(provenance.get("source", "local-profile")),
+                )
+                updated["updated_at"] = now_iso()
+                out.append(("profile", fid, updated, current))
+            return out
+
+        if record_type == "credential":
+            cid = _entry_record_id(raw_entry, "credential")
+            stored = self.store.get("credential", cid)
+            if stored is None:
+                raise BrokerError(f"credential record not found: {cid}")
+            current = self._credential_defaults(cid, stored)
+            updated = dict(current)
+            if "name" in raw_entry and raw_entry["name"] is not None:
+                name = _normal_text(raw_entry["name"], "credential name")
+                if _contains_raw_financial_number(name):
+                    raise BrokerError("credential name cannot contain a raw financial number")
+                updated["name"] = name
+            if "origin" in raw_entry and raw_entry["origin"] is not None:
+                stored_origin = _normal_text(raw_entry["origin"], "credential origin")
+                _normalize_origin(stored_origin, "credential origin")
+                updated["origin"] = stored_origin
+            if "username" in raw_entry and raw_entry["username"] is not None:
+                updated["username"] = _normal_text(
+                    raw_entry["username"],
+                    "credential username",
+                    required=False,
+                    strip=False,
+                )
+            if "note" in raw_entry and raw_entry["note"] is not None:
+                updated["note"] = _normal_text(
+                    raw_entry["note"], "credential note", required=False, strip=False
+                )
+            if "allowed_origins" in raw_entry:
+                updated["allowed_origins"] = _scope_origins(
+                    raw_entry["allowed_origins"], "allowed_origins"
+                )
+            if "allowed_purposes" in raw_entry:
+                updated["allowed_purposes"] = _scope_purposes(
+                    raw_entry["allowed_purposes"], "allowed_purposes"
+                )
+            if "provenance" in raw_entry and raw_entry["provenance"] is not None:
+                merged_prov = dict(updated.get("provenance") or {})
+                merged_prov.update(
+                    _safe_provenance(
+                        raw_entry["provenance"],
+                        default_source=str(
+                            merged_prov.get("source", "local-credential-vault")
+                        ),
+                    )
+                )
+                updated["provenance"] = _safe_provenance(
+                    merged_prov,
+                    default_source=str(
+                        merged_prov.get("source", "local-credential-vault")
+                    ),
+                )
+            updated["updated_at"] = now_iso()
+            return [("credential", cid, updated, current)]
+
+        rid = _entry_record_id(raw_entry, "financial")
+        stored = self.store.get("financial", rid)
+        if stored is None:
+            raise BrokerError(f"financial record not found: {rid}")
+        current = self._financial_defaults(rid, stored)
+        updated = dict(current)
+        if "display_name" in raw_entry and raw_entry["display_name"] is not None:
+            display_name = _normal_text(raw_entry["display_name"], "display_name")
+            if _contains_raw_financial_number(display_name):
+                raise BrokerError("display_name cannot contain a raw financial number")
+            updated["display_name"] = display_name
+        if "matching_hints" in raw_entry and raw_entry["matching_hints"] is not None:
+            if not isinstance(raw_entry["matching_hints"], dict):
+                raise BrokerError("matching_hints must be an object")
+            merged_hints = {
+                k: v
+                for k, v in dict(updated.get("matching_hints") or {}).items()
+                if k
+                not in {
+                    "last4",
+                    "account_last4",
+                    "expiration_month",
+                    "expiration_year",
+                }
+            }
+            for hk, hv in raw_entry["matching_hints"].items():
+                if hv is None or hv == "":
+                    merged_hints.pop(hk, None)
+                else:
+                    merged_hints[hk] = hv
+            for derived_key, val_keys in (
+                ("last4", ("card_number",)),
+                ("account_last4", ("account_number", "bank_account_number")),
+                ("expiration_month", ("expiration_month",)),
+                ("expiration_year", ("expiration_year",)),
+            ):
+                if derived_key in raw_entry["matching_hints"] and any(
+                     vk in updated["values"] for vk in val_keys
+                ):
+                    derived_expected = self._matching_hints(updated["values"], {})
+                    supplied_checked = self._matching_hints(
+                        {}, {derived_key: raw_entry["matching_hints"][derived_key]}
+                    )
+                    if supplied_checked.get(derived_key) != derived_expected.get(
+                        derived_key
+                    ):
+                        raise BrokerError(
+                            f"matching hint {derived_key} conflicts with stored financial record"
+                        )
+                if any(vk in updated["values"] for vk in val_keys):
+                    merged_hints.pop(derived_key, None)
+            updated["matching_hints"] = self._matching_hints(
+                updated["values"], merged_hints
+            )
+        if "is_default" in raw_entry and raw_entry["is_default"] is not None:
+            if not isinstance(raw_entry["is_default"], bool):
+                raise BrokerError("is_default must be a boolean")
+            updated["is_default"] = raw_entry["is_default"]
+        if "allowed_origins" in raw_entry:
+            updated["allowed_origins"] = _scope_origins(
+                raw_entry["allowed_origins"], "allowed_origins"
+            )
+        if "allowed_purposes" in raw_entry:
+            updated["allowed_purposes"] = _scope_purposes(
+                raw_entry["allowed_purposes"], "allowed_purposes"
+            )
+        if "provenance" in raw_entry and raw_entry["provenance"] is not None:
+            merged_prov = dict(updated.get("provenance") or {})
+            merged_prov.update(
+                _safe_provenance(
+                    raw_entry["provenance"],
+                    default_source=str(
+                        merged_prov.get("source", "local-financial-vault")
+                    ),
+                )
+            )
+            updated["provenance"] = _safe_provenance(
+                merged_prov,
+                default_source=str(merged_prov.get("source", "local-financial-vault")),
+            )
+        updated["updated_at"] = now_iso()
+        return [("financial", rid, updated, current)]
+
+    def _clear_other_primary_profile_writes(
+        self,
+        active_field_ids: set[str],
+    ) -> list[tuple[str, str, dict[str, Any]]]:
+        writes: list[tuple[str, str, dict[str, Any]]] = []
+        for row in self.store.db.execute(
+            "select key from kv where namespace='profile' order by key"
+        ):
+            fid = row["key"]
+            if fid in active_field_ids:
+                continue
+            other = self.store.get("profile", fid)
+            if not other:
+                continue
+            other = self._profile_defaults(fid, other)
+            prov = dict(other.get("provenance") or {})
+            if prov.get("is_primary") is True:
+                prov.pop("is_primary", None)
+                other["provenance"] = prov
+                other["updated_at"] = now_iso()
+                writes.append(("profile", fid, other))
+        return writes
+
+    def update_record_scope(
+        self,
+        agent_id: str,
+        record_type: str | None = None,
+        record_id: str | None = None,
+        *,
+        confirmed: Any = None,
+        target_origin: str | None = None,
+        purpose: str | None = None,
+        entries: list[dict[str, Any]] | None = None,
+        credential_id: str | None = None,
+        field_id: str | None = None,
+        group_id: str | None = None,
+        allowed_origins: list[str] | None = None,
+        allowed_purposes: list[str] | None = None,
+        is_default: bool | None = None,
+        matching_hints: dict[str, str] | None = None,
+        display_name: str | None = None,
+        name: str | None = None,
+        origin: str | None = None,
+        username: str | None = None,
+        note: str | None = None,
+        group_label: str | None = None,
+        is_primary: bool | None = None,
+        category: str | None = None,
+        sensitivity: str | None = None,
+        provenance: dict[str, Any] | None = None,
+        **extra: Any,
+    ) -> dict[str, Any]:
+        """Update record scopes and value-free metadata while preserving encrypted secrets."""
+
+        for bad_key in extra:
+            if bad_key in {
+                "value",
+                "values",
+                "password",
+                "card_number",
+                "security_code",
+                "cvv",
+                "cvc",
+            }:
+                raise BrokerError(
+                    "update_record_scope does not accept raw secret or record values"
+                )
+            raise BrokerError(f"unknown update_record_scope field: {bad_key}")
+        if confirmed is not True:
+            raise BrokerError("confirmed must be true")
+        trusted_local = self._is_trusted_local(agent_id)
+        if trusted_local:
+            target = (
+                _normalize_origin(target_origin, "target_origin")
+                if target_origin is not None
+                else "https://local.agent-autofill.invalid"
+            )
+            normalized_purpose = (
+                _normal_text(purpose, "purpose")
+                if purpose is not None
+                else "local-scope-update"
+            )
+        else:
+            target = _normalize_origin(target_origin, "target_origin")
+            normalized_purpose = _normal_text(purpose, "purpose")
+
+        if entries is not None:
+            if record_type is not None or record_id is not None or group_id is not None:
+                raise BrokerError("provide either entries or single-record fields, not both")
+            raw_entries = entries
+        else:
+            single: dict[str, Any] = {"record_type": record_type}
+            for key, val in (
+                ("record_id", record_id),
+                ("credential_id", credential_id),
+                ("field_id", field_id),
+                ("group_id", group_id),
+                ("allowed_origins", allowed_origins),
+                ("allowed_purposes", allowed_purposes),
+                ("is_default", is_default),
+                ("matching_hints", matching_hints),
+                ("display_name", display_name),
+                ("name", name),
+                ("origin", origin),
+                ("username", username),
+                ("note", note),
+                ("group_label", group_label),
+                ("is_primary", is_primary),
+                ("category", category),
+                ("sensitivity", sensitivity),
+                ("provenance", provenance),
+            ):
+                if val is not None:
+                    single[key] = val
+            raw_entries = [single]
+
+        if not isinstance(raw_entries, list) or not raw_entries:
+            raise BrokerError("entries must contain 1 to 100 records")
+        if len(raw_entries) > _MAX_BATCH_RECORDS:
+            raise BrokerError("entries must contain 1 to 100 records")
+
+        prepared: list[tuple[str, str, dict[str, Any], dict[str, Any]]] = []
+        seen: set[tuple[str, str]] = set()
+        for raw_entry in raw_entries:
+            expanded = self._prepare_scope_patch_entries(raw_entry)
+            for rtype, rid, normalized, current in expanded:
+                pair = (rtype, rid)
+                if pair in seen:
+                    raise BrokerError("entries contain duplicate record ids")
+                seen.add(pair)
+                if not trusted_local:
+                    self._authorized(
+                        agent_id,
+                        f"{rtype}.write",
+                        rid,
+                        target,
+                        normalized_purpose,
+                    )
+                    _record_scope_allowed(
+                        normalized["allowed_origins"],
+                        normalized["allowed_purposes"],
+                        target,
+                        normalized_purpose,
+                    )
+                prepared.append((rtype, rid, normalized, current))
+
+        results = []
+        writes: list[tuple[str, str, dict[str, Any]]] = []
+        default_financial_kinds: dict[str, str] = {}
+        primary_profile_ids: set[str] = set()
+        patched_financial_ids = {
+            rid for rtype, rid, _, _ in prepared if rtype == "financial"
+        }
+        for rtype, rid, normalized, current in prepared:
+            if self._same_record(current, normalized):
+                status = "unchanged"
+            else:
+                status = "updated"
+                writes.append((rtype, rid, normalized))
+            if rtype == "financial" and normalized.get("is_default") is True:
+                if normalized["kind"] in default_financial_kinds:
+                    raise BrokerError(
+                        "only one financial record per kind may set is_default=true"
+                    )
+                default_financial_kinds[normalized["kind"]] = rid
+            if (
+                rtype == "profile"
+                and (normalized.get("provenance") or {}).get("is_primary") is True
+            ):
+                primary_profile_ids.add(rid)
+            results.append(
+                {
+                    "record_type": rtype,
+                    "record_id": rid,
+                    "status": status,
+                }
+            )
+
+        for kind, active_rid in default_financial_kinds.items():
+            writes.extend(
+                self._clear_other_default_financial_writes(
+                    kind, active_rid, skip_ids=patched_financial_ids
+                )
+            )
+        if primary_profile_ids:
+            writes.extend(self._clear_other_primary_profile_writes(primary_profile_ids))
+
+        self.store.apply_changes(
+            writes,
+            [],
+            audits=[
+                (
+                    agent_id,
+                    "records.scope_update",
+                    "batch",
+                    now_iso(),
+                    {
+                        "target_origin": target,
+                        "purpose": normalized_purpose,
+                        "records": results,
+                    },
+                )
+            ],
+        )
+        updated_count = sum(1 for item in results if item["status"] == "updated")
+        overall_status = "updated" if updated_count > 0 else "unchanged"
+        response: dict[str, Any] = {
+            "status": overall_status,
+            "updated_count": updated_count,
+            "records": results,
+        }
+        if len(prepared) == 1:
+            single_type, single_id, single_norm, _ = prepared[0]
+            response["record_type"] = single_type
+            response["record_id"] = single_id
+            response["allowed_origins"] = list(single_norm.get("allowed_origins", []))
+            response["allowed_purposes"] = list(single_norm.get("allowed_purposes", []))
+            if single_type == "financial":
+                response["is_default"] = bool(single_norm.get("is_default", False))
+        return response
 
     def write_records(
         self,
@@ -1402,6 +2207,32 @@ class Broker:
         for raw_entry in entries:
             if not isinstance(raw_entry, dict):
                 raise BrokerError("each entry must be an object")
+            if raw_entry.get("mode") in {"update_scope", "patch_metadata"}:
+                for (
+                    rtype,
+                    rid,
+                    patched_norm,
+                    patched_curr,
+                ) in self._prepare_scope_patch_entries(raw_entry):
+                    pair = (rtype, rid)
+                    if pair in seen:
+                        raise BrokerError("entries contain duplicate record ids")
+                    seen.add(pair)
+                    self._authorized(
+                        agent_id,
+                        f"{rtype}.write",
+                        rid,
+                        target,
+                        purpose,
+                    )
+                    _record_scope_allowed(
+                        patched_norm["allowed_origins"],
+                        patched_norm["allowed_purposes"],
+                        target,
+                        purpose,
+                    )
+                    prepared.append((rtype, rid, patched_norm, patched_curr))
+                continue
             record_type = _record_type(raw_entry.get("record_type"))
             record_id = _entry_record_id(raw_entry, record_type)
             pair = (record_type, record_id)
@@ -1462,7 +2293,17 @@ class Broker:
 
         results = []
         writes: list[tuple[str, str, dict[str, Any]]] = []
+        default_financial_kinds: dict[str, str] = {}
+        written_financial_ids = {
+            rid for rtype, rid, _, _ in prepared if rtype == "financial"
+        }
         for record_type, record_id, normalized, current in prepared:
+            if record_type == "financial" and normalized.get("is_default") is True:
+                if normalized["kind"] in default_financial_kinds:
+                    raise BrokerError(
+                        "only one financial record per kind may set is_default=true"
+                    )
+                default_financial_kinds[normalized["kind"]] = record_id
             if current and self._same_record(current, normalized):
                 status = "unchanged"
             else:
@@ -1478,6 +2319,12 @@ class Broker:
                     "record_id": record_id,
                     "status": status,
                 }
+            )
+        for kind, active_rid in default_financial_kinds.items():
+            writes.extend(
+                self._clear_other_default_financial_writes(
+                    kind, active_rid, skip_ids=written_financial_ids
+                )
             )
         self.store.apply_changes(
             writes,
@@ -1616,9 +2463,8 @@ class Broker:
         if item is None:
             raise CredentialUseError("credential not found")
         item = self._credential_defaults(record_id, item)
-        _record_scope_allowed(
-            item["allowed_origins"],
-            item["allowed_purposes"],
+        _credential_scope_allowed(
+            item,
             target,
             purpose,
             trusted_local=self._is_trusted_local(agent_id),
@@ -1771,9 +2617,8 @@ class Broker:
             raise CredentialUseError("credential not found")
         item = self._credential_defaults(credential_id, item)
         try:
-            _record_scope_allowed(
-                item["allowed_origins"],
-                item["allowed_purposes"],
+            _credential_scope_allowed(
+                item,
                 target,
                 purpose,
                 trusted_local=self._is_trusted_local(agent_id),
@@ -1785,7 +2630,12 @@ class Broker:
         except BrokerError as exc:
             raise CredentialUseError("credential origin is invalid") from exc
         target_host = _origin_hostname(target)
-        if target_host != credential_host:
+        allowed_origins = item.get("allowed_origins") or []
+        if (
+            target_host != credential_host
+            and not any(_origin_matches(allowed, target) for allowed in allowed_origins)
+            and not _registrable_domains_match(credential_host, target_host)
+        ):
             raise CredentialUseError("target origin does not match credential origin")
         handle = secrets.token_urlsafe(32)
         self.store.put(
@@ -1846,8 +2696,16 @@ class Broker:
             except BrokerError as exc:
                 raise CredentialUseError("target origin is invalid") from exc
             issued_origin = item.get("target_origin")
-            if not isinstance(issued_origin, str) or not _origin_matches(
-                issued_origin, target
+            if not isinstance(issued_origin, str) or not (
+                _origin_matches(issued_origin, target)
+                or (
+                    issued_origin.startswith("https://")
+                    and target.startswith("https://")
+                    and _registrable_domains_match(
+                        _origin_hostname(issued_origin),
+                        _origin_hostname(target),
+                    )
+                )
             ):
                 raise CredentialUseError(
                     "target origin does not match credential handle"
@@ -1860,9 +2718,10 @@ class Broker:
             agent_id, "credential.use", item["credential_id"],
             item["target_origin"], item["purpose"],
         )
-        _record_scope_allowed(
-            credential["allowed_origins"], credential["allowed_purposes"],
-            item["target_origin"], item["purpose"],
+        _credential_scope_allowed(
+            credential,
+            item["target_origin"],
+            item["purpose"],
             trusted_local=self._is_trusted_local(agent_id),
         )
 
@@ -2221,13 +3080,15 @@ class Broker:
             ):
                 continue
             if normalized_query is not None:
+                prov = metadata.get("provenance") or {}
                 searchable = " ".join(
                     [
                         *(
                             str(metadata.get(key, ""))
                             for key in ("field_id", "display_name", "category")
                         ),
-                        str((metadata.get("provenance") or {}).get("hint", "")),
+                        str(prov.get("hint", "")),
+                        str(prov.get("group_label", "")),
                     ]
                 ).casefold()
                 if normalized_query not in searchable:
@@ -2235,11 +3096,105 @@ class Broker:
             yield metadata
 
     def list_profile_groups(self) -> list[dict[str, Any]]:
-        """List metadata-only groups so callers can choose an address set."""
+        """List metadata-only groups with bounded disambiguation summaries."""
+
+        raw_items_by_id: dict[str, dict[str, Any]] = {}
+        for row in self.store.db.execute(
+            "select key from kv where namespace='profile' order by key"
+        ):
+            item = self.store.get("profile", row["key"])
+            if item:
+                raw_items_by_id[row["key"]] = self._profile_defaults(row["key"], item)
+
+        confirmed_bundles_by_fid: dict[str, dict[str, Any]] = {}
+        self_emails: set[str] = set()
+        self_name_pairs: set[tuple[str, str]] = set()
+        self_full_names: set[str] = set()
+
+        for ctx_row in self.store.db.execute(
+            "select key from kv where namespace='context' and key like 'bundle:%' order by key"
+        ):
+            bundle = self.store.get("context", ctx_row["key"])
+            if (
+                not isinstance(bundle, dict)
+                or bundle.get("authority") != "confirmed"
+                or not isinstance(bundle.get("field_versions"), dict)
+            ):
+                continue
+            field_versions = bundle["field_versions"]
+            if not field_versions or not all(
+                raw_items_by_id.get(fid, {}).get("updated_at") == ver
+                for fid, ver in field_versions.items()
+            ):
+                continue
+            data = bundle.get("data", {})
+            if not isinstance(data, dict):
+                data = {}
+            meaning = {
+                "bundle_id": bundle.get("id", ctx_row["key"]),
+                "subject": data.get("subject", "unknown"),
+                "role": data.get("role", "unknown"),
+                "currentness": data.get("currentness", "unknown"),
+                "title": data.get("title", ""),
+            }
+            for fid in field_versions:
+                if fid not in confirmed_bundles_by_fid or str(ctx_row["key"]).startswith(
+                    "bundle:review_"
+                ):
+                    confirmed_bundles_by_fid[fid] = meaning
+            if data.get("subject") == "self":
+                fields_map = data.get("fields")
+                if isinstance(fields_map, dict):
+                    fn_id = fields_map.get("first_name")
+                    ln_id = fields_map.get("last_name")
+                    nm_id = fields_map.get("name") or fields_map.get("full_name")
+                    em_id = fields_map.get("email")
+                    fn_item = raw_items_by_id.get(fn_id, {}) if isinstance(fn_id, str) else {}
+                    ln_item = raw_items_by_id.get(ln_id, {}) if isinstance(ln_id, str) else {}
+                    nm_item = raw_items_by_id.get(nm_id, {}) if isinstance(nm_id, str) else {}
+                    em_item = raw_items_by_id.get(em_id, {}) if isinstance(em_id, str) else {}
+                    fn_val = str(fn_item.get("value") or "").strip().casefold()
+                    ln_val = str(ln_item.get("value") or "").strip().casefold()
+                    nm_val = normalize_form_label(nm_item.get("value") or "")
+                    em_val = str(em_item.get("value") or "").strip().casefold()
+                    if fn_val and ln_val:
+                        self_name_pairs.add((fn_val, ln_val))
+                        self_full_names.add(normalize_form_label(f"{fn_val} {ln_val}"))
+                    if nm_val:
+                        self_full_names.add(nm_val)
+                    if em_val and "@" in em_val:
+                        self_emails.add(em_val)
+
+        # Also extract self identity signals from standalone local-profile records.
+        local_fn = ""
+        local_ln = ""
+        for item in raw_items_by_id.values():
+            raw_prov = item.get("provenance")
+            item_prov: dict[str, Any] = raw_prov if isinstance(raw_prov, dict) else {}
+            if item_prov.get("source") == "chrome-structured-address":
+                continue
+            val = item.get("value")
+            if not isinstance(val, str) or not val.strip():
+                continue
+            label_norm = normalize_form_label(item.get("display_name") or item.get("field_id") or "")
+            fid_norm = normalize_form_label(item.get("field_id") or "")
+            if label_norm in {"email", "email address"} or fid_norm in {"email", "email address"}:
+                if "@" in val:
+                    self_emails.add(val.strip().casefold())
+            elif label_norm in {"first name", "given name"} or fid_norm in {"first name", "given name"}:
+                local_fn = val.strip().casefold()
+            elif label_norm in {"last name", "family name", "surname"} or fid_norm in {"last name", "family name", "surname"}:
+                local_ln = val.strip().casefold()
+            elif label_norm in {"full name", "name"} or fid_norm in {"full name", "name"}:
+                self_full_names.add(normalize_form_label(val))
+        if local_fn and local_ln:
+            self_name_pairs.add((local_fn, local_ln))
+            self_full_names.add(normalize_form_label(f"{local_fn} {local_ln}"))
 
         groups: dict[str, dict[str, Any]] = {}
-        for row in self._iter_profile_fields():
-            provenance = row.get("provenance")
+        group_raw_items: dict[str, list[dict[str, Any]]] = {}
+        for item in raw_items_by_id.values():
+            provenance = item.get("provenance")
             if not isinstance(provenance, dict):
                 provenance = {}
             profile_id = provenance.get("source_profile_id")
@@ -2250,7 +3205,7 @@ class Broker:
                 source = provenance.get("source", "chrome-structured-address")
             else:
                 source = provenance.get("source", "local-profile")
-            group_id = profile_group_id(row)
+            group_id = profile_group_id(item)
             group = groups.setdefault(
                 group_id,
                 {
@@ -2261,11 +3216,13 @@ class Broker:
                     "field_types": [],
                 },
             )
-            group["field_ids"].append(row["field_id"])
-            field_type = provenance.get("field_type") or row.get("display_name")
+            group["field_ids"].append(item["field_id"])
+            field_type = provenance.get("field_type") or item.get("display_name")
             if isinstance(field_type, str) and field_type not in group["field_types"]:
                 group["field_types"].append(field_type)
-        for group in groups.values():
+            group_raw_items.setdefault(group_id, []).append(item)
+
+        for group_id, group in groups.items():
             group["field_ids"].sort()
             group["field_types"].sort()
             group["field_count"] = len(group["field_ids"])
@@ -2278,25 +3235,164 @@ class Broker:
                 )
             else:
                 group["selection_reason"] = None
-            bundle = self.store.get("context", f"bundle:review_{group['group_id']}")
+
+            review_bundle = self.store.get("context", f"bundle:review_{group_id}")
+            confirmed_meaning: dict[str, Any] | None = None
             if (
-                isinstance(bundle, dict)
-                and bundle.get("authority") == "confirmed"
-                and isinstance(bundle.get("field_versions"), dict)
+                isinstance(review_bundle, dict)
+                and review_bundle.get("authority") == "confirmed"
+                and isinstance(review_bundle.get("field_versions"), dict)
                 and all(
-                    (self.store.get("profile", fid) or {}).get("updated_at") == ver
-                    for fid, ver in bundle["field_versions"].items()
+                    raw_items_by_id.get(fid, {}).get("updated_at") == ver
+                    for fid, ver in review_bundle["field_versions"].items()
                 )
             ):
-                data = bundle.get("data", {})
-                group["confirmed_meaning"] = {
-                    "bundle_id": bundle.get("id"),
+                data = review_bundle.get("data", {})
+                confirmed_meaning = {
+                    "bundle_id": review_bundle.get("id"),
                     "subject": data.get("subject", "unknown"),
                     "role": data.get("role", "unknown"),
                     "currentness": data.get("currentness", "unknown"),
                     "title": data.get("title", ""),
                 }
-        return sorted(groups.values(), key=lambda item: item["group_id"])
+            else:
+                for fid in group["field_ids"]:
+                    if fid in confirmed_bundles_by_fid:
+                        confirmed_meaning = dict(confirmed_bundles_by_fid[fid])
+                        break
+            if confirmed_meaning is not None:
+                group["confirmed_meaning"] = confirmed_meaning
+
+            group_items = group_raw_items.get(group_id, [])
+            explicit_label: str | None = None
+            explicit_primary = False
+            first_val: Any = None
+            last_val: Any = None
+            full_val: Any = None
+            email_val: str = ""
+            state_raw: Any = None
+            country_raw: Any = None
+
+            for g_item in group_items:
+                g_raw_prov = g_item.get("provenance")
+                prov: dict[str, Any] = (
+                    g_raw_prov if isinstance(g_raw_prov, dict) else {}
+                )
+                if explicit_label is None:
+                    cand_label = (
+                        prov.get("group_label")
+                        or prov.get("label")
+                        or prov.get("hint")
+                    )
+                    if isinstance(cand_label, str) and cand_label.strip():
+                        explicit_label = cand_label.strip()
+                if prov.get("is_primary") is True:
+                    explicit_primary = True
+                ftype = str(prov.get("field_type") or "").strip()
+                dname = normalize_form_label(g_item.get("display_name") or "")
+                val = g_item.get("value")
+                if ftype in {"first_name", "givenName"} or dname in {"first name", "chrome first name"}:
+                    first_val = val
+                elif ftype in {"last_name", "familyName"} or dname in {"last name", "chrome last name"}:
+                    last_val = val
+                elif ftype == "name" or dname in {"full name", "name", "chrome name"}:
+                    full_val = val
+                elif ftype == "email" or dname in {"email", "email address", "chrome email"}:
+                    if isinstance(val, str):
+                        email_val = val.strip().casefold()
+                elif ftype in {"state", "addressLevel1"} or dname in {"state", "province", "chrome state"}:
+                    state_raw = val
+                elif ftype in {"country", "countryCode"} or dname in {"country", "chrome country"}:
+                    country_raw = val
+
+            confirmed_self_current = bool(
+                confirmed_meaning
+                and confirmed_meaning.get("subject") == "self"
+                and confirmed_meaning.get("currentness") == "current"
+            )
+            is_primary = explicit_primary or confirmed_self_current
+            if explicit_label is None and confirmed_meaning:
+                title = str(confirmed_meaning.get("title") or "").strip()
+                if title:
+                    explicit_label = title
+
+            initials: str | None = None
+            state_code: str | None = None
+            country_code: str | None = None
+            matches_self = False
+            if is_chrome_group or group["field_count"] > 1:
+                initials = masked_recipient_initials(
+                    first_name=first_val,
+                    last_name=last_val,
+                    full_name=full_val,
+                )
+                state_code = safe_state_code(state_raw)
+                country_code = safe_country_code(country_raw)
+                if confirmed_meaning and confirmed_meaning.get("subject") == "self":
+                    matches_self = True
+                elif email_val and email_val in self_emails:
+                    matches_self = True
+                elif (
+                    isinstance(first_val, str)
+                    and isinstance(last_val, str)
+                    and (
+                        (first_val.strip().casefold(), last_val.strip().casefold())
+                        in self_name_pairs
+                        or normalize_form_label(f"{first_val} {last_val}")
+                        in self_full_names
+                    )
+                ):
+                    matches_self = True
+                elif isinstance(full_val, str) and (
+                    normalize_form_label(full_val) in self_full_names
+                    or (
+                        len(full_val.split()) == 2
+                        and (
+                            full_val.split()[0].casefold(),
+                            full_val.split()[1].casefold(),
+                        )
+                        in self_name_pairs
+                    )
+                ):
+                    matches_self = True
+
+            summary = build_group_summary(
+                group_label=explicit_label,
+                is_primary=is_primary,
+                matches_self_profile=matches_self,
+                confirmed_meaning=confirmed_meaning,
+                recipient_initials=initials,
+                state=state_code,
+                country=country_code,
+            )
+            group["group_label"] = explicit_label
+            group["is_primary"] = is_primary
+            group["matches_self_profile"] = matches_self
+            group["recipient_initials"] = initials
+            group["state"] = state_code
+            group["country"] = country_code
+            group["summary"] = summary
+            disambiguation: dict[str, Any] = {"is_primary": is_primary}
+            if explicit_label:
+                disambiguation["group_label"] = explicit_label
+            if matches_self:
+                disambiguation["matches_self_profile"] = True
+            if initials:
+                disambiguation["recipient_initials"] = initials
+            if state_code:
+                disambiguation["state"] = state_code
+            if country_code:
+                disambiguation["country"] = country_code
+            group["disambiguation"] = disambiguation
+
+        return sorted(
+            groups.values(),
+            key=lambda item: (
+                0 if item.get("is_primary") else 1,
+                0 if item.get("matches_self_profile") else 1,
+                item["group_id"],
+            ),
+        )
 
     def match_form_fields(
         self,
@@ -2315,6 +3411,8 @@ class Broker:
             raise BrokerError("target_origin and purpose must be provided together")
         bounded = _bounded_limit(limit)
         preferences: dict[str, dict[str, Any]] = {}
+        target: str | None = None
+        normalized_purpose: str | None = None
         if target_origin is not None and purpose is not None:
             target = _normalize_origin(target_origin, "target_origin")
             normalized_purpose = _normal_text(purpose, "purpose")
@@ -2329,9 +3427,17 @@ class Broker:
                 )
                 if isinstance(preference, dict):
                     preferences[normalized_label] = preference
+        group_metadata = {
+            group["group_id"]: group for group in self.list_profile_groups()
+        }
         try:
             return _match_form_fields(
-                fields[:bounded], list(self._iter_profile_fields()), preferences
+                fields[:bounded],
+                list(self._iter_profile_fields()),
+                preferences,
+                target_origin=target,
+                purpose=normalized_purpose,
+                group_metadata=group_metadata,
             )
         except (TypeError, ValueError) as exc:
             raise BrokerError(str(exc)) from exc

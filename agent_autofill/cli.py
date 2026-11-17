@@ -14,7 +14,9 @@ from .chrome import (
     default_profile,
     discover_profiles,
     preview_chrome_password_manager,
+    preview_chrome_payment_cards,
     sync_chrome_password_manager,
+    sync_chrome_payment_cards,
 )
 from .cli_connectors import IMAPEmailAdapter
 from .cli_connectors import (
@@ -732,6 +734,9 @@ def _configure_payment_card(
     display_name: str,
     *,
     network: str | None = None,
+    hint: str | None = None,
+    institution: str | None = None,
+    is_default: bool = False,
     expiration_month: str | None = None,
     expiration_year: str | None = None,
     cardholder_name: str | None = None,
@@ -745,6 +750,10 @@ def _configure_payment_card(
     _reject_raw_card_metadata("display name", display_name)
     if network:
         _reject_raw_card_metadata("card network", network)
+    if hint:
+        _reject_raw_card_metadata("card hint", hint)
+    if institution:
+        _reject_raw_card_metadata("card institution", institution)
     card_number = _payment_card_digits(
         getpass.getpass("Payment card number (not echoed): ")
     )
@@ -796,12 +805,25 @@ def _configure_payment_card(
         )
         if item["record_id"] != record_id
     ]
+    normalized_origins = (
+        []
+        if allowed_origins and any(item.strip() == "*" for item in allowed_origins)
+        else (allowed_origins or [])
+    )
+    normalized_purposes = (
+        []
+        if allowed_purposes and any(item.strip() == "*" for item in allowed_purposes)
+        else (allowed_purposes or [])
+    )
     proposal: dict[str, Any] = {
         "action": action,
         "record_id": record_id,
         "kind": "payment_card",
         "display_name": display_name,
         "network": network or None,
+        **({"hint": hint} if hint else {}),
+        **({"institution": institution} if institution else {}),
+        "is_default": is_default,
         "last4": card_number[-4:],
         "expiration_month": expiration_month,
         "expiration_year": expiration_year,
@@ -814,8 +836,8 @@ def _configure_payment_card(
             *(["cardholder_name"] if cardholder_name else []),
             *(["billing_postal_code"] if billing_postal_code else []),
         ],
-        "allowed_origins": allowed_origins or [],
-        "allowed_purposes": allowed_purposes or [],
+        "allowed_origins": normalized_origins,
+        "allowed_purposes": normalized_purposes,
     }
     if matching_records:
         proposal["matching_records"] = matching_records
@@ -840,14 +862,96 @@ def _configure_payment_card(
         cardholder_name=cardholder_name,
         billing_postal_code=billing_postal_code,
         network=network or None,
-        allowed_origins=allowed_origins,
-        allowed_purposes=allowed_purposes,
+        hint=hint or None,
+        institution=institution or None,
+        is_default=is_default,
+        allowed_origins=normalized_origins,
+        allowed_purposes=normalized_purposes,
         provenance={"source": "local-cli"},
     )
     print(
         f"Stored payment-card record {record_id} (last four {card_number[-4:]}; "
         "full values remain encrypted and are omitted from listings)."
     )
+    return True
+
+
+def _edit_payment_card_metadata(
+    broker: Broker,
+    args: argparse.Namespace,
+) -> bool:
+    """Update payment-card scope/default/metadata without re-entering raw secrets."""
+
+    stored = broker.store.get("financial", args.record_id)
+    if stored is None:
+        raise SystemExit(f"No saved financial record named {args.record_id}")
+    current = broker._financial_defaults(args.record_id, stored)
+    display_name = args.display_name or current["display_name"]
+    _reject_raw_card_metadata("display name", display_name)
+    hints = dict(current.get("matching_hints") or {})
+    if args.network is not None:
+        _reject_raw_card_metadata("card network", args.network)
+        hints["network"] = args.network
+    if args.hint is not None:
+        _reject_raw_card_metadata("card hint", args.hint)
+        hints["hint"] = args.hint
+    if args.institution is not None:
+        _reject_raw_card_metadata("card institution", args.institution)
+        hints["institution"] = args.institution
+
+    is_default = bool(current.get("is_default", False))
+    if args.default:
+        is_default = True
+    elif args.no_default:
+        is_default = False
+
+    if args.clear_origins:
+        origins: list[str] = []
+    elif args.origin:
+        origins = [] if any(o.strip() == "*" for o in args.origin) else list(args.origin)
+    else:
+        origins = list(current.get("allowed_origins", []))
+
+    if args.clear_purposes:
+        purposes: list[str] = []
+    elif args.purpose:
+        purposes = [] if any(p.strip() == "*" for p in args.purpose) else list(args.purpose)
+    else:
+        purposes = list(current.get("allowed_purposes", []))
+
+    proposal = {
+        "action": "update_metadata",
+        "record_id": args.record_id,
+        "display_name": display_name,
+        "is_default": is_default,
+        "matching_hints": hints,
+        "allowed_origins": origins,
+        "allowed_purposes": purposes,
+        "encrypted_values": "existing card number and security code retained",
+    }
+    print("Proposed payment-card metadata/scope update (secrets preserved):")
+    print(json.dumps(proposal, indent=2))
+    if not args.yes and input("Apply this payment-card update? [y/N] ").strip().lower() != "y":
+        print("Payment-card update cancelled; no changes were written.")
+        return False
+
+    patch_hints = {
+        k: v
+        for k, v in hints.items()
+        if k not in {"last4", "account_last4", "expiration_month", "expiration_year"}
+    }
+    broker.put_financial_record(
+        record_id=args.record_id,
+        kind=current["kind"],
+        display_name=display_name,
+        values=dict(current["values"]),
+        matching_hints=patch_hints or None,
+        allowed_origins=origins,
+        allowed_purposes=purposes,
+        provenance=dict(current.get("provenance") or {"source": "local-cli"}),
+        is_default=is_default,
+    )
+    print(f"Updated payment-card metadata for {args.record_id} (encrypted values preserved).")
     return True
 
 
@@ -1100,6 +1204,7 @@ def _parser() -> argparse.ArgumentParser:
     financial.add_argument("--card-suffix", help="match four or five ending digits without returning card values")
     financial.add_argument("--expiration-month")
     financial.add_argument("--expiration-year")
+    financial.add_argument("--default", action="store_true", help="filter to default financial records")
     financial.add_argument("--query")
     financial.add_argument("--limit", type=int, default=100)
     financial.add_argument("--offset", type=int, default=0)
@@ -1110,12 +1215,32 @@ def _parser() -> argparse.ArgumentParser:
     card.add_argument("record_id")
     card.add_argument("display_name")
     card.add_argument("--network")
+    card.add_argument("--hint", help="safe alias or nickname hint (for example C1vx)")
+    card.add_argument("--institution", help="safe card issuer hint (for example Capital One)")
+    card.add_argument("--default", action="store_true", help="mark as default payment card")
     card.add_argument("--expiration-month")
     card.add_argument("--expiration-year")
     card.add_argument("--cardholder-name")
     card.add_argument("--billing-postal-code")
     card.add_argument("--origin", action="append", default=[])
     card.add_argument("--purpose", action="append", default=[])
+    card_edit = sub.add_parser(
+        "payment-card-edit",
+        help="update payment-card scope, default flag, or safe hints without re-entering raw secrets",
+    )
+    card_edit.add_argument("record_id")
+    card_edit.add_argument("--display-name")
+    card_edit.add_argument("--network")
+    card_edit.add_argument("--hint", help="safe alias or nickname hint (for example C1vx)")
+    card_edit.add_argument("--institution", help="safe card issuer hint (for example Capital One)")
+    default_group = card_edit.add_mutually_exclusive_group()
+    default_group.add_argument("--default", action="store_true", help="mark as default payment card")
+    default_group.add_argument("--no-default", action="store_true", help="unset default payment card")
+    card_edit.add_argument("--origin", action="append", default=[])
+    card_edit.add_argument("--clear-origins", action="store_true", help="allow all websites (allowed_origins=[])")
+    card_edit.add_argument("--purpose", action="append", default=[])
+    card_edit.add_argument("--clear-purposes", action="store_true", help="allow all purposes (allowed_purposes=[])")
+    card_edit.add_argument("--yes", action="store_true", help="confirm metadata/scope update non-interactively")
     record_delete = sub.add_parser(
         "record-delete", help="delete one local profile, credential, or financial record"
     )
@@ -1262,6 +1387,50 @@ def _parser() -> argparse.ArgumentParser:
         "--remove-stale",
         action="store_true",
         help="remove credentials deleted from Chrome after approval",
+    )
+    cpc = cs.add_parser(
+        "payment-cards",
+        help="preview or import local Chrome payment cards through macOS Keychain",
+    )
+    cpc.add_argument(
+        "--profile-dir",
+        help="optional Chrome user-data root; only its Default profile is used",
+    )
+    cpc.add_argument(
+        "--preview",
+        action="store_true",
+        help="show a value-free preview of local Chrome cards and Google-Pay-masked cards",
+    )
+    cpc.add_argument(
+        "--confirm-import",
+        action="store_true",
+        help="required acknowledgement that approved local Chrome cards will be sealed in this database only",
+    )
+    cpc.add_argument(
+        "--record-id",
+        action="append",
+        help="import only selected preview record_id(s); repeat to select multiple",
+    )
+    cpc.add_argument(
+        "--default-card",
+        help="mark matching record_id, Chrome nickname, or unique last4 as default payment card",
+    )
+    cpc.add_argument(
+        "--default",
+        action="store_true",
+        help="mark the imported card as the default all-websites payment card (requires a single selected card or --default-card)",
+    )
+    cpc.add_argument(
+        "--hint",
+        help="attach a non-secret alias/hint to the imported card (for example C1vx)",
+    )
+    cpc.add_argument(
+        "--institution",
+        help="attach an institution label to the imported card (for example Capital One)",
+    )
+    cpc.add_argument(
+        "--display-name",
+        help="override the display name for the imported card (for example Capital One Venture X)",
     )
     setup = sub.add_parser(
         "setup",
@@ -1804,16 +1973,19 @@ def main(argv=None) -> int:
             }.items()
             if value is not None
         }
+        is_default_filter = True if args.default else None
         records = (
             broker.match_financial_records(
                 kind=args.kind, matching_hints=hints,
                 card_suffix=args.card_suffix, query=args.query,
+                is_default=is_default_filter,
             )
             if args.kind or hints or args.card_suffix
             else broker.list_financial_records(
                 query=args.query,
                 limit=args.limit,
                 offset=args.offset,
+                is_default=is_default_filter,
             )
         )
         if args.kind or hints or args.card_suffix:
@@ -1827,6 +1999,9 @@ def main(argv=None) -> int:
             args.record_id,
             args.display_name,
             network=args.network,
+            hint=args.hint,
+            institution=args.institution,
+            is_default=args.default,
             expiration_month=args.expiration_month,
             expiration_year=args.expiration_year,
             cardholder_name=args.cardholder_name,
@@ -1834,6 +2009,8 @@ def main(argv=None) -> int:
             allowed_origins=args.origin,
             allowed_purposes=args.purpose,
         )
+    elif args.command == "payment-card-edit":
+        _edit_payment_card_metadata(broker, args)
     elif args.command == "record-delete":
         broker.delete_record(args.record_type, args.record_id)
         print(f"Deleted {args.record_type} record {args.record_id}")
@@ -2047,6 +2224,39 @@ def main(argv=None) -> int:
                     indent=2,
                 )
             )
+            return 0
+        if args.chrome_command == "payment-cards":
+            try:
+                if args.preview:
+                    print(
+                        json.dumps(
+                            preview_chrome_payment_cards(profile_dir, broker),
+                            indent=2,
+                        )
+                    )
+                    return 0
+                if not args.confirm_import:
+                    raise SystemExit(
+                        "Refusing Chrome payment card sync: re-run with --confirm-import"
+                    )
+                print(
+                    json.dumps(
+                        sync_chrome_payment_cards(
+                            profile_dir,
+                            broker,
+                            approved=True,
+                            record_ids=args.record_id,
+                            default_record_id=args.default_card,
+                            set_default=args.default,
+                            hint=args.hint,
+                            institution=args.institution,
+                            display_name=args.display_name,
+                        ),
+                        indent=2,
+                    )
+                )
+            except ChromeImportError as exc:
+                raise SystemExit(str(exc)) from exc
             return 0
         if args.password_csv and not args.allow_password_import:
             raise SystemExit(

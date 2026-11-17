@@ -5,6 +5,7 @@ adapter intentionally has no send or mutation methods.
 """
 
 import imaplib
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from email import message_from_bytes
@@ -40,9 +41,56 @@ def _header(value: str | None) -> str:
     return str(make_header(decode_header(value or "")))
 
 
+_SUPPRESSED_HTML_BLOCKS = re.compile(
+    r"<(style|script|head|title|noscript|svg|template|xml)\b[^>]*>.*?</\1\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_UNCLOSED_SUPPRESSED_HTML = re.compile(
+    r"<(style|script|head)\b[^>]*>.*\Z",
+    re.IGNORECASE | re.DOTALL,
+)
+_ZERO_WIDTH_SPACERS = re.compile(
+    r"[\u200b-\u200f\u2060\ufeff\u034f\u00ad\u061c\u180e]+"
+)
+_EXCESS_BLANK_LINES = re.compile(r"\n{3,}")
+
+
+def _sanitize_email_text(value: str) -> str:
+    had_trailing_newline = value.endswith(("\n", "\r"))
+    cleaned = _ZERO_WIDTH_SPACERS.sub("", value)
+    cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
+    lines = [" ".join(line.split()) for line in cleaned.split("\n")]
+    # Preserve single paragraph breaks in plain text while collapsing spacer runs.
+    compacted: list[str] = []
+    previous_blank = True
+    for line in lines:
+        if line:
+            compacted.append(line)
+            previous_blank = False
+        elif not previous_blank:
+            compacted.append("")
+            previous_blank = True
+    while compacted and not compacted[-1]:
+        compacted.pop()
+    if not compacted:
+        return ""
+    result = _EXCESS_BLANK_LINES.sub("\n\n", "\n".join(compacted))
+    return f"{result}\n" if had_trailing_newline else result
+
+
 class _HTMLTextParser(HTMLParser):
     """Extract readable text from HTML-only mail without retaining markup."""
 
+    _IGNORED_TAGS: ClassVar[set[str]] = {
+        "head",
+        "noscript",
+        "script",
+        "style",
+        "svg",
+        "template",
+        "title",
+        "xml",
+    }
     _BLOCK_TAGS: ClassVar[set[str]] = {
         "address",
         "article",
@@ -75,32 +123,60 @@ class _HTMLTextParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self._chunks: list[str] = []
+        self._ignored_stack: list[str] = []
 
     def handle_data(self, data: str) -> None:
-        if data.strip():
-            self._chunks.append(data)
+        if self._ignored_stack:
+            return
+        cleaned = _ZERO_WIDTH_SPACERS.sub("", data)
+        if cleaned.strip():
+            self._chunks.append(cleaned)
+        elif cleaned and self._chunks and not self._chunks[-1][-1:].isspace():
+            self._chunks.append(" ")
 
     def handle_starttag(self, tag: str, _attrs) -> None:
-        if tag.lower() in self._BLOCK_TAGS:
+        lower = tag.lower()
+        if lower in self._IGNORED_TAGS:
+            self._ignored_stack.append(lower)
+            return
+        if self._ignored_stack:
+            return
+        if lower in self._BLOCK_TAGS:
             self._chunks.append("\n")
 
     def handle_startendtag(self, tag: str, _attrs) -> None:
-        if tag.lower() in self._BLOCK_TAGS:
+        lower = tag.lower()
+        if lower in self._IGNORED_TAGS or self._ignored_stack:
+            return
+        if lower in self._BLOCK_TAGS:
             self._chunks.append("\n")
 
     def handle_endtag(self, tag: str) -> None:
-        if tag.lower() in self._BLOCK_TAGS:
+        lower = tag.lower()
+        if lower in self._IGNORED_TAGS:
+            if lower in self._ignored_stack:
+                while self._ignored_stack:
+                    popped = self._ignored_stack.pop()
+                    if popped == lower:
+                        break
+            return
+        if self._ignored_stack:
+            return
+        if lower in self._BLOCK_TAGS:
             self._chunks.append("\n")
 
     def text(self) -> str:
-        lines = [" ".join(line.split()) for line in "".join(self._chunks).splitlines()]
+        raw = _ZERO_WIDTH_SPACERS.sub("", "".join(self._chunks))
+        lines = [" ".join(line.split()) for line in raw.splitlines()]
         return "\n".join(line for line in lines if line)
 
 
 def _html_body(value: str) -> str:
+    stripped = _SUPPRESSED_HTML_BLOCKS.sub(" ", value)
+    stripped = _UNCLOSED_SUPPRESSED_HTML.sub(" ", stripped)
     parser = _HTMLTextParser()
     try:
-        parser.feed(value)
+        parser.feed(stripped)
         parser.close()
     except (ValueError, AssertionError):
         # A malformed provider template should not make the entire message
@@ -129,7 +205,9 @@ def _body(msg) -> str:
             # Skip malformed MIME without logging message data.
             continue
         if part.get_content_type() == "text/plain":
-            plain.append(value)
+            cleaned = _sanitize_email_text(value)
+            if cleaned:
+                plain.append(cleaned)
         else:
             parsed = _html_body(value)
             if parsed:

@@ -17,15 +17,19 @@ record, origin, purpose, expiry, or revocation checks.
 
 | Tool | Required operation inputs | Optional operation inputs | Use |
 | --- | --- | --- | --- |
-| `list_profile_fields` | none | none | Metadata only; values are omitted. |
-| `list_credentials` | none | none | Authenticated credential metadata; secrets are omitted. |
-| `list_financial_records` | none | none | Authenticated payment/financial metadata; values are omitted. |
-| `match_form_fields` | `fields` | `limit` | Value-free ranked record table with matched/missing/ambiguous/credential/consent/transient/task-specific state. |
+| `list_profile_fields` | none | `category`, `query`, `limit`, `offset` | Metadata only; values are omitted. |
+| `list_profile_groups` | none | none | Value-free Chrome/local address group metadata with bounded disambiguation (`summary`, `group_label`, `is_primary`, `matches_self_profile`, `recipient_initials`, `state`, `country`). |
+| `list_credentials` | none | `query`, `limit`, `offset` | Authenticated credential metadata; secrets are omitted. |
+| `match_credentials` | `target_origin` | `username_hint` | Ranked `exact-host` then same-registrable-domain (`registrable-domain`) SSO/OAuth credential metadata without passwords. |
+| `list_financial_records` | none | `query`, `is_default`, `limit`, `offset` | Authenticated payment/financial metadata (`is_default: true` sorted first); values are omitted. |
+| `match_financial_records` | none | `kind`, `matching_hints`, `card_suffix`, `query`, `is_default` | Match payment/financial metadata by safe hints, card ending, alias query (e.g. `C1vx`), or `is_default`. |
+| `match_form_fields` | `fields` | `target_origin`, `purpose`, `limit` | Value-free ranked record table with origin/purpose filtering, single-`group_id` address coherence, and group disambiguation. |
 | `record_form_mapping_feedback` | `target_origin`, `purpose`, `field_label`, `selected_field_ids`, `confirmed` | `group_id`, `outcome` | Store a value-free mapping choice after a user-confirmed outcome so later matching can prefer it. |
 | `request_profile_fields` | `field_ids`, `target_origin`, `purpose` | `group_id` | Read selected profile values under `profile.read` grants; group-bound reads cannot mix address groups. |
 | `request_credential_fields` | `credential_id`, `field_ids`, `target_origin`, `purpose` | none | Read selected credential fields under `credential.read`. |
 | `request_financial_fields` | `record_id`, `field_ids`, `target_origin`, `purpose` | none | Read selected financial fields under `financial.read`. |
 | `write_records` | `target_origin`, `purpose`, `confirmed`, `entries` | none | Persist one explicitly approved batch. `confirmed` must be literal `true`. |
+| `update_record_scope` | `record_type`, `confirmed` (`record_id` or `group_id`) | `target_origin`, `purpose`, `allowed_origins`, `allowed_purposes`, `is_default`, `matching_hints`, `display_name`, `name`, `note`, `group_label`, `is_primary` | Patch user-confirmed scope, default flag, hints, or group label without re-supplying encrypted secrets. |
 
 The MCP catalog declares `agent_id` as an optional string property on each of
 these tools. The three `request_*_fields` schemas use an array of strings for
@@ -167,11 +171,13 @@ authentication, an active matching read grant, and the record scope pass.
   "matching_hints": {                # optional safe hints
     "network": "...",
     "last4": "....",
+    "hint": "...",                   # optional safe alias such as "C1vx"
     "account_last4": "...."
   },
+  "is_default": false,               # optional boolean; at most one default per kind
   "sensitivity": "financial",       # optional; must be financial
-  "allowed_origins": ["..."],        # optional
-  "allowed_purposes": ["..."],       # optional
+  "allowed_origins": ["..."],        # optional; ["*"] normalizes to [] (all websites)
+  "allowed_purposes": ["..."],       # optional; ["*"] normalizes to [] (all purposes)
   "provenance": { ... }               # optional metadata object
 }
 ```
@@ -181,10 +187,22 @@ authentication, an active matching read grant, and the record scope pass.
 `values` object are required. Financial value field ids are selected by the
 record owner, must be unique strings, and must not be reserved metadata names
 or transient authentication names. Values are strings. `matching_hints` may
-contain only the safe keys `account_last4`, `country`, `currency`,
-`institution`, `last4`, and `network`; a last-four hint is exactly four
-digits. Full numbers and security codes are never proposal previews or
+contain only the safe keys `account_last4`, `aliases`, `billing_postal_code`,
+`cardholder_name`, `country`, `currency`, `expiration_month`, `expiration_year`,
+`hint`, `institution`, `last4`, `network`, and `nickname`; a last-four hint is
+exactly four digits. `is_default: true` marks the record as the default card for
+its `kind` (clearing `is_default` on other records of the same `kind`). Passing
+`["*"]` for `allowed_origins` or `allowed_purposes` normalizes to `[]`
+(unrestricted across websites/purposes; payment submission still requires user
+confirmation). Full numbers and security codes are never proposal previews or
 metadata listings.
+
+To update scopes, `is_default`, `matching_hints`, `display_name`, `name`,
+`group_label`, or `is_primary` on an existing stored record or Chrome address
+group without re-supplying raw secrets (`card_number`, `security_code`,
+`password`, `value`), call `update_record_scope` with `confirmed: true` (or
+pass `"mode": "update_scope"` in a `write_records` entry). `update_record_scope`
+rejects raw secret keys and preserves existing encrypted fields untouched.
 
 `request_financial_fields` accepts selected `field_ids` from the record's
 `values` map and returns only those values plus `provenance`. An unknown field,
@@ -216,7 +234,7 @@ It never includes `password`.
 
 ```text
 record_id, kind, display_name, field_ids, matching_hints,
-allowed_origins, allowed_purposes, sensitivity, provenance,
+is_default, allowed_origins, allowed_purposes, sensitivity, provenance,
 created_at, updated_at
 ```
 

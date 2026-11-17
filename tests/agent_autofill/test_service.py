@@ -826,13 +826,25 @@ def test_match_credentials_uses_exact_host_and_username_hint_without_password():
         "ada@example.com",
         "sub-password",
     )
+    b.put_credential(
+        "other-domain-ada",
+        "Other Domain",
+        "https://login.other.test",
+        "ada@example.com",
+        "other-domain-password",
+    )
 
     matches = b.match_credentials("https://example.com/checkout", "ADA@EXAMPLE")
 
-    assert [item["credential_id"] for item in matches] == ["example-ada"]
+    assert [item["credential_id"] for item in matches] == [
+        "example-ada",
+        "subdomain-ada",
+    ]
     assert matches[0]["match"] == "exact-host"
+    assert matches[1]["match"] == "registrable-domain"
     assert "password" not in matches[0]
     assert "synthetic-password" not in str(matches)
+    assert "sub-password" not in str(matches)
 
 
 def test_profile_groups_are_metadata_only_and_local_profiles_are_fallback_groups():

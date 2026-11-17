@@ -7,9 +7,9 @@ import sys
 from importlib.metadata import version
 
 from .catalog import TOOLS
+from .cli_connectors import _build_saved_email_adapter
 from .context_memory import ContextMemory
-from .gmail_adapter import GmailEmailAdapter
-from .google_oauth import GoogleOAuthError, oauth_provider_from_keychain_secret
+from .google_oauth import GoogleOAuthError
 from .imap_adapter import IMAPAuthenticationError, IMAPEmailAdapter
 from .local import LocalConnection, connect_service, default_database_path
 from .messages_adapter import MacMessagesAdapter
@@ -59,6 +59,7 @@ def _call(
         "list_financial_records": lambda: broker.list_financial_records(**params),
         "match_financial_records": lambda: broker.match_financial_records(**params),
         "write_records": lambda: broker.write_records(agent, **params),
+        "update_record_scope": lambda: broker.update_record_scope(agent, **params),
         "request_credential_fields": lambda: broker.request_credential_fields(
             agent, **params
         ),
@@ -117,48 +118,9 @@ def _register_connections(broker: Broker, keyring: KeyringProvider) -> None:
                 broker.mark_email_unavailable(source_id)
                 continue
             try:
-                auth_kind = config.get("auth_kind")
-                if auth_kind in {"google_oauth", "microsoft_oauth"}:
-                    def save_refreshed_secret(value: bytes, name: str = secret_name) -> None:
-                        keyring.set_secret(name, value)
-
-                    provider = oauth_provider_from_keychain_secret(
-                        secret,
-                        on_refresh=save_refreshed_secret,
-                    )
-                    adapter: IMAPEmailAdapter | GmailEmailAdapter
-                    if config.get("kind") == "gmail":
-                        adapter = GmailEmailAdapter(
-                            source_id, config["username"], provider,
-                            config.get("mailbox", "INBOX"),
-                        )
-                    else:
-                        adapter = IMAPEmailAdapter(
-                            source_id, config["host"], config["username"], None,
-                            config.get("port", 993), config.get("mailbox", "INBOX"),
-                            None, provider,
-                        )
-                else:
-                    value = secret.decode()
-                    if auth_kind == "oauth2":
-                        adapter = IMAPEmailAdapter(
-                            source_id,
-                            config["host"],
-                            config["username"],
-                            None,
-                            config.get("port", 993),
-                            config.get("mailbox", "INBOX"),
-                            value,
-                        )
-                    else:
-                        adapter = IMAPEmailAdapter(
-                            source_id,
-                            config["host"],
-                            config["username"],
-                            value,
-                            config.get("port", 993),
-                            config.get("mailbox", "INBOX"),
-                        )
+                adapter = _build_saved_email_adapter(
+                    source_id, config, secret, keyring, imap_cls=IMAPEmailAdapter
+                )
             except (
                 GoogleOAuthError,
                 KeyError,

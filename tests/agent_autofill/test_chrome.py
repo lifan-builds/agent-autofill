@@ -14,7 +14,9 @@ from agent_autofill.chrome import (
     default_profile,
     import_chrome_password_manager,
     preview_chrome_password_manager,
+    preview_chrome_payment_cards,
     sync_chrome_password_manager,
+    sync_chrome_payment_cards,
 )
 from agent_autofill.service import Broker
 from agent_autofill.storage import Store
@@ -376,3 +378,216 @@ def test_chrome_password_manager_preview_and_sync_reconcile_without_stale_delete
     origins = {item["origin"] for item in broker.list_credentials()}
     assert "https://old.example.test/login" not in origins
     assert "https://new.example.test/login" in origins
+
+
+def test_chrome_payment_cards_preview_and_sync_with_default_c1vx_and_cloud_masked(
+    tmp_path,
+):
+    profile = tmp_path / "Default"
+    profile.mkdir()
+    enc_card = _encrypt_chrome_password("4111111111114242", "safe-key")
+    enc_cvc = _encrypt_chrome_password("987", "safe-key")
+    db = sqlite3.connect(profile / "Web Data")
+    db.execute(
+        """
+        create table credit_cards (
+            guid text primary key,
+            name_on_card text,
+            expiration_month integer,
+            expiration_year integer,
+            card_number_encrypted blob,
+            nickname text
+        )
+        """
+    )
+    db.execute(
+        "create table local_stored_cvc (guid text primary key, value_encrypted blob)"
+    )
+    db.execute(
+        """
+        create table masked_credit_cards (
+            id text primary key,
+            network text,
+            last_four text,
+            exp_month integer,
+            exp_year integer,
+            nickname text,
+            card_issuer_id text
+        )
+        """
+    )
+    db.execute(
+        "insert into credit_cards values (?, ?, ?, ?, ?, ?)",
+        ("guid-c1vx", "Ada Lovelace", 8, 2029, enc_card, "C1vx"),
+    )
+    db.execute(
+        "insert into local_stored_cvc values (?, ?)",
+        ("guid-c1vx", enc_cvc),
+    )
+    db.execute(
+        "insert into masked_credit_cards values (?, ?, ?, ?, ?, ?, ?)",
+        ("cloud-1", "VISA", "9999", 11, 2030, "Capital One Venture X", "capitalone"),
+    )
+    db.commit()
+    db.close()
+
+    broker = Broker(Store(":memory:", key=b"p" * 32))
+    preview = preview_chrome_payment_cards(
+        profile, broker, safe_storage_password="safe-key"
+    )
+    assert preview["local_card_count"] == 1
+    assert preview["add_count"] == 1
+    assert preview["masked_cloud_card_count"] == 1
+    assert "4111111111114242" not in str(preview)
+    assert "987" not in str(preview)
+    assert preview["added"][0]["last4"] == "4242"
+    assert preview["added"][0]["nickname"] == "C1vx"
+    assert preview["added"][0]["has_security_code"] is True
+    assert preview["masked_cloud_cards"][0]["importable"] is False
+
+    with pytest.raises(ChromeImportError, match="explicit approval"):
+        sync_chrome_payment_cards(
+            profile, broker, approved=False, safe_storage_password="safe-key"
+        )
+
+    sync = sync_chrome_payment_cards(
+        profile,
+        broker,
+        approved=True,
+        default_record_id="C1vx",
+        safe_storage_password="safe-key",
+    )
+    assert sync["added"] == 1
+    assert "4111111111114242" not in str(sync)
+    assert "987" not in str(sync)
+
+    listed = broker.list_financial_records(query="C1vx")
+    assert len(listed) == 1
+    assert listed[0]["is_default"] is True
+    assert listed[0]["allowed_origins"] == []
+    assert listed[0]["matching_hints"]["last4"] == "4242"
+    assert "4111111111114242" not in str(listed)
+
+    broker.create_agent("service:test")
+    broker.enable_trusted_local("service:test")
+    read = broker.request_financial_fields(
+        "service:test",
+        listed[0]["record_id"],
+        ["card_number", "security_code", "expiration_month", "expiration_year"],
+        target_origin="https://aca.aaamembershipoffers.com",
+        purpose="membership-purchase",
+    )
+    assert read["card_number"] == "4111111111114242"
+    assert read["security_code"] == "987"
+    assert read["expiration_month"] == "08"
+    assert read["expiration_year"] == "2029"
+
+
+def test_chrome_payment_cards_empty_nickname_with_billing_postal_code_and_cli_flags(
+    tmp_path, monkeypatch
+):
+    from agent_autofill import cli
+
+    profile = tmp_path / "Default"
+    profile.mkdir()
+    enc_card = _encrypt_chrome_password("4111111111118888", "safe-key")
+    enc_cvc = _encrypt_chrome_password("654", "safe-key")
+    db = sqlite3.connect(profile / "Web Data")
+    db.execute(
+        """
+        create table credit_cards (
+            guid text primary key,
+            name_on_card text,
+            expiration_month integer,
+            expiration_year integer,
+            card_number_encrypted blob,
+            billing_address_id text,
+            nickname text
+        )
+        """
+    )
+    db.execute(
+        "create table local_stored_cvc (guid text primary key, value_encrypted blob)"
+    )
+    db.execute(
+        "create table address_type_tokens (guid text, type integer, value text)"
+    )
+    db.execute(
+        "insert into credit_cards values (?, ?, ?, ?, ?, ?, ?)",
+        ("guid-empty-nick", "Ada Lovelace", 5, 2031, enc_card, "addr-guid-1", ""),
+    )
+    db.execute("insert into local_stored_cvc values (?, ?)", ("guid-empty-nick", enc_cvc))
+    db.execute(
+        "insert into address_type_tokens values (?, ?, ?)",
+        ("addr-guid-1", 35, "94107"),
+    )
+    db.commit()
+    db.close()
+
+    broker = Broker(Store(":memory:", key=b"q" * 32))
+    preview = preview_chrome_payment_cards(
+        profile, broker, safe_storage_password="safe-key"
+    )
+    assert preview["added"][0]["nickname"] is None
+    assert preview["added"][0]["has_billing_postal_code"] is True
+    assert "94107" not in str(preview)
+    assert "4111111111118888" not in str(preview)
+
+    # Unmatched --default-card raises an explicit error instead of silently skipping default
+    with pytest.raises(ChromeImportError, match="No imported Chrome payment card matched"):
+        sync_chrome_payment_cards(
+            profile,
+            broker,
+            approved=True,
+            default_record_id="C1vx",
+            safe_storage_password="safe-key",
+        )
+
+    # CLI --default --hint C1vx --institution "Capital One" --display-name "Capital One Venture X"
+    monkeypatch.setattr(cli, "_broker", lambda _path: broker)
+    monkeypatch.setattr(
+        "agent_autofill.chrome._macos_safe_storage_password", lambda: "safe-key"
+    )
+    assert (
+        cli.main(
+            [
+                "--db",
+                "unused.sqlite",
+                "chrome",
+                "payment-cards",
+                "--profile-dir",
+                str(profile),
+                "--confirm-import",
+                "--default",
+                "--hint",
+                "C1vx",
+                "--institution",
+                "Capital One",
+                "--display-name",
+                "Capital One Venture X",
+            ]
+        )
+        == 0
+    )
+
+    cards = broker.match_financial_records(query="C1vx")
+    assert len(cards) == 1
+    assert cards[0]["is_default"] is True
+    assert cards[0]["display_name"] == "Capital One Venture X"
+    assert cards[0]["matching_hints"]["hint"] == "C1vx"
+    assert cards[0]["matching_hints"]["institution"] == "Capital One"
+
+    broker.create_agent("service:test")
+    broker.enable_trusted_local("service:test")
+    read = broker.request_financial_fields(
+        "service:test",
+        cards[0]["record_id"],
+        ["card_number", "security_code", "billing_postal_code"],
+        target_origin="https://aca.aaamembershipoffers.com",
+        purpose="membership-purchase",
+    )
+    assert read["card_number"] == "4111111111118888"
+    assert read["security_code"] == "654"
+    assert read["billing_postal_code"] == "94107"
+
+

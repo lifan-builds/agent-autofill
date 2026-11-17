@@ -67,7 +67,7 @@ TOOLS = [
     },
     {
         "name": "list_profile_groups",
-        "description": "List metadata-only profile/address groups and field types.",
+        "description": "List metadata-only profile/address groups with bounded disambiguation summaries (group_label, is_primary, masked recipient initials, state/country codes) and field types.",
         "inputSchema": {
             "type": "object",
             "properties": {"agent_id": {"type": "string"}},
@@ -90,7 +90,7 @@ TOOLS = [
     },
     {
         "name": "match_credentials",
-        "description": "Find credential metadata for an exact site host without returning secrets.",
+        "description": "Find credential metadata for an exact site host or same registrable domain (eTLD+1 SSO/Auth subdomains ranked right below exact-host) without returning secrets.",
         "inputSchema": {
             "type": "object",
             "required": ["target_origin"],
@@ -190,13 +190,14 @@ TOOLS = [
     },
     {
         "name": "list_financial_records",
-        "description": "List bounded payment and financial metadata without values.",
+        "description": "List bounded payment and financial metadata (including default-card status) without values.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "agent_id": {"type": "string"},
                 "kind": {"type": "string"},
                 "query": {"type": "string"},
+                "is_default": {"type": "boolean"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100},
                 "offset": {"type": "integer", "minimum": 0, "default": 0},
             },
@@ -204,7 +205,7 @@ TOOLS = [
     },
     {
         "name": "match_financial_records",
-        "description": "Match payment metadata by name query, network, last four, expiration, or a four/five-digit card_suffix. Suffix comparison stays inside the vault; values are never returned. Multiple matches require disambiguation.",
+        "description": "Match payment metadata by name/alias query (including hint/institution/network), default-card status, network, last four, expiration, or a four/five-digit card_suffix. Suffix comparison stays inside the vault; values are never returned. Multiple matches require disambiguation.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -213,6 +214,7 @@ TOOLS = [
                 "matching_hints": {"type": "object"},
                 "card_suffix": {"type": "string", "pattern": "^[0-9]{4,5}$"},
                 "query": {"type": "string"},
+                "is_default": {"type": "boolean"},
             },
         },
     },
@@ -227,6 +229,50 @@ TOOLS = [
                 "target_origin": {"type": "string"},
                 "purpose": {"type": "string"},
                 "confirmed": {"type": "boolean", "const": True},
+                "entries": {"type": "array", "items": {"type": "object"}},
+            },
+        },
+    },
+    {
+        "name": "update_record_scope",
+        "description": "Update allowed_origins/allowed_purposes, default payment-card status (is_default), matching_hints, or profile group disambiguation (group_label, is_primary) on existing records after user confirmation while preserving encrypted secret values.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["confirmed"],
+            "additionalProperties": False,
+            "properties": {
+                "agent_id": {"type": "string"},
+                "confirmed": {"type": "boolean", "const": True},
+                "target_origin": {"type": "string"},
+                "purpose": {"type": "string"},
+                "record_type": {
+                    "type": "string",
+                    "enum": ["profile", "credential", "financial"],
+                },
+                "record_id": {"type": "string"},
+                "credential_id": {"type": "string"},
+                "field_id": {"type": "string"},
+                "group_id": {"type": "string"},
+                "allowed_origins": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+                "allowed_purposes": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+                "is_default": {"type": "boolean"},
+                "matching_hints": {"type": "object"},
+                "display_name": {"type": "string"},
+                "name": {"type": "string"},
+                "origin": {"type": "string"},
+                "username": {"type": "string"},
+                "note": {"type": "string"},
+                "group_label": {"type": "string"},
+                "is_primary": {"type": "boolean"},
+                "category": {"type": "string"},
+                "sensitivity": {"type": "string"},
+                "provenance": {"type": "object"},
                 "entries": {"type": "array", "items": {"type": "object"}},
             },
         },

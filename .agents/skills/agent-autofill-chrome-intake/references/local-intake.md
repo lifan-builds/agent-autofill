@@ -401,7 +401,7 @@ def _metadata_by_id(broker: Any) -> dict[str, Mapping[str, Any]]:
     return result
 
 
-def _safe_provenance(proposal: Mapping[str, Any]) -> dict[str, str]:
+def _safe_provenance(proposal: Mapping[str, Any]) -> dict[str, Any]:
     supplied = proposal.get("provenance")
     source_guid = proposal.get("source_guid")
     source_profile_id = proposal.get("source_profile_id")
@@ -422,12 +422,23 @@ def _safe_provenance(proposal: Mapping[str, Any]) -> dict[str, str]:
         or supplied.get("field_type") != field_type
     ):
         raise ValueError("source provenance unavailable")
-    return {
+    safe: dict[str, Any] = {
         "source": "chrome-structured-address",
         "source_profile_id": source_profile_id,
         "source_guid": source_guid,
         "field_type": field_type,
     }
+    group_label = supplied.get("group_label")
+    if (
+        isinstance(group_label, str)
+        and group_label.strip()
+        and len(group_label.strip()) <= 120
+        and not any(ord(char) < 32 for char in group_label)
+    ):
+        safe["group_label"] = group_label.strip()
+    if isinstance(supplied.get("is_primary"), bool):
+        safe["is_primary"] = supplied["is_primary"]
+    return safe
 
 
 def _expected_metadata_matches(

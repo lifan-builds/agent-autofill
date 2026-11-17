@@ -175,3 +175,45 @@ def test_parse_prefers_plain_text_alternative_over_html():
 def test_invalid_provider_date_does_not_become_current_time():
     assert _date("not-a-date") is None
     assert _date(None) is None
+
+
+def test_parse_strips_style_script_head_and_collapses_preheader_spacers():
+    css_bloat = (
+        "@import url('https://fonts.example.test/css');"
+        "@media only screen and (max-width:600px){.hero{color:#111827 !important;}}"
+        * 40
+    )
+    preheader_padding = ("\u200c\u00a0\u034f\u200b\ufeff " * 400)
+    html = (
+        f"<html><head><title>Hidden Title</title><style>{css_bloat}</style></head>"
+        f"<body><style>.inline-css{{background:#991122}}</style>"
+        f"<script>window.__SECRET__='ignore-me';</script>"
+        f"<div>Preview summary{preheader_padding}</div>"
+        f"<p>Confirmation number: <b>AAA-90210</b></p>"
+        f"<p>Verification code: <span>482910</span></p></body></html>"
+    )
+    message = MIMEEmailMessage()
+    message["From"] = "AAA Membership <noreply@aaamembershipoffers.com>"
+    message["Subject"] = "Your membership confirmation"
+    message["Date"] = "Sun, 11 Oct 2026 18:13:47 +0000"
+    # Blank/spacer-only text/plain part should fall back to cleaned HTML
+    message.set_content("\u200c\u00a0 \n\n\u200b")
+    message.add_alternative(html, subtype="html")
+
+    parsed = IMAPEmailAdapter("mail", "imap.example.test", "user")._parse(
+        b"44", message.as_bytes()
+    )
+
+    assert "@media" not in parsed.body
+    assert "@import" not in parsed.body
+    assert "#111827" not in parsed.body
+    assert "#991122" not in parsed.body
+    assert "Hidden Title" not in parsed.body
+    assert "ignore-me" not in parsed.body
+    assert "\u200c" not in parsed.body
+    assert "\u034f" not in parsed.body
+    assert "\ufeff" not in parsed.body
+    assert "Confirmation number: AAA-90210" in parsed.body
+    assert "Verification code: 482910" in parsed.body
+    assert len(parsed.body) < 200
+
