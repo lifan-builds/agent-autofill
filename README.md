@@ -18,8 +18,8 @@
 </p>
 
 <p align="center">
-  <a href="docs/demo/index.html">Interactive demo</a> ·
-  <a href="docs/gtm.md">GTM brief</a> ·
+  <a href="https://clifan.com/agent-autofill/">Website</a> ·
+  <a href="https://clifan.com/agent-autofill/demo/">Interactive demo</a> ·
   <a href="#30-second-path">30-second path</a> ·
   <a href="#choose-your-delivery-mode">Delivery modes</a> ·
   <a href="docs/index.md">Docs hub</a> ·
@@ -147,25 +147,25 @@ also never approves the final browser submission.
 
 ## Install the command
 
-From a checkout, install Agent Autofill as an isolated command-line tool:
+Install directly from GitHub (or `.` inside a local checkout) as an isolated command-line tool:
 
 ```bash
-uv tool install .
+uv tool install git+https://github.com/lifan-builds/agent-autofill.git
 ```
 
 If you use `pipx`, the equivalent is:
 
 ```bash
-pipx install .
+pipx install git+https://github.com/lifan-builds/agent-autofill.git
 ```
 
 Both commands install the declared runtime dependencies and put the
-`agent-autofill` and `agent-autofill-server` commands on your `PATH`. Re-run
-the same command with `--force` when you want to install a newer checkout.
+`agent-autofill` and `agent-autofill-server` commands on your `PATH` (inside a local checkout, `uv tool install .` or `pipx install .` works identically). Re-run
+the same command with `--force` when you want to install a newer commit.
 For contributor development, an editable install is also available with
 `python3 -m pip install -e .`.
 
-For a no-install product tour, open the [interactive synthetic demo](docs/demo/index.html).
+For a no-install product tour, open the [interactive synthetic demo](https://clifan.com/agent-autofill/demo/) or visit [clifan.com/agent-autofill](https://clifan.com/agent-autofill/).
 It does not read your files or make network requests.
 
 ## 30-second path
@@ -489,7 +489,6 @@ matches the job:
 | Find the right command | [CLI cookbook](docs/cli.md) |
 | Recover from Keychain, Chrome, or bridge issues | [Troubleshooting](docs/troubleshooting.md) |
 | Understand the implementation boundary | [Architecture and operator guide](docs/agent-autofill.md) |
-| Evaluate the market and launch sequence | [GTM and competitive brief](docs/gtm.md) |
 | Check platform and feature coverage | [Support matrix](docs/support-matrix.md) |
 | Add code safely | [Package guide](agent_autofill/README.md) |
 | Use the optional Chrome extension | [Extension guide](browser_extension/README.md) |

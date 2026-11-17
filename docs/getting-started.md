@@ -2,7 +2,7 @@
 
 > **Platform:** macOS first. Linux and Windows support are coming soon.
 
-Want to see the flow first? Open the [synthetic interactive demo](demo/index.html).
+Want to see the flow first? Open the [synthetic interactive demo](https://clifan.com/agent-autofill/demo/).
 It is dependency-free and never reads your local data.
 
 Choose one first task after installation:

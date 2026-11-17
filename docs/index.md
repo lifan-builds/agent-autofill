@@ -26,7 +26,7 @@ when a real task needs them.
 
 ## See the product before installing
 
-Open the [interactive synthetic demo](demo/index.html) to walk through the
+Open the [interactive synthetic demo](https://clifan.com/agent-autofill/demo/) or the [overview page](https://clifan.com/agent-autofill/) to walk through the
 macOS-first flow: value-free inventory, exact request, human approval,
 origin-bound delivery, and revocation. It never reads local files or sends a
 network request.
@@ -43,7 +43,6 @@ network request.
 | [Operator guide](agent-autofill.md) | Full connector and MCP reference | Detailed setup, scopes, and compatibility notes |
 | [Extension guide](../browser_extension/README.md) | Optional Chrome handoff | A one-time, origin-bound local fill |
 | [Evaluation set](../evals/form_filling/README.md) | Regression scenarios | Repeatable form-filling checks with explicit submission gates |
-| [GTM and competitive brief](gtm.md) | Launch planning | Direct competitors, open-source building blocks, positioning, and gaps |
 | [Support matrix](support-matrix.md) | Product coverage | macOS-first support and coming-soon platforms |
 | [Integration examples](examples/README.md) | MCP/JSON-lines clients | Metadata-only Python and JavaScript starting points |
 
