@@ -45,5 +45,5 @@ Only propose stable values supplied or explicitly verified by the user (never in
 Cold-start local import from a user-selected Chrome profile (requires local CLI/Python execution; never auto-pick the first profile or force-close a locked Chrome DB):
 
 - **Structured names/contacts/addresses:** Follow [Chrome intake](../agent-autofill-chrome-intake/SKILL.md) (`organize_structured_candidates(read_structured_addresses(profile_dir))` -> resolve ambiguities -> approve exact rows -> save).
-- **Passwords (separate explicit yes/no consent):** Seals Chrome Password Manager entries directly into the encrypted local vault without exposing plaintext to agent context (`references/password-intake.md`).
+- **Passwords (separate explicit yes/no consent):** Seals Chrome Password Manager entries directly into the encrypted local vault without exposing plaintext to agent context (`../agent-autofill-chrome-intake/references/password-intake.md`).
 - **Local payment cards (separate explicit consent):** Run `agent-autofill chrome payment-cards --preview`, then `--confirm-import` (`--record-id`, `--default`, `--hint`, `--institution`, `--display-name`, `--default-card`) after approval; cloud-masked Google Pay rows (`masked_credit_cards`) require `payment-card-add`.
