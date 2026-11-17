@@ -256,6 +256,21 @@ def test_chrome_password_manager_import_reads_account_store(tmp_path):
     assert len(broker.list_credentials()) == 2
 
 
+def test_chrome_password_manager_preview_handles_non_ascii_passwords(tmp_path):
+    profile = _password_profile(
+        tmp_path, _encrypt_chrome_password("pässwörd-🔑", "safe-key")
+    )
+    broker = Broker(Store(":memory:", key=b"u" * 32))
+    import_chrome_password_manager(
+        profile, broker, approved=True, safe_storage_password="safe-key"
+    )
+    preview = preview_chrome_password_manager(
+        profile, broker, safe_storage_password="safe-key"
+    )
+    assert preview["unchanged_count"] == 1
+    assert preview["update_count"] == 0
+
+
 def test_chrome_password_manager_import_requires_explicit_approval(tmp_path):
     profile = _password_profile(
         tmp_path, _encrypt_chrome_password("synthetic-password", "safe-key")

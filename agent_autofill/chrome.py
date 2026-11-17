@@ -430,7 +430,9 @@ def _chrome_password_plan(profile_dir: str | Path, broker: Broker, items: list[d
             added.append(credential_id)
             continue
         password = stored.get("password", "")
-        if isinstance(password, str) and hmac.compare_digest(password, item["password"]):
+        if isinstance(password, str) and hmac.compare_digest(
+            password.encode("utf-8"), item["password"].encode("utf-8")
+        ):
             unchanged.append(credential_id)
         else:
             updated.append(credential_id)
@@ -832,7 +834,8 @@ def preview_chrome_payment_cards(
         if not isinstance(stored_values, dict):
             stored_values = {}
         same_pan = hmac.compare_digest(
-            str(stored_values.get("card_number", "")), item["card_number"]
+            str(stored_values.get("card_number", "")).encode("utf-8"),
+            item["card_number"].encode("utf-8"),
         )
         same_exp = (
             stored_values.get("expiration_month") == item["expiration_month"]
@@ -1032,7 +1035,8 @@ def sync_chrome_payment_cards(
         if stored is not None:
             same_vals = (
                 hmac.compare_digest(
-                    str(stored_values.get("card_number", "")), item["card_number"]
+                    str(stored_values.get("card_number", "")).encode("utf-8"),
+                    item["card_number"].encode("utf-8"),
                 )
                 and stored_values.get("expiration_month") == item["expiration_month"]
                 and stored_values.get("expiration_year") == item["expiration_year"]

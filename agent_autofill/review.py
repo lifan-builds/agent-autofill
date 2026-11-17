@@ -233,7 +233,9 @@ class ReviewSession:
             public, fields, current, origin, purpose, originals = self._group(*groups[gid])
             if public["blocked"]:
                 raise BrokerError(public["blocked"])
-            if not isinstance(change["revision"], str) or not hmac.compare_digest(public["revision"], change["revision"]):
+            if not isinstance(change["revision"], str) or not hmac.compare_digest(
+                public["revision"].encode("utf-8"), change["revision"].encode("utf-8")
+            ):
                 raise BrokerError("A group changed since you reviewed it. Reload and review the current version.")
             # These short-lived grants exist only inside the isolated trial.
             for fid in fields.values():
@@ -291,7 +293,10 @@ def make_server(session, *, port=0):
             return self.headers.get("Host") == f"127.0.0.1:{self.server.server_port}"
 
         def authorized(self):
-            return self.valid_host() and secrets.compare_digest(self.headers.get("X-Review-Token", ""), capability)
+            return self.valid_host() and secrets.compare_digest(
+                self.headers.get("X-Review-Token", "").encode("utf-8"),
+                capability.encode("utf-8"),
+            )
 
         def do_GET(self):
             if not self.valid_host():
