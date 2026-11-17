@@ -1,10 +1,26 @@
 import re
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from agent_autofill.inbox import build_html, serve
+from agent_autofill.inbox import _grant_counts, build_html, serve
 from agent_autofill.service import Broker
 from agent_autofill.storage import Store
+
+
+def test_grant_counts_preserve_invalid_expiry_and_revocation_handling():
+    now = datetime.now(UTC)
+    grants = [
+        {"expires_at": (now + timedelta(hours=1)).replace(tzinfo=None).isoformat()},
+        {"expires_at": (now + timedelta(days=2)).isoformat()},
+        {"expires_at": (now - timedelta(hours=1)).isoformat()},
+        {"expires_at": "invalid"},
+        {},
+        {"revoked": True, "expires_at": "invalid"},
+    ]
+    assert _grant_counts(grants) == {
+        "active": 2, "revoked": 1, "expired": 3, "expiring_24h": 1,
+    }
 
 
 def test_inbox_page_contains_review_metadata_without_secrets():

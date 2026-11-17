@@ -156,18 +156,6 @@ def _post_form(
     return _safe_response_json(raw)
 
 
-def _safe_token_exchange_error(exc: BaseException) -> GoogleOAuthTokenError:
-    """Return a fixed error while retaining provider details only as a cause."""
-
-    return GoogleOAuthTokenError("Google OAuth token exchange failed")
-
-
-def _safe_token_refresh_error(exc: BaseException) -> GoogleOAuthTokenError:
-    """Return a fixed refresh error while retaining details only as a cause."""
-
-    return GoogleOAuthTokenError("Google OAuth token refresh failed")
-
-
 def _expires_in(response: Mapping[str, Any]) -> float:
     value = response.get("expires_in", 3600)
     if isinstance(value, bool):
@@ -364,10 +352,6 @@ class GoogleOAuthTokenProvider:
             response = self._http_post(
                 self.token_endpoint, fields, TOKEN_HTTP_TIMEOUT_SECONDS
             )
-        except GoogleOAuthError as exc:
-            raise _safe_token_refresh_error(exc) from exc
-        except (HTTPError, URLError, TimeoutError, OSError) as exc:
-            raise GoogleOAuthTokenError("Google OAuth token refresh failed") from exc
         except Exception as exc:
             # An injected provider must not be able to leak a response body or
             # token through an exception at the adapter/CLI boundary.
@@ -652,10 +636,6 @@ def authorize_google_desktop(
             response = (http_post or _post_form)(
                 token_endpoint, fields, TOKEN_HTTP_TIMEOUT_SECONDS
             )
-        except GoogleOAuthError as exc:
-            raise _safe_token_exchange_error(exc) from exc
-        except (HTTPError, URLError, TimeoutError, OSError) as exc:
-            raise GoogleOAuthTokenError("Google OAuth token exchange failed") from exc
         except Exception as exc:
             raise GoogleOAuthTokenError("Google OAuth token exchange failed") from exc
         return GoogleOAuthTokenProvider.from_token_response(

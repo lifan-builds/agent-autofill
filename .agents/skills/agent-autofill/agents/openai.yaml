@@ -1,0 +1,6 @@
+interface:
+  display_name: "Agent Autofill"
+  short_description: "Use saved details and confirmed personal context"
+  default_prompt: "Use $agent-autofill to retrieve the details needed for my task."
+policy:
+  allow_implicit_invocation: true

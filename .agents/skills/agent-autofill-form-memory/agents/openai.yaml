@@ -1,0 +1,6 @@
+interface:
+  display_name: "Agent Autofill Form Memory"
+  short_description: "Reuse and review saved information for forms"
+  default_prompt: "Use $agent-autofill-form-memory to prepare this form using my saved details."
+policy:
+  allow_implicit_invocation: false

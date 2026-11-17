@@ -9,85 +9,44 @@ for troubleshooting.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
 from html import escape
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from .form_policy import get_form_submission_policy
 from .service import Broker
+from .status import _grant_attention, _source_statuses
 
 
 def _grant_counts(grants: list[dict]) -> dict[str, int]:
-    now = datetime.now(UTC)
-    result = {"active": 0, "revoked": 0, "expired": 0, "expiring_24h": 0}
-    for grant in grants:
-        if grant.get("revoked"):
-            result["revoked"] += 1
-            continue
-        try:
-            expires_at = datetime.fromisoformat(str(grant.get("expires_at")))
-            if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=UTC)
-        except (TypeError, ValueError):
-            result["expired"] += 1
-            continue
-        if expires_at <= now:
-            result["expired"] += 1
-        else:
-            result["active"] += 1
-            if expires_at - now <= timedelta(hours=24):
-                result["expiring_24h"] += 1
-    return result
+    counts = _grant_attention(grants)
+    expired = counts["expired"] + counts["invalid_expiry"]
+    return {
+        "active": len(grants) - counts["revoked"] - expired,
+        "revoked": counts["revoked"],
+        "expired": expired,
+        "expiring_24h": counts["expiring_24h"],
+    }
 
 
 def _source_overview(broker: Broker, sources: list[dict]) -> list[dict[str, str]]:
-    unavailable: set[str] = getattr(broker, "unavailable_email_sources", set())
-    email_adapters = getattr(broker, "email_adapters", {})
-    message_adapters = getattr(broker, "message_adapters", {})
-    result = []
-    for source in sources:
-        source_id = source.get("source_id")
-        source_key = str(source_id) if source_id is not None else ""
-        kind = str(source.get("kind", "unknown"))
-        status = "configured"
-        detail = "Configured; verify before use"
-        if kind == "email":
-            if source_key in unavailable:
-                status = "needs attention"
-                detail = "Unavailable; run the read-only email check"
-            elif source_key in email_adapters:
-                status = "ready"
-                detail = "Read-only adapter connected"
-            elif broker.store.get("connection", source_key):
-                detail = "Saved connector; run the read-only email check"
-            else:
-                status = "needs attention"
-                detail = "No connector configuration found"
-        elif kind == "messages":
-            if source_key in message_adapters:
-                status = "ready"
-                detail = "Read-only adapter connected"
-            else:
-                detail = "Configured; open the local source before reading"
-        result.append(
-            {
-                "label": str(source.get("label") or kind.title()),
-                "kind": kind,
-                "status": status,
-                "detail": detail,
-            }
-        )
-    return result
+    return [
+        {
+            "label": str(src.get("label") or st["kind"].title()),
+            "kind": st["kind"],
+            "status": st["status"].replace("-", " "),
+            "detail": (
+                f"{st['summary']}; {st['next_action'][0].lower()}{st['next_action'][1:]}"
+                if st["next_action"] and st["status"] != "ready"
+                else st["summary"]
+            ),
+        }
+        for src, st in zip(sources, _source_statuses(broker), strict=False)
+    ]
 
 
 def _attention_items(
-    sources: list[dict],
     source_overview: list[dict[str, str]],
-    profile_fields: list[dict],
-    credentials: list[dict],
-    financial_records: list[dict],
     agents: list[dict],
-    grants: list[dict],
 ) -> list[str]:
     attention: list[str] = []
     for source in source_overview:
@@ -131,15 +90,7 @@ def build_html(broker: Broker) -> str:
     submission_policy = get_form_submission_policy(broker)
     source_overview = _source_overview(broker, sources)
     grant_counts = _grant_counts(grants)
-    attention = _attention_items(
-        sources,
-        source_overview,
-        profile_fields,
-        credentials,
-        financial_records,
-        agents,
-        grants,
-    )
+    attention = _attention_items(source_overview, agents)
     summary = {
         "record_counts": record_counts,
         "metadata_preview_limit": 100,

@@ -204,7 +204,7 @@ def _safe_email_match_metadata(matches: object) -> list[dict[str, object]]:
     return safe
 
 
-def _grant_attention(grants: list[dict]) -> dict[str, object]:
+def _grant_attention(grants: list[dict]) -> dict[str, int]:
     """Count revoked and soon-to-expire grants using only safe metadata."""
 
     now = datetime.now(UTC)
