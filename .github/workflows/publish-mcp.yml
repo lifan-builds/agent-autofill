@@ -24,9 +24,11 @@ jobs:
           set -euo pipefail
           archive="mcp-publisher_linux_amd64.tar.gz"
           base_url="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}"
+          ver="${MCP_PUBLISHER_VERSION#v}"
+          checksums="registry_${ver}_checksums.txt"
           curl --fail --location --silent --show-error -O "${base_url}/${archive}"
-          curl --fail --location --silent --show-error -O "${base_url}/checksums.txt"
-          grep "${archive}" checksums.txt | sha256sum --check
+          curl --fail --location --silent --show-error -O "${base_url}/${checksums}"
+          grep "${archive}" "${checksums}" | sha256sum --check
           tar -xzf "${archive}"
 
       - name: Login to Official MCP Registry via GitHub OIDC
