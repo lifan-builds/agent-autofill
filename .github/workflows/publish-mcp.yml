@@ -28,7 +28,7 @@ jobs:
           checksums="registry_${ver}_checksums.txt"
           curl --fail --location --silent --show-error -O "${base_url}/${archive}"
           curl --fail --location --silent --show-error -O "${base_url}/${checksums}"
-          grep "${archive}" "${checksums}" | sha256sum --check
+          grep -E "[[:space:]]${archive}$" "${checksums}" | sha256sum --check
           tar -xzf "${archive}"
 
       - name: Login to Official MCP Registry via GitHub OIDC
