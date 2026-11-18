@@ -76,10 +76,14 @@ _TRUSTED_LOCAL_READ_OPERATIONS = {
     "messages.read",
 }
 _OTP_ORIGIN_POLICIES = {"target-origin", "mailbox-read"}
-# Exact aliases documented by OpenAI's login-verification help article.
+# Exact aliases documented by each service's verification-email domain.
 _OTP_SENDER_DOMAINS = {
+    "accountscenter.facebook.com": {"facebookmail.com", "email.meta.com", "account.meta.com"},
     "auth.openai.com": {"tm.openai.com", "tm1.openai.com"},
     "chatgpt.com": {"tm.openai.com", "tm1.openai.com"},
+    "facebook.com": {"facebookmail.com", "email.meta.com", "account.meta.com"},
+    "m.facebook.com": {"facebookmail.com", "email.meta.com", "account.meta.com"},
+    "www.facebook.com": {"facebookmail.com", "email.meta.com", "account.meta.com"},
 }
 _FORBIDDEN_TRANSIENT_PARTS = {
     "access_token",

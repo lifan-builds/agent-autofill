@@ -63,6 +63,13 @@ def test_documented_openai_sender_aliases(sender):
     assert b.request_auth_code("service:test", "mail", "https://auth.openai.com", "login")["code"] == "123456"
 
 
+@pytest.mark.parametrize("origin", ["https://www.facebook.com", "https://m.facebook.com", "https://facebook.com"])
+def test_documented_facebook_sender_alias(origin):
+    b = broker()
+    b.email["mail"] = [message("registration@facebookmail.com", body="FB-85673 is your confirmation code")]
+    assert b.request_auth_code("service:test", "mail", origin, "account_registration")["code"] == "85673"
+
+
 @pytest.mark.parametrize(("messages", "reason"), [
     ([], "otp_not_found"), ([message(age=400)], "otp_stale"),
     ([message(body="Your code is 123456 and your code is 654321")], "otp_ambiguous"),
