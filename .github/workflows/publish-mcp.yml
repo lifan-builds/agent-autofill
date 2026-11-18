@@ -1,0 +1,36 @@
+name: publish-mcp
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      MCP_PUBLISHER_VERSION: v1.8.9
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download and verify mcp-publisher
+        run: |
+          set -euo pipefail
+          archive="mcp-publisher_linux_amd64.tar.gz"
+          base_url="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}"
+          curl --fail --location --silent --show-error -O "${base_url}/${archive}"
+          curl --fail --location --silent --show-error -O "${base_url}/checksums.txt"
+          grep "${archive}" checksums.txt | sha256sum --check
+          tar -xzf "${archive}"
+
+      - name: Login to Official MCP Registry via GitHub OIDC
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish server.json to Official MCP Registry
+        run: ./mcp-publisher publish
