@@ -147,16 +147,16 @@ also never approves the final browser submission.
 
 ## Install the command
 
-Install directly from GitHub (or `.` inside a local checkout) as an isolated command-line tool:
+Install directly from [PyPI](https://pypi.org/project/agent-autofill/) (or `.` inside a local checkout) as an isolated command-line tool:
 
 ```bash
-uv tool install git+https://github.com/lifan-builds/agent-autofill.git
+uv tool install agent-autofill
 ```
 
 If you use `pipx`, the equivalent is:
 
 ```bash
-pipx install git+https://github.com/lifan-builds/agent-autofill.git
+pipx install agent-autofill
 ```
 
 Both commands install the declared runtime dependencies and put the
