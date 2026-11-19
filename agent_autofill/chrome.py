@@ -965,14 +965,13 @@ def sync_chrome_payment_cards(
         clean_hint is not None
         or clean_institution is not None
         or clean_display_name is not None
-    ):
-        if override_target_rid is None:
-            if len(selected_cards) == 1:
-                override_target_rid = selected_cards[0]["record_id"]
-            elif len(selected_cards) > 1:
-                raise ChromeImportError(
-                    "Multiple local Chrome payment cards found; pass --record-id or --default-card when setting --hint, --institution, or --display-name"
-                )
+    ) and override_target_rid is None:
+        if len(selected_cards) == 1:
+            override_target_rid = selected_cards[0]["record_id"]
+        elif len(selected_cards) > 1:
+            raise ChromeImportError(
+                "Multiple local Chrome payment cards found; pass --record-id or --default-card when setting --hint, --institution, or --display-name"
+            )
 
     added_count = 0
     updated_count = 0
@@ -1014,7 +1013,7 @@ def sync_chrome_payment_cards(
 
         hints: dict[str, str] = {}
         for hk in ("hint", "aliases", "institution", "nickname", "network"):
-            if hk in existing_hints and existing_hints[hk]:
+            if existing_hints.get(hk):
                 hints[hk] = existing_hints[hk]
         if item["network"]:
             hints["network"] = item["network"]

@@ -414,16 +414,14 @@ def masked_recipient_initials(
         return None
 
     parts: list[str] = []
-    if first_tokens:
-        if len(first_tokens[0]) >= 2 or last_tokens:
-            init = _initial(first_tokens[0])
-            if init:
-                parts.append(init)
-    if last_tokens:
-        if len(last_tokens[-1]) >= 2 or parts:
-            init = _initial(last_tokens[-1])
-            if init:
-                parts.append(init)
+    if first_tokens and (len(first_tokens[0]) >= 2 or last_tokens):
+        init = _initial(first_tokens[0])
+        if init:
+            parts.append(init)
+    if last_tokens and (len(last_tokens[-1]) >= 2 or parts):
+        init = _initial(last_tokens[-1])
+        if init:
+            parts.append(init)
     return " ".join(parts) if parts else None
 
 
@@ -475,9 +473,7 @@ def _origin_tuple(raw: str) -> tuple[str, str, int | None] | None:
     if not host:
         return None
     scheme = parsed.scheme.lower()
-    if scheme == "https" and port == 443:
-        port = None
-    elif scheme == "http" and port == 80:
+    if (scheme == "https" and port == 443) or (scheme == "http" and port == 80):
         port = None
     return (scheme, host, port)
 

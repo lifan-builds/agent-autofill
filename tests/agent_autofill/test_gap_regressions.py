@@ -1,6 +1,6 @@
-from datetime import UTC, datetime, timedelta
 import io
 import json
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -10,7 +10,12 @@ from agent_autofill.form_memory import profile_group_id
 from agent_autofill.imap_adapter import IMAPEmailAdapter
 from agent_autofill.models import EmailMessage
 from agent_autofill.server import _call
-from agent_autofill.service import AuthCodeError, AuthorizationError, Broker, BrokerError
+from agent_autofill.service import (
+    AuthCodeError,
+    AuthorizationError,
+    Broker,
+    BrokerError,
+)
 from agent_autofill.status import (
     _installation_status,
     _startup_failure_snapshot,

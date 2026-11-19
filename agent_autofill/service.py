@@ -721,9 +721,7 @@ def _origin_matches(left: str | None, right: str | None) -> bool:
             port = -1
         host = (parsed.hostname or "").rstrip(".").lower()
         scheme = parsed.scheme.lower()
-        if scheme == "https" and port == 443:
-            port = None
-        elif scheme == "http" and port == 80:
+        if (scheme == "https" and port == 443) or (scheme == "http" and port == 80):
             port = None
         return (scheme, host, port)
 
@@ -3332,33 +3330,34 @@ class Broker:
                 )
                 state_code = safe_state_code(state_raw)
                 country_code = safe_country_code(country_raw)
-                if confirmed_meaning and confirmed_meaning.get("subject") == "self":
-                    matches_self = True
-                elif email_val and email_val in self_emails:
-                    matches_self = True
-                elif (
-                    isinstance(first_val, str)
-                    and isinstance(last_val, str)
-                    and (
-                        (first_val.strip().casefold(), last_val.strip().casefold())
-                        in self_name_pairs
-                        or normalize_form_label(f"{first_val} {last_val}")
-                        in self_full_names
-                    )
-                ):
-                    matches_self = True
-                elif isinstance(full_val, str) and (
-                    normalize_form_label(full_val) in self_full_names
+                matches_self = bool(
+                    (confirmed_meaning and confirmed_meaning.get("subject") == "self")
+                    or (email_val and email_val in self_emails)
                     or (
-                        len(full_val.split()) == 2
+                        isinstance(first_val, str)
+                        and isinstance(last_val, str)
                         and (
-                            full_val.split()[0].casefold(),
-                            full_val.split()[1].casefold(),
+                            (first_val.strip().casefold(), last_val.strip().casefold())
+                            in self_name_pairs
+                            or normalize_form_label(f"{first_val} {last_val}")
+                            in self_full_names
                         )
-                        in self_name_pairs
                     )
-                ):
-                    matches_self = True
+                    or (
+                        isinstance(full_val, str)
+                        and (
+                            normalize_form_label(full_val) in self_full_names
+                            or (
+                                len(full_val.split()) == 2
+                                and (
+                                    full_val.split()[0].casefold(),
+                                    full_val.split()[1].casefold(),
+                                )
+                                in self_name_pairs
+                            )
+                        )
+                    )
+                )
 
             summary = build_group_summary(
                 group_label=explicit_label,
