@@ -29,6 +29,7 @@ Focused companion skills & references:
   - `delivery="direct"` with `target_origin`, `purpose`, and `field_ids` (`["username", "password"]`) otherwise; ask only if multiple accounts remain ambiguous or missing.
 - **Financial records (`match_financial_records` -> `request_financial_fields`):** Match by `card_suffix` (4- or 5-digit ending—never truncate 5 digits to 4), `query` / `hint` (e.g. `"C1vx"`), `is_default=True`, and expiry metadata. If the site already stores the card, select it on-page by last4 + expiry without reading vault fields; otherwise request only the needed checkout `field_ids` (`card_number`, `expiration_month`, `billing_postal_code`, etc.).
 - **Email & SMS OTPs:** Call `request_auth_code_for_recipient` (or `request_auth_code`) with exact `target_origin`, `purpose`, mailbox, and freshness window, or read-only Messages within approved `conversation_scope`. Treat `otp_service_mismatch` as a manual check rather than widening to mailbox-wide search unless mailbox-wide retrieval was explicitly requested (`mailbox-read`).
+- **Mailbox search (`search_email`):** `IMAPEmailAdapter` runs `UID SEARCH TEXT "<query>"` (literal substring match, not Gmail boolean syntax on standard IMAP); use short single-term queries (e.g. `"failed"`, `"error"`, `"github.com"`) rather than `OR`/parenthesized expressions.
 - **Missing required field:** Follow the single-prompt check-in (**use once** | **save to Agent Autofill** | **skip**) in [Form memory](../agent-autofill-form-memory/SKILL.md).
 
 ## 2. Propose & write saved entries
