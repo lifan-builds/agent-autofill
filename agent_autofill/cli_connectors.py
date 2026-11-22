@@ -81,7 +81,7 @@ def _save_imap_configuration(
     except Exception as exc:
         try:
             keyring.delete_secret(secret_name)
-        except Exception:  # noqa: BLE001, S110 - cleanup must preserve the safe original error
+        except (OSError, RuntimeError):
             pass
         raise SystemExit(
             f"Could not save {provider_name} connector secret"

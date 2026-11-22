@@ -304,10 +304,8 @@ class IMAPEmailAdapter:
     def _logout(conn) -> None:
         try:
             conn.logout()
-        except Exception:  # noqa: BLE001, S110 - cleanup must not expose provider diagnostics
-            # A failed network connection must not mask the useful provider
-            # error or leak dependency-specific diagnostics to the caller.
-            pass
+        except (imaplib.IMAP4.error, OSError):
+            return
 
     def check_connection(self) -> None:
         """Authenticate and select the configured mailbox without reading it."""
