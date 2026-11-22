@@ -10,6 +10,7 @@
 </p>
 
 <p align="center">
+  <a href="https://pypi.org/project/agent-autofill/"><img alt="PyPI version" src="https://img.shields.io/pypi/v/agent-autofill?color=3776AB"></a>
   <a href="https://www.python.org/downloads/"><img alt="Python 3.11 or newer" src="https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white"></a>
   <a href="https://modelcontextprotocol.io/"><img alt="MCP local transport" src="https://img.shields.io/badge/MCP-local%20transport-6E56CF"></a>
   <img alt="Local first" src="https://img.shields.io/badge/storage-local--first-0F766E">
@@ -21,7 +22,7 @@
   <a href="https://clifan.com/agent-autofill/">Website</a> ·
   <a href="https://clifan.com/agent-autofill/demo/">Interactive demo</a> ·
   <a href="#30-second-path">30-second path</a> ·
-  <a href="#choose-your-delivery-mode">Delivery modes</a> ·
+  <a href="#choose-your-delivery-mode-in-the-cli">Delivery modes</a> ·
   <a href="docs/index.md">Docs hub</a> ·
   <a href="docs/agent-autofill.md">Operator guide</a>
 </p>
@@ -30,6 +31,25 @@ Agent Autofill is a local-first information broker for agents. It keeps a
 user's profile, read-only mail and Messages sources, website credentials, and
 financial records in an encrypted local store, then returns only the
 information an authenticated workflow asks for.
+
+**Try it now** with a memory-only synthetic tour. It opens no database, Keychain,
+browser, mailbox, or Messages data:
+
+```bash
+uvx agent-autofill demo
+```
+
+**Connect it to your agent** (Claude Desktop, Cursor, Codex, or Antigravity):
+
+```bash
+uv tool install agent-autofill
+agent-autofill start                                 # create the encrypted local vault
+agent-autofill mcp-install --client claude --write   # or cursor, codex, antigravity
+```
+
+If it saves you from retyping an address or digging for an OTP,
+[a star](https://github.com/lifan-builds/agent-autofill) helps other agent
+builders find it.
 
 > **Platform:** macOS first. Linux and Windows support are coming soon.
 > The current release uses macOS Keychain, Chrome, and Messages integrations.
@@ -164,6 +184,27 @@ Both commands install the declared runtime dependencies and put the
 the same command with `--force` when you want to install a newer commit.
 For contributor development, an editable install is also available with
 `python3 -m pip install -e .`.
+
+### Connect an MCP client
+
+`mcp-install` pairs a local service identity in Keychain and merges the
+`agent-autofill` stdio server into the client's MCP config. Run it without
+`--write` to preview the JSON first:
+
+```bash
+agent-autofill mcp-install --client cursor
+```
+
+```json
+{
+  "mcpServers": {
+    "agent-autofill": {
+      "command": "agent-autofill-server",
+      "args": ["--service", "cursor"]
+    }
+  }
+}
+```
 
 For a no-install product tour, open the [interactive synthetic demo](https://clifan.com/agent-autofill/demo/) or visit [clifan.com/agent-autofill](https://clifan.com/agent-autofill/).
 It does not read your files or make network requests.
