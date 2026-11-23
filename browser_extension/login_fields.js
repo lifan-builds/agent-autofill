@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 lifan-builds. Agent Autofill; Section 7 attribution terms in ATTRIBUTION.md.
 // Runs in the selected document. Never returns field values to the popup.
 function loginPage(action, expectedOrigin, username, password) {
   if (location.origin !== expectedOrigin) return {state: "origin_changed"};

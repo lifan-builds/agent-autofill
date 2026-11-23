@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 lifan-builds. Agent Autofill; Section 7 attribution terms in ATTRIBUTION.md.
 """Read-only IMAP adapter for user-owned mailboxes.
 
 Credentials are supplied by a caller that owns them (normally Keychain). This

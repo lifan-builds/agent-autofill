@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 lifan-builds. Agent Autofill; Section 7 attribution terms in ATTRIBUTION.md.
 import json
 from datetime import datetime
 from typing import ClassVar
@@ -71,6 +73,15 @@ def test_cli_uses_agent_autofill_name_and_database_default():
 
     assert parser.prog == "agent-autofill"
     assert parser.parse_args(["init"]).db == "agent-autofill.sqlite3"
+
+
+def test_cli_version_prints_agpl_attribution(capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--version"])
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "Based on Agent Autofill by lifan-builds (https://github.com/lifan-builds/agent-autofill)" in out
+    assert "AGPL-3.0-only" in out
 
 
 def test_cli_progressive_onboarding_aliases_and_safe_views_are_available():

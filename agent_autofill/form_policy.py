@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 lifan-builds. Agent Autofill; Section 7 attribution terms in ATTRIBUTION.md.
 """Local policy for acting-agent form submission.
 
 Agent Autofill does not drive a browser.  This small policy object gives an

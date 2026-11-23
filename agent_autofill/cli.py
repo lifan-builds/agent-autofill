@@ -1,12 +1,16 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 lifan-builds. Agent Autofill; Section 7 attribution terms in ATTRIBUTION.md.
 """Command-line setup and administration for the local broker."""
 
 import argparse
 import getpass
 import json
 import re
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any, cast
 
+from . import ATTRIBUTION
 from . import cli_connectors as _connector_flows
 from .chrome import (
     ChromeImportError,
@@ -1072,6 +1076,14 @@ def _parser() -> argparse.ArgumentParser:
             "  %(prog)s chrome profiles       show the Default profile only\n"
             "  %(prog)s chrome import         review/import Default profile data\n\n"
             "Use `%(prog)s <command> --help` for examples and options."
+        ),
+    )
+    p.add_argument(
+        "--version",
+        action="version",
+        version=(
+            f"agent-autofill {version('agent-autofill')}\n{ATTRIBUTION}\n"
+            "License: AGPL-3.0-only with Section 7 attribution terms (ATTRIBUTION.md)"
         ),
     )
     p.add_argument(

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 lifan-builds. Agent Autofill; Section 7 attribution terms in ATTRIBUTION.md.
 from agent_autofill import google_oauth
 from agent_autofill.server import _register_connections
 from agent_autofill.service import Broker

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 lifan-builds. Agent Autofill; Section 7 attribution terms in ATTRIBUTION.md.
 """Owner-operated review of ordinary profile meanings in an isolated trial.
 
 The server never opens a live vault for writing. Browser capabilities are

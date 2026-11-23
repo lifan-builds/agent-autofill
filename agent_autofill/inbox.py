@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 lifan-builds. Agent Autofill; Section 7 attribution terms in ATTRIBUTION.md.
 """Small loopback-only review surface for the broker.
 
 The first view is deliberately a value-free overview. It answers what is

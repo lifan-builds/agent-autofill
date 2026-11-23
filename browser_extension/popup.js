@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 lifan-builds. Agent Autofill; Section 7 attribution terms in ATTRIBUTION.md.
 const DEFAULT_BRIDGE_URL = "http://127.0.0.1:8766";
 const agentInput = document.getElementById("agent");
 const handleInput = document.getElementById("handle");

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 lifan-builds. Agent Autofill; Section 7 attribution terms in ATTRIBUTION.md.
 """Loopback-only bridge for one-time browser credential filling.
 
 The browser helper presents a short-lived handle obtained from the broker.

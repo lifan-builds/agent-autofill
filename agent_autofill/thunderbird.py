@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 lifan-builds. Agent Autofill; Section 7 attribution terms in ATTRIBUTION.md.
 """Read-only Thunderbird OAuth account discovery and verification.
 
 Thunderbird stores OAuth refresh tokens in NSS-encrypted ``logins.json``.

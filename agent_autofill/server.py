@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 lifan-builds. Agent Autofill; Section 7 attribution terms in ATTRIBUTION.md.
 """Minimal JSON-lines MCP-style transport for local clients."""
 
 import argparse
@@ -6,6 +8,7 @@ import os
 import sys
 from importlib.metadata import version
 
+from . import ATTRIBUTION
 from .catalog import TOOLS
 from .cli_connectors import _build_saved_email_adapter
 from .context_memory import ContextMemory
@@ -204,6 +207,7 @@ def main(argv=None):
                         },
                         "serverInfo": {
                             "name": "agent-autofill",
+                            "title": ATTRIBUTION,
                             "version": version("agent-autofill"),
                         },
                     }

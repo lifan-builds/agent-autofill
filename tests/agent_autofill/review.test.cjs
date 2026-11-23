@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 lifan-builds. Agent Autofill; Section 7 attribution terms in ATTRIBUTION.md.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {parseBatch, draftChoice} = require('../../agent_autofill/review_assets/review.js');

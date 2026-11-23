@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 lifan-builds. Agent Autofill; Section 7 attribution terms in ATTRIBUTION.md.
 """Google installed-app OAuth for read-only Gmail access.
 
 The module deliberately owns only the OAuth boundary.  It opens a short-lived

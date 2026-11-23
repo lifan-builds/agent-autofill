@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 lifan-builds. Agent Autofill; Section 7 attribution terms in ATTRIBUTION.md.
 """Value-free readiness and dashboard projections for the local broker.
 
 This module owns presentation-facing status calculations.  It deliberately

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +7,8 @@ name = "agent-autofill"
 version = "0.1.2"
 description = "Local-first personal information broker for AI agents"
 readme = "README.md"
+license = "AGPL-3.0-only"
+license-files = ["LICENSE", "ATTRIBUTION.md"]
 requires-python = ">=3.11"
 dependencies = [
   "cryptography>=42",

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 lifan-builds. Agent Autofill; Section 7 attribution terms in ATTRIBUTION.md.
 """Progressive no-submit task replay. Reports contain aggregate results only.
 
 Run with PYTHONPATH=. uv run python evals/context_memory/run.py.

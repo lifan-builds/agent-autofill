@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 lifan-builds. Agent Autofill; Section 7 attribution terms in ATTRIBUTION.md.
 """Fixture-backed setup to persisted JSON-lines server integration."""
 
 import hashlib
@@ -241,6 +243,7 @@ def test_setup_to_json_lines_reads_and_persisted_otp_consumption(
     )
     assert len(responses) == 5
     assert responses[0]["result"]["serverInfo"]["name"] == "agent-autofill"
+    assert "by lifan-builds" in responses[0]["result"]["serverInfo"]["title"]
     assert _result(responses[1])[FIELD_ID]["value"] == PROFILE_VALUE
     assert _result(responses[2])[0]["provenance"] == {
         "account_id": "personal",

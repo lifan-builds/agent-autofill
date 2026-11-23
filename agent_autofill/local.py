@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 lifan-builds. Agent Autofill; Section 7 attribution terms in ATTRIBUTION.md.
 """Local service onboarding for installed Agent Autofill clients.
 
 The local connector deliberately keeps the service token out of command lines,
