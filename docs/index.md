@@ -62,7 +62,6 @@ to type, submit, or stop after applying the confirmation policy.
 - [Package and module guide](../agent_autofill/README.md)
 - [Reusable local-consumer skill](../.agents/skills/agent-autofill/SKILL.md)
 - [Chrome intake skill](../.agents/skills/agent-autofill-chrome-intake/SKILL.md)
-- [Architecture and market notes](../RESEARCH.md)
 
 When writing docs or examples, use synthetic values. Do not include real
 passwords, OTPs, mailbox tokens, payment values, or one-time handles.
