@@ -16,7 +16,7 @@ If either port is occupied, stop the fixture and close your existing test bridge
 before retrying. Do not terminate an unrelated process.
 
 1. In Chrome's extension manager, load or reload `browser_extension/` and verify
-   version **0.1.2**. Open its popup, generate a pairing code, and enter the
+   version **0.1.3**. Open its popup, generate a pairing code, and enter the
    extension ID and code into the fixture's terminal prompts. Do not share the
    code in chat. Set the bridge URL to `http://127.0.0.1:8766` if needed.
 2. Open `http://127.0.0.1:8767`, refresh requests, and fill the **normal** request.

@@ -1,14 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.1.3
 
 - Relicensed as open source `AGPL-3.0-only` with Section 7 attribution terms
   (`LICENSE`, `ATTRIBUTION.md`). `agent-autofill --version` and MCP
   `serverInfo.title` print the attribution. Contributions need a one-time CLA
   (`CLA.md`).
 - Added a synthetic, dependency-free macOS-first product demo.
-- Added the competitive and GTM brief, support matrix, security policy, and
-  public release guidance.
+- Added the support matrix, security policy, and public release guidance.
 - Clarified the Bitwarden parity foundation and the remaining platform and
   distribution gaps.
 
