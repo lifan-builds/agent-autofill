@@ -1342,14 +1342,20 @@ def _parser() -> argparse.ArgumentParser:
         help="required acknowledgement after reviewing the metadata-only proposal",
     )
     messages = sub.add_parser(
-        "messages-add", help="configure the local macOS Messages database"
+        "messages-add", help="configure local macOS Messages access (no Full Disk Access required)"
     )
     messages.add_argument("--source-id", default="messages")
     messages.add_argument("--database")
+    messages.add_argument(
+        "--backend",
+        choices=("auto", "ax", "db"),
+        default="auto",
+        help="read-only backend: auto (faster-mac-use AX first, no Full Disk Access), ax, or db",
+    )
     messages.add_argument("--label", default="Mac Messages")
     messages_test = sub.add_parser(
         "messages-test",
-        help="verify read-only access to a configured macOS Messages database",
+        help="verify read-only access to the configured macOS Messages source",
     )
     messages_test.add_argument("source_id", nargs="?", default="messages")
     sources = sub.add_parser("sources", help="list configured sources")
@@ -2137,13 +2143,18 @@ def main(argv=None) -> int:
                 "kind": "messages",
                 "label": args.label,
                 "database": args.database,
+                "backend": args.backend,
             },
         )
         broker.add_source(args.source_id, "messages", args.label)
         print(f"Configured read-only Messages source {args.source_id}")
         try:
-            MacMessagesAdapter(args.database).check_connection()
-            print("Messages read-only check passed.")
+            check = MacMessagesAdapter(
+                args.database, backend=args.backend
+            ).check_connection()
+            print(
+                f"Messages read-only check passed (backend: {check.get('backend', args.backend)})."
+            )
         except MessagesUnavailable as exc:
             print(f"Warning: {exc}")
             print(f"Fix: {exc.next_action}")
@@ -2156,7 +2167,10 @@ def main(argv=None) -> int:
                 f"No saved Messages source named {args.source_id}; run 'agent-autofill messages-add' first"
             )
         try:
-            MacMessagesAdapter(config.get("database")).check_connection()
+            check = MacMessagesAdapter(
+                config.get("database"),
+                backend=config.get("backend", "auto"),
+            ).check_connection()
         except MessagesUnavailable as exc:
             raise SystemExit(f"{exc}\nFix: {exc.next_action}") from exc
         print(
@@ -2165,6 +2179,7 @@ def main(argv=None) -> int:
                     "source_id": config.get("source_id", args.source_id),
                     "kind": "messages",
                     "label": config.get("label") or args.source_id,
+                    "backend": check.get("backend", config.get("backend", "auto")),
                     "status": "ready",
                 },
                 indent=2,

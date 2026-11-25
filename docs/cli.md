@@ -117,7 +117,7 @@ af messages-test
 af sources
 ```
 
-For SMS 2FA via Mac, enable **Settings > Apps > Messages > Text Message Forwarding** on your iPhone and grant **Full Disk Access** (System Settings > Privacy & Security > Full Disk Access) to the terminal or host app running Agent Autofill, then verify with `af messages-test` or `af doctor --task messages`.
+For SMS 2FA via Mac, enable **Settings > Apps > Messages > Text Message Forwarding** on your iPhone and keep **Messages.app** open in the background — Agent Autofill reads sidebar previews via `faster-mac-use` Accessibility with zero focus theft and no Full Disk Access required. Verify with `af messages-test` or `af doctor --task messages`.
 
 Gmail and Thunderbird setup are documented in the [operator guide](agent-autofill.md).
 Source secrets are stored in the operating-system credential store. Remove a

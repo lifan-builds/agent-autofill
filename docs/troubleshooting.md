@@ -117,9 +117,10 @@ agent-autofill --db ~/.agent-autofill.sqlite3 email-test <account-id>
 agent-autofill --db ~/.agent-autofill.sqlite3 messages-test
 ```
 
-### Mac Messages 2FA reports permission denied or missing SMS codes
+### Mac Messages 2FA reports unavailable or missing SMS codes
 
-- `messages_permission_denied`: macOS blocks reading `~/Library/Messages/chat.db` until the launching terminal or host app has **Full Disk Access** in **System Settings > Privacy & Security > Full Disk Access**. Grant access, restart the terminal/host app, and rerun `agent-autofill messages-test`. Agent Autofill reads `chat.db` read-only in place and never copies it.
+- `messages_app_not_running`: keep the macOS **Messages** app open (it can stay in the background — no focus theft) and rerun `agent-autofill messages-test`. Full Disk Access is not required.
+- `messages_accessibility_denied`: grant **Accessibility** permission to `faster-mac-use` (`fmu-ax`) in **System Settings > Privacy & Security > Accessibility**, then rerun `agent-autofill messages-test`.
 - `otp_not_found` for SMS codes: confirm your iPhone forwards SMS texts to this Mac under **iPhone Settings > Apps > Messages > Text Message Forwarding** and that the code arrived in the Mac Messages app.
 - `otp_service_mismatch`: `request_messages_auth_code` defaults to `origin_policy="target-origin"` (matching Apple WebOTP `@domain #code`, domain, or service brand). For generic short-code texts that omit the service name, specify `sender` or explicitly select `origin_policy="messages-read"`.
 

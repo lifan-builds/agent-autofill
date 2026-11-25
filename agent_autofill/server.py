@@ -142,7 +142,10 @@ def _register_connections(broker: Broker, keyring: KeyringProvider) -> None:
         elif config.get("kind") == "messages":
             broker.register_message_adapter(
                 config["source_id"],
-                MacMessagesAdapter(config.get("database")),
+                MacMessagesAdapter(
+                    config.get("database"),
+                    backend=config.get("backend", "auto"),
+                ),
                 config.get("label"),
             )
 

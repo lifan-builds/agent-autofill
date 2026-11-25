@@ -182,9 +182,14 @@ def _source_statuses(broker: Broker) -> list[dict[str, str]]:
                 checker = getattr(adapter, "check_connection", None)
                 if callable(checker):
                     try:
-                        checker()
+                        check = checker()
                         status = "ready"
-                        summary = "A read-only Messages adapter is connected"
+                        backend = check.get("backend") if isinstance(check, dict) else None
+                        summary = (
+                            "A read-only Messages adapter is connected (via faster-mac-use AX)"
+                            if backend == "ax"
+                            else "A read-only Messages adapter is connected"
+                        )
                     except MessagesUnavailable as exc:
                         status = "needs-attention"
                         summary = str(exc)
@@ -196,9 +201,17 @@ def _source_statuses(broker: Broker) -> list[dict[str, str]]:
                 conn = broker.store.get("connection", source_key)
                 if isinstance(conn, dict) and conn.get("kind") == "messages":
                     try:
-                        MacMessagesAdapter(conn.get("database")).check_connection()
+                        check = MacMessagesAdapter(
+                            conn.get("database"),
+                            backend=conn.get("backend", "auto"),
+                        ).check_connection()
                         status = "ready"
-                        summary = "Read-only Mac Messages database is accessible"
+                        backend = check.get("backend") if isinstance(check, dict) else None
+                        summary = (
+                            "Read-only Mac Messages access is ready (via faster-mac-use AX)"
+                            if backend == "ax"
+                            else "Read-only Mac Messages database is accessible"
+                        )
                     except MessagesUnavailable as exc:
                         status = "needs-attention"
                         summary = str(exc)
@@ -275,13 +288,16 @@ def _local_source_snapshot() -> dict[str, object]:
     except OSError:
         chrome_count = 0
         chrome_status = "unavailable"
-    messages_path = Path.home() / "Library" / "Messages" / "chat.db"
     try:
-        MacMessagesAdapter(messages_path).check_connection()
+        MacMessagesAdapter().check_connection()
         messages_status = "available"
     except MessagesUnavailable as exc:
         if exc.reason == "messages_not_found":
             messages_status = "not-found"
+        elif exc.reason == "messages_app_not_running":
+            messages_status = "app-not-running"
+        elif exc.reason == "messages_accessibility_denied":
+            messages_status = "accessibility-denied"
         elif exc.reason == "messages_permission_denied":
             messages_status = "permission-denied"
         else:

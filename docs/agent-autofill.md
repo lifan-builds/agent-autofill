@@ -495,13 +495,17 @@ This proves storage, connector reconstruction, authorization, serialization,
 and protocol behavior with fakes; it does not establish installation,
 subprocess, live Keychain, live IMAP, or live Gmail/provider acceptance.
 
-macOS requires granting the terminal or host process Full Disk Access to read
-`~/Library/Messages/chat.db`; verify access with `agent-autofill messages-test`
-(and `agent-autofill doctor --task messages`). For SMS 2FA codes sent to your
-phone number, also enable **Text Message Forwarding** on your iPhone so incoming
-SMS messages sync to Mac Messages. The broker reads `chat.db` read-only in place,
-ignores outbound messages and Tapback reactions, and reports a structured
-`messages_permission_denied` or `messages_not_found` error when unavailable.
+Agent Autofill reads macOS Messages in the background via `faster-mac-use`
+(`fmu-ax`) read-only Accessibility snapshots of `Messages.app` by default —
+**no Full Disk Access required** and zero focus theft. Keep `Messages.app` open
+(in the background is fine), enable **Text Message Forwarding** on your iPhone
+so SMS codes sync to Mac Messages, and verify access with
+`agent-autofill messages-test` (or `agent-autofill doctor --task messages`).
+When an explicit `--database` path is configured (or when `--backend db` is
+selected), Agent Autofill reads that SQLite `chat.db` file read-only in place
+without copying it. Tapback reactions are ignored, and unavailable states return
+structured errors (`messages_app_not_running`, `messages_accessibility_denied`,
+`messages_fmu_unavailable`, or `messages_not_found`).
 
 To request a 2FA code from Mac Messages without exposing full text bodies, call
 `request_messages_auth_code`:

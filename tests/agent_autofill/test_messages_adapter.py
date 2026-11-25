@@ -9,6 +9,7 @@ from agent_autofill.messages_adapter import (
     _APPLE_EPOCH,
     MacMessagesAdapter,
     MessagesUnavailable,
+    parse_ax_messages_snapshot,
 )
 
 
@@ -133,7 +134,7 @@ def test_messages_adapter_recent_filters_outbound_reactions_and_old_messages(tmp
     db.close()
 
     adapter = MacMessagesAdapter(path)
-    assert adapter.check_connection() == {"status": "ready"}
+    assert adapter.check_connection() == {"status": "ready", "backend": "db"}
     recent = adapter.recent(max_age_seconds=300)
     assert [m.message_id for m in recent] == ["5", "1"]
     assert recent[1].sender == "22395"
@@ -185,4 +186,94 @@ def test_messages_adapter_check_connection_reports_missing_and_permission_denied
     with pytest.raises(MessagesUnavailable) as denied_exc:
         denied.check_connection()
     assert denied_exc.value.reason == "messages_permission_denied"
-    assert "Full Disk Access" in denied_exc.value.next_action
+    assert "faster-mac-use" in denied_exc.value.next_action
+
+
+def test_parse_ax_messages_snapshot_extracts_sender_body_and_timestamps():
+    now_local = datetime.now().astimezone().replace(second=30, microsecond=0)
+    one_min_ago = now_local - timedelta(minutes=1)
+    ts_str = one_min_ago.strftime("%I:%M %p").lstrip("0")
+    snapshot = "\n".join(
+        [
+            '# app="Messages" pid=1488 win="Messages" els=6 ms=15.0',
+            '@a1 button "Compose"',
+            f'@a2 statictext "22395, Unread, Your GitHub verification code is 482910. Valid for 10 min., {ts_str}"',
+            f'@a3 statictext "72166, Chase: Use 123-456 to sign in., {ts_str}"',
+            '@a4 statictext "22395, Unread, Liked \\"Your GitHub verification code is 482910\\", Now"',
+            '@a5 statictext "55555, Unread, Old code is 111111, Yesterday"',
+            '@a6 statictext "Today 3:00 PM"',
+        ]
+    )
+    rows = parse_ax_messages_snapshot(snapshot, now=now_local)
+    assert len(rows) == 4
+    assert rows[0].sender == "22395"
+    assert "482910" in rows[0].body
+    assert rows[0].message_id.startswith("ax:")
+    assert rows[0].conversation_id == "ax:22395"
+    assert rows[1].sender == "72166"
+    assert rows[1].body == "Chase: Use 123-456 to sign in."
+
+
+def test_messages_adapter_ax_backend_works_without_chat_db_and_enforces_one_time_otp(
+    tmp_path, monkeypatch
+):
+    from agent_autofill.service import AuthCodeError, Broker
+    from agent_autofill.storage import Store
+
+    now_local = datetime.now().astimezone().replace(second=20, microsecond=0)
+    ts_str = now_local.strftime("%I:%M %p").lstrip("0")
+    fake_snapshot = "\n".join(
+        [
+            '# app="Messages" pid=1488 win="Messages" els=4 ms=12.0',
+            f'@a2 statictext "22395, Unread, Your GitHub verification code is 482910., {ts_str}"',
+            f'@a3 statictext "22395, Unread, Liked \\"Your GitHub verification code is 999999\\", {ts_str}"',
+            '@a4 statictext "55555, Unread, Old GitHub code is 111111, Yesterday"',
+        ]
+    )
+
+    # Point default DB to a nonexistent path to prove AX mode never needs chat.db or FDA.
+    adapter = MacMessagesAdapter(backend="auto", fmu_socket=tmp_path / "missing.sock")
+    adapter.database = tmp_path / "nonexistent-chat.db"
+    monkeypatch.setattr(adapter, "_query_fmu_cli", lambda _req: fake_snapshot)
+
+    assert adapter.check_connection() == {"status": "ready", "backend": "ax"}
+    recent = adapter.recent(max_age_seconds=300)
+    assert len(recent) == 1
+    assert recent[0].sender == "22395"
+    assert adapter.list_conversations()[0]["source"] == "mac-messages-ax"
+
+    broker = Broker(Store(":memory:", key=b"a" * 32))
+    broker.register_message_adapter("messages", adapter, "Mac Messages")
+    broker.create_agent("service:local")
+    broker.enable_trusted_local("service:local")
+
+    out = broker.request_messages_auth_code(
+        "service:local", target_origin="https://github.com", purpose="login"
+    )
+    assert out["code"] == "482910"
+    assert out["provenance"]["message_id"].startswith("ax:")
+    with pytest.raises(AuthCodeError) as replay:
+        broker.request_messages_auth_code(
+            "service:local", target_origin="https://github.com", purpose="login"
+        )
+    assert replay.value.reason == "otp_consumed"
+
+
+def test_messages_adapter_ax_errors_surface_actionable_reasons(tmp_path, monkeypatch):
+    adapter = MacMessagesAdapter(backend="ax", fmu_socket=tmp_path / "missing.sock")
+
+    monkeypatch.setattr(
+        adapter, "_query_fmu_cli", lambda _req: "Error: AXIsProcessTrusted=false"
+    )
+    with pytest.raises(MessagesUnavailable) as ax_denied:
+        adapter.check_connection()
+    assert ax_denied.value.reason == "messages_accessibility_denied"
+    assert "Accessibility" in ax_denied.value.next_action
+
+    monkeypatch.setattr(
+        adapter, "_query_fmu_cli", lambda _req: "Error: app 'Messages' is not running"
+    )
+    with pytest.raises(MessagesUnavailable) as not_running:
+        adapter.check_connection()
+    assert not_running.value.reason == "messages_app_not_running"
+    assert "Messages app" in not_running.value.next_action

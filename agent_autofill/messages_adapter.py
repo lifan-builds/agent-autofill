@@ -1,10 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (C) 2026 lifan-builds. Agent Autofill; Section 7 attribution terms in ATTRIBUTION.md.
-"""Read-only macOS Messages database adapter."""
+"""Read-only macOS Messages adapter (faster-mac-use AX default, optional chat.db)."""
 
+import hashlib
+import json
 import math
+import os
 import re
+import shutil
+import socket
 import sqlite3
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -13,26 +19,78 @@ from .models import TextMessage
 _APPLE_EPOCH = datetime(2001, 1, 1, tzinfo=UTC)
 _APPLE_NANO_THRESHOLD = 1_000_000_000_000
 _APPLE_SECOND_MIN = 100_000_000  # ~2004 in Apple epoch seconds
-_FDA_NEXT_ACTION = (
-    "Grant Full Disk Access to the terminal or host app running Agent Autofill in "
-    "System Settings > Privacy & Security > Full Disk Access, restart it, then run "
-    "'agent-autofill messages-test'"
+_DEFAULT_FMU_SOCK = "/tmp/fmu-ax.sock"
+_VALID_BACKENDS = {"auto", "ax", "db"}
+
+_AX_APP_NEXT_ACTION = (
+    "Open the Messages app on this Mac (it can stay in the background) and enable "
+    "iPhone Settings > Apps > Messages > Text Message Forwarding for SMS 2FA, then "
+    "run 'agent-autofill messages-test'"
 )
-_NOT_FOUND_NEXT_ACTION = (
+_AX_PERMISSION_NEXT_ACTION = (
+    "Grant Accessibility permission for faster-mac-use (fmu-ax) in "
+    "System Settings > Privacy & Security > Accessibility, then run 'agent-autofill messages-test'"
+)
+_AX_FMU_NEXT_ACTION = (
+    "Ensure faster-mac-use (agy-cua / fmu-ax) is running with Messages.app open, "
+    "or pass an explicit readable database to 'agent-autofill messages-add --database ...'"
+)
+_DB_NOT_FOUND_NEXT_ACTION = (
     "Open Messages on this Mac (and enable iPhone Settings > Apps > Messages > "
     "Text Message Forwarding for SMS 2FA), or pass --database to 'agent-autofill messages-add'"
+)
+_DB_DENIED_NEXT_ACTION = (
+    "Use the default faster-mac-use AX backend (no Full Disk Access required) with Messages.app open, "
+    "or grant read access to the configured Messages database"
+)
+
+_AX_STATICTEXT_RE = re.compile(r'^@\S+\s+statictext\s+"(.*)"\s*$')
+_AX_TIME_12H_RE = re.compile(r"^(\d{1,2}):(\d{2})[\s\u202f\u00a0]*(AM|PM)$", re.IGNORECASE)
+_AX_TIME_24H_RE = re.compile(r"^(\d{1,2}):(\d{2})$")
+_AX_DATE_SLASH_RE = re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{2,4})$")
+_AX_DATE_ISO_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+_AX_WEEKDAYS = {
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+    "mon",
+    "tue",
+    "wed",
+    "thu",
+    "fri",
+    "sat",
+    "sun",
+}
+_AX_ROW_FLAGS = {"unread", "pinned", "muted", "alerts off", "hide alerts"}
+_AX_TAPBACK_PREFIXES = (
+    'liked "',
+    "liked \u201c",
+    'loved "',
+    "loved \u201c",
+    'disliked "',
+    "disliked \u201c",
+    'laughed at "',
+    "laughed at \u201c",
+    'emphasized "',
+    "emphasized \u201c",
+    'questioned "',
+    "questioned \u201c",
 )
 
 
 class MessagesUnavailable(RuntimeError):
-    """Value-free Messages database access failure with a concrete recovery step."""
+    """Value-free Messages access failure with a concrete recovery step."""
 
     def __init__(
         self,
         message: str,
         *,
         reason: str = "messages_unavailable",
-        next_action: str = _FDA_NEXT_ACTION,
+        next_action: str = _AX_APP_NEXT_ACTION,
     ):
         self.reason = reason
         self.next_action = next_action
@@ -74,24 +132,290 @@ def _sender_from_chat(chat_identifier: object, guid: object) -> str:
     return ""
 
 
+def _parse_ax_timestamp(token: str, now_local: datetime) -> datetime | None:
+    """Parse a macOS Messages sidebar timestamp token into a UTC datetime."""
+
+    cleaned = token.replace("\u202f", " ").replace("\u00a0", " ").strip()
+    if not cleaned:
+        return None
+    lowered = cleaned.lower()
+    if lowered in {"now", "just now"}:
+        return now_local.astimezone(UTC)
+    if lowered == "yesterday":
+        return (now_local - timedelta(days=1)).astimezone(UTC)
+    if lowered in _AX_WEEKDAYS:
+        return (now_local - timedelta(days=2)).astimezone(UTC)
+
+    m12 = _AX_TIME_12H_RE.match(cleaned)
+    if m12:
+        hour = int(m12.group(1))
+        minute = int(m12.group(2))
+        meridiem = m12.group(3).upper()
+        if not (1 <= hour <= 12 and 0 <= minute <= 59):
+            return None
+        hour24 = (hour % 12) + (12 if meridiem == "PM" else 0)
+        candidate = now_local.replace(hour=hour24, minute=minute, second=0, microsecond=0)
+        # Handle midnight rollover (e.g. 11:59 PM displayed right after 12:00 AM).
+        if candidate > now_local + timedelta(seconds=60):
+            candidate -= timedelta(days=1)
+        elif candidate > now_local:
+            candidate = now_local
+        return candidate.astimezone(UTC)
+
+    m24 = _AX_TIME_24H_RE.match(cleaned)
+    if m24:
+        hour24 = int(m24.group(1))
+        minute = int(m24.group(2))
+        if not (0 <= hour24 <= 23 and 0 <= minute <= 59):
+            return None
+        candidate = now_local.replace(hour=hour24, minute=minute, second=0, microsecond=0)
+        if candidate > now_local + timedelta(seconds=60):
+            candidate -= timedelta(days=1)
+        elif candidate > now_local:
+            candidate = now_local
+        return candidate.astimezone(UTC)
+
+    mslash = _AX_DATE_SLASH_RE.match(cleaned)
+    if mslash:
+        month, day, year = int(mslash.group(1)), int(mslash.group(2)), int(mslash.group(3))
+        if year < 100:
+            year += 2000
+        try:
+            return now_local.replace(
+                year=year, month=month, day=day, hour=0, minute=0, second=0, microsecond=0
+            ).astimezone(UTC)
+        except ValueError:
+            return None
+
+    miso = _AX_DATE_ISO_RE.match(cleaned)
+    if miso:
+        year, month, day = int(miso.group(1)), int(miso.group(2)), int(miso.group(3))
+        try:
+            return now_local.replace(
+                year=year, month=month, day=day, hour=0, minute=0, second=0, microsecond=0
+            ).astimezone(UTC)
+        except ValueError:
+            return None
+
+    return None
+
+
+def _parse_ax_sidebar_row(text: str, now_local: datetime) -> TextMessage | None:
+    """Parse one macOS Messages AX sidebar statictext into a TextMessage."""
+
+    if ", " not in text:
+        return None
+    prefix, ts_token = text.rsplit(", ", 1)
+    sent_utc = _parse_ax_timestamp(ts_token, now_local)
+    if sent_utc is None:
+        return None
+    if ", " not in prefix:
+        return None
+
+    # Split sender and optional VoiceOver status flags (e.g. "Unread", "Pinned").
+    parts = prefix.split(", ")
+    flag_idx = None
+    for idx in range(1, len(parts)):
+        if parts[idx].strip().lower() in _AX_ROW_FLAGS:
+            flag_idx = idx
+            break
+    if flag_idx is not None:
+        sender = ", ".join(parts[:flag_idx]).strip()
+        body_start = flag_idx
+        while body_start < len(parts) and parts[body_start].strip().lower() in _AX_ROW_FLAGS:
+            body_start += 1
+        body = ", ".join(parts[body_start:]).strip()
+    else:
+        sender = parts[0].strip()
+        body = ", ".join(parts[1:]).strip()
+
+    if not sender or not body:
+        return None
+    digest = hashlib.sha256(f"{sender}\0{ts_token.strip()}\0{body}".encode()).hexdigest()[:20]
+    return TextMessage(
+        message_id=f"ax:{digest}",
+        conversation_id=f"ax:{sender}",
+        sender=sender,
+        body=body,
+        sent_at=sent_utc.isoformat(),
+    )
+
+
+def _is_ax_tapback_body(body: str) -> bool:
+    lowered = (body or "").strip().lower()
+    return any(lowered.startswith(prefix) for prefix in _AX_TAPBACK_PREFIXES)
+
+
+def _unescape_ax_text(raw: str) -> str:
+    return (
+        raw.replace("\\n", "\n")
+        .replace("\\t", "\t")
+        .replace('\\"', '"')
+        .replace("\\\\", "\\")
+        .replace("\ufffc", "")
+    )
+
+
+def parse_ax_messages_snapshot(
+    snapshot: str, *, now: datetime | None = None
+) -> list[TextMessage]:
+    """Extract sidebar TextMessage items from a faster-mac-use Messages.app AX snapshot."""
+
+    now_local = (
+        now.astimezone() if now is not None and now.tzinfo is not None else datetime.now().astimezone()
+    )
+    messages: list[TextMessage] = []
+    seen_ids: set[str] = set()
+    for line in (snapshot or "").splitlines():
+        match = _AX_STATICTEXT_RE.match(line.strip())
+        if not match:
+            continue
+        raw_text = _unescape_ax_text(match.group(1))
+        msg = _parse_ax_sidebar_row(raw_text, now_local)
+        if msg is None or msg.message_id in seen_ids:
+            continue
+        seen_ids.add(msg.message_id)
+        messages.append(msg)
+    return messages
+
+
+def _default_fmu_command() -> str | None:
+    env_cmd = os.environ.get("AGENT_AUTOFILL_FMU_COMMAND", "").strip()
+    if env_cmd:
+        return env_cmd
+    for candidate in ("agy-cua", "fmu"):
+        found = shutil.which(candidate)
+        if found:
+            return found
+    local_script = Path.home() / "Project" / "agent" / "scripts" / "agy-cua"
+    if local_script.is_file() and os.access(local_script, os.X_OK):
+        return str(local_script)
+    return None
+
+
 class MacMessagesAdapter:
-    def __init__(self, database: str | Path | None = None):
+    def __init__(
+        self,
+        database: str | Path | None = None,
+        *,
+        backend: str = "auto",
+        fmu_socket: str | Path | None = None,
+        fmu_command: str | None = None,
+    ):
+        normalized_backend = (backend or "auto").strip().lower()
+        if normalized_backend not in _VALID_BACKENDS:
+            raise ValueError("Messages backend must be auto, ax, or db")
+        self._explicit_database = database is not None and str(database).strip() != ""
         self.database = Path(database or Path.home() / "Library/Messages/chat.db")
+        self.backend = "db" if (normalized_backend == "auto" and self._explicit_database) else normalized_backend
+        self.fmu_socket = Path(
+            fmu_socket or os.environ.get("FMU_AX_SOCK", _DEFAULT_FMU_SOCK)
+        )
+        self.fmu_command = fmu_command
+
+    # -- Read-only faster-mac-use AX backend (zero Full Disk Access) -----------
+
+    def _query_fmu_socket(self, payload: bytes) -> str | None:
+        if not self.fmu_socket.exists():
+            return None
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.settimeout(3.0)
+            sock.connect(str(self.fmu_socket))
+            sock.sendall(payload)
+            try:
+                sock.shutdown(socket.SHUT_WR)
+            except OSError:
+                pass
+            chunks: list[bytes] = []
+            while True:
+                buf = sock.recv(16384)
+                if not buf:
+                    break
+                chunks.append(buf)
+            return b"".join(chunks).decode("utf-8", errors="replace").strip()
+        except OSError:
+            return None
+        finally:
+            sock.close()
+
+    def _query_fmu_cli(self, request_json: str) -> str | None:
+        cmd = self.fmu_command or _default_fmu_command()
+        if not cmd:
+            return None
+        try:
+            proc = subprocess.run(
+                [cmd, request_json],
+                capture_output=True,
+                text=True,
+                timeout=10.0,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return (proc.stdout or proc.stderr or "").strip()
+
+    def _ax_snapshot(self) -> str:
+        req = json.dumps({"app": "Messages", "steps": [{"op": "snapshot"}]})
+        raw = self._query_fmu_socket((req + "\n").encode("utf-8"))
+        if raw is None:
+            raw = self._query_fmu_cli(req)
+        if not raw:
+            raise MessagesUnavailable(
+                "faster-mac-use Accessibility engine is unavailable for reading Messages.app",
+                reason="messages_fmu_unavailable",
+                next_action=_AX_FMU_NEXT_ACTION,
+            )
+        lowered = raw.lower()
+        if "user_stopped" in lowered:
+            raise MessagesUnavailable(
+                "faster-mac-use is currently paused by the user",
+                reason="messages_paused",
+                next_action="Click Resume in the faster-mac-use menu bar item, then retry",
+            )
+        if "axisprocesstrusted=false" in lowered or "accessibility permission" in lowered:
+            raise MessagesUnavailable(
+                "macOS Accessibility permission is required for faster-mac-use to read Messages.app",
+                reason="messages_accessibility_denied",
+                next_action=_AX_PERMISSION_NEXT_ACTION,
+            )
+        if raw.startswith("Error:") or "not running" in lowered or "no window" in lowered:
+            if any(tok in lowered for tok in ("not running", "not found", "no window", "cannot find", "could not find")):
+                raise MessagesUnavailable(
+                    "Messages.app is not open with an accessible window",
+                    reason="messages_app_not_running",
+                    next_action=_AX_APP_NEXT_ACTION,
+                )
+            raise MessagesUnavailable(
+                "Messages.app could not be read through faster-mac-use Accessibility",
+                reason="messages_unavailable",
+                next_action=_AX_APP_NEXT_ACTION,
+            )
+        return raw
+
+    def _ax_messages(self, *, now: datetime | None = None) -> list[TextMessage]:
+        return parse_ax_messages_snapshot(self._ax_snapshot(), now=now)
+
+    def _ax_check_connection(self) -> dict[str, str]:
+        self._ax_snapshot()
+        return {"status": "ready", "backend": "ax"}
+
+    # -- Optional read-only chat.db SQLite backend -----------------------------
 
     def _open_readonly(self) -> sqlite3.Connection:
         try:
             exists = self.database.exists()
         except PermissionError as exc:
             raise MessagesUnavailable(
-                "macOS denied read access to the Messages database (Full Disk Access required)",
+                "Messages database could not be read directly",
                 reason="messages_permission_denied",
-                next_action=_FDA_NEXT_ACTION,
+                next_action=_DB_DENIED_NEXT_ACTION,
             ) from exc
         if not exists:
             raise MessagesUnavailable(
                 f"Messages database not found: {self.database}",
                 reason="messages_not_found",
-                next_action=_NOT_FOUND_NEXT_ACTION,
+                next_action=_DB_NOT_FOUND_NEXT_ACTION,
             )
         try:
             db = sqlite3.connect(
@@ -101,9 +425,9 @@ class MacMessagesAdapter:
             return db
         except PermissionError as exc:
             raise MessagesUnavailable(
-                "macOS denied read access to the Messages database (Full Disk Access required)",
+                "Messages database could not be read directly",
                 reason="messages_permission_denied",
-                next_action=_FDA_NEXT_ACTION,
+                next_action=_DB_DENIED_NEXT_ACTION,
             ) from exc
         except sqlite3.OperationalError as exc:
             detail = str(exc).lower()
@@ -112,9 +436,9 @@ class MacMessagesAdapter:
                 for token in ("unable to open", "authorization denied", "permission", "not permitted")
             ):
                 raise MessagesUnavailable(
-                    "macOS denied read access to the Messages database (Full Disk Access required)",
+                    "Messages database could not be read directly",
                     reason="messages_permission_denied",
-                    next_action=_FDA_NEXT_ACTION,
+                    next_action=_DB_DENIED_NEXT_ACTION,
                 ) from exc
             raise MessagesUnavailable(
                 "Messages database could not be opened read-only",
@@ -125,18 +449,16 @@ class MacMessagesAdapter:
     def _db(self) -> sqlite3.Connection:
         return self._open_readonly()
 
-    def check_connection(self) -> dict[str, str]:
-        """Verify read-only access to the local Messages database without reading content."""
-
+    def _db_check_connection(self) -> dict[str, str]:
         db = self._open_readonly()
         try:
             db.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone()
-            return {"status": "ready"}
+            return {"status": "ready", "backend": "db"}
         except PermissionError as exc:
             raise MessagesUnavailable(
-                "macOS denied read access to the Messages database (Full Disk Access required)",
+                "Messages database could not be read directly",
                 reason="messages_permission_denied",
-                next_action=_FDA_NEXT_ACTION,
+                next_action=_DB_DENIED_NEXT_ACTION,
             ) from exc
         except sqlite3.Error as exc:
             raise MessagesUnavailable(
@@ -146,6 +468,25 @@ class MacMessagesAdapter:
             ) from exc
         finally:
             db.close()
+
+    def _dispatch(self, ax_fn, db_fn):
+        if self.backend == "ax":
+            return ax_fn()
+        if self.backend == "db":
+            return db_fn()
+        # Default "auto": prefer zero-FDA faster-mac-use AX; fall back to chat.db if readable.
+        try:
+            return ax_fn()
+        except MessagesUnavailable as ax_exc:
+            try:
+                return db_fn()
+            except MessagesUnavailable:
+                raise ax_exc from None
+
+    def check_connection(self) -> dict[str, str]:
+        """Verify read-only Mac Messages access without returning message content."""
+
+        return self._dispatch(self._ax_check_connection, self._db_check_connection)
 
     _TYPEDSTREAM_TOKENS = (
         "streamtyped",
@@ -300,15 +641,46 @@ class MacMessagesAdapter:
         )
         return cols, msg_cols, chat_cols
 
-    def recent(
+    def _ax_recent(
         self,
         max_age_seconds: int = 300,
         conversation_scope: str = "*",
         sender: str | None = None,
         limit: int = 100,
     ) -> list[TextMessage]:
-        """Return recent incoming text messages within the requested age window."""
+        now = datetime.now(UTC)
+        # Allow a 60s cushion for minute-granularity sidebar timestamps.
+        effective_max_age = max(60, int(max_age_seconds) + 60)
+        bounded = max(1, min(int(limit), 200))
+        results: list[TextMessage] = []
+        for msg in self._ax_messages(now=now):
+            if _is_ax_tapback_body(msg.body):
+                continue
+            if conversation_scope != "*" and msg.conversation_id != conversation_scope:
+                continue
+            if sender and not _sender_matches_filter(msg.sender, sender):
+                continue
+            if not msg.sent_at:
+                continue
+            try:
+                sent_at = datetime.fromisoformat(msg.sent_at)
+            except ValueError:
+                continue
+            age = (now - sent_at).total_seconds()
+            if age < -60 or age > effective_max_age:
+                continue
+            results.append(msg)
+            if len(results) >= bounded:
+                break
+        return results
 
+    def _db_recent(
+        self,
+        max_age_seconds: int = 300,
+        conversation_scope: str = "*",
+        sender: str | None = None,
+        limit: int = 100,
+    ) -> list[TextMessage]:
         db = self._db()
         try:
             cols, msg_cols, _ = self._select_clause(db)
@@ -357,7 +729,35 @@ class MacMessagesAdapter:
         finally:
             db.close()
 
-    def search(
+    def recent(
+        self,
+        max_age_seconds: int = 300,
+        conversation_scope: str = "*",
+        sender: str | None = None,
+        limit: int = 100,
+    ) -> list[TextMessage]:
+        """Return recent incoming text messages within the requested age window."""
+
+        return self._dispatch(
+            lambda: self._ax_recent(max_age_seconds, conversation_scope, sender, limit),
+            lambda: self._db_recent(max_age_seconds, conversation_scope, sender, limit),
+        )
+
+    def _ax_search(
+        self, query: str, conversation_scope: str = "*", limit: int = 20
+    ) -> list[TextMessage]:
+        needle = (query or "").lower()
+        matches: list[TextMessage] = []
+        for msg in self._ax_messages():
+            if conversation_scope != "*" and msg.conversation_id != conversation_scope:
+                continue
+            if needle in (msg.body + " " + msg.sender).lower():
+                matches.append(msg)
+                if len(matches) >= limit:
+                    break
+        return matches
+
+    def _db_search(
         self, query: str, conversation_scope: str = "*", limit: int = 20
     ) -> list[TextMessage]:
         db = self._db()
@@ -400,7 +800,21 @@ class MacMessagesAdapter:
         finally:
             db.close()
 
-    def get(self, message_id: str) -> TextMessage:
+    def search(
+        self, query: str, conversation_scope: str = "*", limit: int = 20
+    ) -> list[TextMessage]:
+        return self._dispatch(
+            lambda: self._ax_search(query, conversation_scope, limit),
+            lambda: self._db_search(query, conversation_scope, limit),
+        )
+
+    def _ax_get(self, message_id: str) -> TextMessage:
+        for msg in self._ax_messages():
+            if msg.message_id == message_id:
+                return msg
+        raise KeyError(message_id)
+
+    def _db_get(self, message_id: str) -> TextMessage:
         db = self._db()
         try:
             cols, _, _ = self._select_clause(db)
@@ -417,7 +831,31 @@ class MacMessagesAdapter:
         finally:
             db.close()
 
-    def list_conversations(self) -> list[dict]:
+    def get(self, message_id: str) -> TextMessage:
+        if isinstance(message_id, str) and message_id.startswith("ax:"):
+            return self._ax_get(message_id)
+        return self._dispatch(
+            lambda: self._ax_get(message_id),
+            lambda: self._db_get(message_id),
+        )
+
+    def _ax_list_conversations(self) -> list[dict]:
+        seen: set[str] = set()
+        conversations: list[dict] = []
+        for msg in self._ax_messages():
+            if msg.conversation_id in seen:
+                continue
+            seen.add(msg.conversation_id)
+            conversations.append(
+                {
+                    "conversation_id": msg.conversation_id,
+                    "title": msg.sender,
+                    "source": "mac-messages-ax",
+                }
+            )
+        return conversations
+
+    def _db_list_conversations(self) -> list[dict]:
         db = self._db()
         try:
             return [
@@ -432,3 +870,9 @@ class MacMessagesAdapter:
             ]
         finally:
             db.close()
+
+    def list_conversations(self) -> list[dict]:
+        return self._dispatch(
+            self._ax_list_conversations,
+            self._db_list_conversations,
+        )

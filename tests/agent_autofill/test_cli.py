@@ -1329,7 +1329,7 @@ def test_messages_add_and_messages_test_verify_readonly_access(
     )
     add_out = capsys.readouterr().out
     assert "Configured read-only Messages source messages" in add_out
-    assert "Messages read-only check passed." in add_out
+    assert "Messages read-only check passed (backend: db)." in add_out
 
     assert cli.main(["--db", "unused.sqlite", "messages-test"]) == 0
     test_payload = json.loads(capsys.readouterr().out)
@@ -1337,6 +1337,7 @@ def test_messages_add_and_messages_test_verify_readonly_access(
         "source_id": "messages",
         "kind": "messages",
         "label": "Mac Messages",
+        "backend": "db",
         "status": "ready",
     }
 
