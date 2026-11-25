@@ -86,11 +86,12 @@ The entry's `record_id` is accepted for all types. `field_id` is an alias for
 profile entries and `credential_id` is an alias for credential entries; if
 both an alias and `record_id` are present they must identify the same record.
 The broker requires an authenticated agent. Keychain-paired local services
-receive trusted read access without a second grant ceremony; legacy and remote
-agents require an active grant for the exact operation, record id (or wildcard
-resource), target origin, and purpose. Writes always require their type-specific
-grant. Record-level `allowed_origins` and `allowed_purposes` continue to apply
-to legacy/remote reads and writes. A missing, expired, revoked,
+receive trusted access for reads and explicitly confirmed writes
+(`write_records` / `update_record_scope` with `confirmed: true`) without a
+second per-record grant ceremony; legacy and remote agents require an active
+grant for the exact operation, record id (or wildcard resource), target origin,
+and purpose. Record-level `allowed_origins` and `allowed_purposes` continue to
+apply to legacy/remote reads and writes. A missing, expired, revoked,
 wrong-resource, wrong-origin, or wrong-purpose grant denies a grant-based
 operation without returning a raw value or writing a record.
 

@@ -2207,6 +2207,7 @@ class Broker:
     ) -> dict[str, Any]:
         if confirmed is not True:
             raise BrokerError("confirmed must be true")
+        trusted_local = self._is_trusted_local(agent_id)
         target = _normalize_origin(target_origin, "target_origin")
         purpose = _normal_text(purpose, "purpose")
         if not isinstance(entries, list) or not entries:
@@ -2230,19 +2231,20 @@ class Broker:
                     if pair in seen:
                         raise BrokerError("entries contain duplicate record ids")
                     seen.add(pair)
-                    self._authorized(
-                        agent_id,
-                        f"{rtype}.write",
-                        rid,
-                        target,
-                        purpose,
-                    )
-                    _record_scope_allowed(
-                        patched_norm["allowed_origins"],
-                        patched_norm["allowed_purposes"],
-                        target,
-                        purpose,
-                    )
+                    if not trusted_local:
+                        self._authorized(
+                            agent_id,
+                            f"{rtype}.write",
+                            rid,
+                            target,
+                            purpose,
+                        )
+                        _record_scope_allowed(
+                            patched_norm["allowed_origins"],
+                            patched_norm["allowed_purposes"],
+                            target,
+                            purpose,
+                        )
                     prepared.append((rtype, rid, patched_norm, patched_curr))
                 continue
             record_type = _record_type(raw_entry.get("record_type"))
@@ -2286,19 +2288,20 @@ class Broker:
                     current = self._financial_defaults(
                         normalized["record_id"], current
                     )
-            self._authorized(
-                agent_id,
-                f"{record_type}.write",
-                record_id,
-                target,
-                purpose,
-            )
-            _record_scope_allowed(
-                normalized["allowed_origins"],
-                normalized["allowed_purposes"],
-                target,
-                purpose,
-            )
+            if not trusted_local:
+                self._authorized(
+                    agent_id,
+                    f"{record_type}.write",
+                    record_id,
+                    target,
+                    purpose,
+                )
+                _record_scope_allowed(
+                    normalized["allowed_origins"],
+                    normalized["allowed_purposes"],
+                    target,
+                    purpose,
+                )
             if current and "created_at" in current and "created_at" in normalized:
                 normalized["created_at"] = current["created_at"]
             prepared.append((record_type, record_id, normalized, current))
@@ -2866,14 +2869,14 @@ class Broker:
         return token
 
     def enable_trusted_local(self, agent_id: str) -> None:
-        """Mark a Keychain-paired local service as read-capable.
+        """Mark a Keychain-paired local service as trusted for local reads and confirmed writes.
 
         Local services authenticate with a token recovered from the operating
         system credential store.  That pairing is the owner's installation
-        decision, so requiring a second, expiring grant for every read makes
-        the installed skill unusable.  Keep writes and agent revocation on the
-        existing paths; this flag only removes redundant read grants for the
-        authenticated local service identity.
+        decision, so requiring a second, expiring per-record grant for every
+        read or user-confirmed write makes the installed skill unusable.
+        Keep explicit ``confirmed=True`` checks, validation, audit logging,
+        agent revocation, and non-trusted/remote grant enforcement intact.
         """
 
         item = self.store.get("agent", agent_id)

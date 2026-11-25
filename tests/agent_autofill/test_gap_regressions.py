@@ -880,3 +880,94 @@ def test_mcp_jsonrpc_stdio_end_to_end_all_five_fixes(monkeypatch, capsys):
     assert "\u200c" not in emails[0]["body"]
 
 
+def test_trusted_local_write_records_persists_without_per_record_grant():
+    b = broker()
+    entry = {
+        "record_type": "credential",
+        "record_id": "visible_new_account",
+        "name": "www.visible.com",
+        "origin": "https://www.visible.com/esim-create-account",
+        "username": "new-user@example.test",
+        "password": "synthetic-new-password",
+        "allowed_origins": ["https://www.visible.com"],
+        "sensitivity": "credential",
+        "provenance": {"source": "agent-created-account"},
+    }
+
+    with pytest.raises(BrokerError, match="confirmed must be true"):
+        _call(
+            b,
+            "write_records",
+            {
+                "agent_id": "service:test",
+                "agent_token": b._test_token,
+                "target_origin": "https://www.visible.com",
+                "purpose": "Save newly created login",
+                "confirmed": False,
+                "entries": [entry],
+            },
+        )
+
+    written = _call(
+        b,
+        "write_records",
+        {
+            "agent_id": "service:test",
+            "agent_token": b._test_token,
+            "target_origin": "https://www.visible.com",
+            "purpose": "Save newly created login",
+            "confirmed": True,
+            "entries": [entry],
+        },
+    )
+    assert written == {
+        "records": [
+            {
+                "record_type": "credential",
+                "record_id": "visible_new_account",
+                "status": "created",
+            }
+        ]
+    }
+    assert "synthetic-new-password" not in json.dumps(written)
+    matches = b.match_credentials("https://www.visible.com")
+    assert [m["credential_id"] for m in matches] == ["visible_new_account"]
+    read = b.request_credential_fields(
+        "service:test",
+        "visible_new_account",
+        ["username", "password"],
+        target_origin="https://www.visible.com",
+        purpose="login",
+    )
+    assert read["username"] == "new-user@example.test"
+    assert read["password"] == "synthetic-new-password"
+
+    # Non-trusted/remote agents still require an explicit credential.write grant
+    remote_token = b.create_agent("remote-agent")
+    with pytest.raises(AuthorizationError):
+        _call(
+            b,
+            "write_records",
+            {
+                "agent_id": "remote-agent",
+                "agent_token": remote_token,
+                "target_origin": "https://www.visible.com",
+                "purpose": "Save newly created login",
+                "confirmed": True,
+                "entries": [{**entry, "record_id": "visible_remote"}],
+            },
+        )
+
+    # Revoked local service loses trusted write capability
+    b.revoke_agent("service:test")
+    with pytest.raises(AuthorizationError):
+        b.write_records(
+            "service:test",
+            "https://www.visible.com",
+            "Save newly created login",
+            True,
+            [{**entry, "record_id": "visible_after_revoke"}],
+        )
+
+
+
