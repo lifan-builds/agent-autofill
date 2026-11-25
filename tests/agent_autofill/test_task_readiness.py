@@ -41,3 +41,36 @@ def test_revoked_only_identity_is_not_ready():
     broker.create_agent("old")
     broker.revoke_agent("old")
     assert _status_snapshot(broker)["status"] == "needs-attention"
+
+
+def test_messages_readiness_checks_saved_database_health(tmp_path):
+    import sqlite3
+
+    db_path = tmp_path / "chat.db"
+    db = sqlite3.connect(db_path)
+    db.execute("create table chat (ROWID integer primary key, guid text, display_name text)")
+    db.commit()
+    db.close()
+
+    broker = Broker(Store(":memory:", key=b"r" * 32))
+    broker.create_agent("active")
+    broker.store.put(
+        "connection",
+        "messages",
+        {
+            "source_id": "messages",
+            "kind": "messages",
+            "label": "Mac Messages",
+            "database": str(db_path),
+        },
+    )
+    broker.add_source("messages", "messages", "Mac Messages")
+
+    ready = _status_snapshot(broker, "messages")
+    assert ready["status"] == "ready"
+    assert ready["sources"]["ready"] == 1
+
+    db_path.unlink()
+    missing = _status_snapshot(broker, "messages")
+    assert missing["status"] == "needs-attention"
+    assert missing["sources"]["needs_attention"] == 1

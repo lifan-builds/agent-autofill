@@ -85,6 +85,7 @@ def test_mcp_tool_catalog_has_information_only_surface():
         "search_email",
         "request_auth_code",
         "request_auth_code_for_recipient",
+        "request_messages_auth_code",
         "match_email_sources",
         "request_verification_link_for_recipient",
         "search_messages",
@@ -513,3 +514,72 @@ def test_mcp_introspection_succeeds_without_touching_os_credential_store(
     assert replies[4]["result"] == {"resourceTemplates": []}
     assert replies[5]["result"] == {"prompts": []}
     assert not captured.err
+
+
+def test_transport_dispatches_messages_auth_code_and_surfaces_fda_errors(
+    monkeypatch, capsys
+):
+    from datetime import datetime
+
+    from agent_autofill.messages_adapter import MessagesUnavailable
+    from agent_autofill.models import TextMessage
+
+    broker = Broker(Store(":memory:", key=b"m" * 32))
+    broker.add_source("messages", "messages", "Mac Messages")
+    broker.texts = [
+        TextMessage(
+            "sms-1",
+            "SMS;-;22395",
+            "22395",
+            "Your GitHub verification code is 778899",
+            datetime.now(UTC).isoformat(),
+        )
+    ]
+    token = broker.create_agent("service:local")
+    broker.enable_trusted_local("service:local")
+
+    result = _call(
+        broker,
+        "request_messages_auth_code",
+        {"target_origin": "https://github.com", "purpose": "login"},
+        SimpleNamespace(agent_id="service:local", token=token),
+    )
+    assert result["code"] == "778899"
+    assert result["provenance"]["source"] == "messages"
+
+    class DeniedAdapter:
+        def recent(self, *_args, **_kwargs):
+            raise MessagesUnavailable(
+                "macOS denied read access to the Messages database (Full Disk Access required)",
+                reason="messages_permission_denied",
+                next_action="Grant Full Disk Access and run messages-test",
+            )
+
+    broker.register_message_adapter("messages", DeniedAdapter(), "Mac Messages")
+    connection = SimpleNamespace(
+        broker=broker,
+        keyring=None,
+        agent_id="service:local",
+        token=token,
+        close=broker.store.db.close,
+    )
+    monkeypatch.setattr(server, "connect_service", lambda *_args: connection)
+    monkeypatch.setattr(
+        server.sys,
+        "stdin",
+        io.StringIO(
+            json.dumps(
+                {
+                    "id": 1,
+                    "method": "request_messages_auth_code",
+                    "params": {"target_origin": "https://github.com", "purpose": "login"},
+                }
+            )
+            + "\n"
+        ),
+    )
+    server.main(["--service", "local"])
+    reply = json.loads(capsys.readouterr().out.splitlines()[0])
+    assert reply["error"]["reason"] == "messages_permission_denied"
+    assert "Full Disk Access" in reply["error"]["message"]
+    assert "messages-test" in reply["error"]["next_action"]

@@ -495,9 +495,36 @@ This proves storage, connector reconstruction, authorization, serialization,
 and protocol behavior with fakes; it does not establish installation,
 subprocess, live Keychain, live IMAP, or live Gmail/provider acceptance.
 
-macOS may require granting the terminal or Python process Full Disk Access to
-read `~/Library/Messages/chat.db`; the adapter reports a clear unavailable
-error when that permission is absent.
+macOS requires granting the terminal or host process Full Disk Access to read
+`~/Library/Messages/chat.db`; verify access with `agent-autofill messages-test`
+(and `agent-autofill doctor --task messages`). For SMS 2FA codes sent to your
+phone number, also enable **Text Message Forwarding** on your iPhone so incoming
+SMS messages sync to Mac Messages. The broker reads `chat.db` read-only in place,
+ignores outbound messages and Tapback reactions, and reports a structured
+`messages_permission_denied` or `messages_not_found` error when unavailable.
+
+To request a 2FA code from Mac Messages without exposing full text bodies, call
+`request_messages_auth_code`:
+
+```json
+{
+  "target_origin": "https://github.com",
+  "purpose": "sign in",
+  "max_age_seconds": 300,
+  "origin_policy": "target-origin"
+}
+```
+
+`request_messages_auth_code` uses `messages.otp` authorization (included for
+Keychain-paired local services; legacy/remote callers use a `messages.otp` grant
+scoped to the source or conversation). Under the default `target-origin` policy,
+it matches Apple/WebOTP domain-bound SMS (`@domain #code`), domain tokens, or
+the service brand in incoming texts, returns one recent code with minimal
+provenance, and marks the message consumed with a hash-only marker. Optional
+`sender` and `conversation_scope` parameters narrow lookup, and explicit
+`origin_policy="messages-read"` allows source-wide selection for generic short
+codes that omit the service name. Calling `request_auth_code` with a configured
+Messages `account_id` routes through the same Messages OTP path.
 
 To run the local MCP process for a client:
 

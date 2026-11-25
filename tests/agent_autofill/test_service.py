@@ -8,6 +8,7 @@ import pytest
 
 from agent_autofill.models import EmailMessage, TextMessage
 from agent_autofill.service import (
+    AuthCodeError,
     AuthorizationError,
     Broker,
     BrokerError,
@@ -1964,3 +1965,165 @@ def test_profile_groups_expose_fields_by_type_and_resolve_semantic_requests():
             "signup",
             group_id=home_group["group_id"],
         )
+
+
+def test_messages_otp_supports_webotp_brand_grouped_and_cjk_codes():
+    cases = [
+        (
+            "https://github.com",
+            "22395",
+            "Your GitHub verification code is 482-910.\n\n@github.com #482910",
+            "482910",
+        ),
+        (
+            "https://accounts.google.com",
+            "22000",
+            "G-654321 is your Google verification code. Reply STOP to 22000.",
+            "654321",
+        ),
+        (
+            "https://chatgpt.com",
+            "8335551234",
+            "Your OpenAI verification code is: 739104",
+            "739104",
+        ),
+        (
+            "https://login.chase.com",
+            "72166",
+            "Chase: Use 123 456 to sign in. Call 1-800-555-1234 if you did not request this.",
+            "123456",
+        ),
+        (
+            "https://example.cn",
+            "10690000",
+            "【example.cn】您的验证码是849201，5分钟内有效。",
+            "849201",
+        ),
+    ]
+    for idx, (origin, sender, body, expected) in enumerate(cases):
+        b = Broker(Store(":memory:", key=b"m" * 32))
+        b.add_source("messages", "messages", "Mac Messages")
+        b.texts = [
+            TextMessage(
+                f"sms-{idx}",
+                f"SMS;-;{sender}",
+                sender,
+                body,
+                datetime.now(UTC).isoformat(),
+            )
+        ]
+        b.grant("codex", "messages.otp", "messages", origin, "login")
+        out = b.request_messages_auth_code("codex", target_origin=origin, purpose="login")
+        assert out["code"] == expected
+        assert out["provenance"]["source"] == "messages"
+        assert out["provenance"]["source_id"] == "messages"
+        assert out["provenance"]["message_id"] == f"sms-{idx}"
+        # OTP value must never appear in audits or kv consumption markers.
+        assert expected not in str(b.store.audits())
+        rows = b.store.db.execute(
+            "select namespace,key,value from kv where namespace like 'otp-%'"
+        ).fetchall()
+        assert expected not in str(rows)
+
+
+def test_messages_otp_rejects_mismatched_webotp_and_supports_explicit_messages_read():
+    b = Broker(Store(":memory:", key=b"m" * 32))
+    b.add_source("messages", "messages", "Mac Messages")
+    b.texts = [
+        TextMessage(
+            "sms-wrong-webotp",
+            "SMS;-;22395",
+            "22395",
+            "Your GitHub code is 111222\n\n@evil.test #111222",
+            datetime.now(UTC).isoformat(),
+        )
+    ]
+    b.grant("codex", "messages.otp", "messages", "https://github.com", "login")
+    with pytest.raises(AuthCodeError) as exc:
+        b.request_messages_auth_code("codex", target_origin="https://github.com", purpose="login")
+    assert exc.value.reason == "otp_service_mismatch"
+
+    # Generic short code without service name fails target-origin, succeeds with explicit messages-read.
+    b.texts = [
+        TextMessage(
+            "sms-generic",
+            "SMS;-;729725",
+            "729725",
+            "Your verification code is 555666",
+            datetime.now(UTC).isoformat(),
+        )
+    ]
+    with pytest.raises(AuthCodeError) as generic_exc:
+        b.request_messages_auth_code("codex", target_origin="https://github.com", purpose="login")
+    assert generic_exc.value.reason == "otp_service_mismatch"
+
+    out = b.request_messages_auth_code(
+        "codex",
+        target_origin="https://github.com",
+        purpose="login",
+        origin_policy="messages-read",
+        sender="729725",
+    )
+    assert out["code"] == "555666"
+    # One-time consumption: second request is refused.
+    with pytest.raises(AuthCodeError) as consumed_exc:
+        b.request_messages_auth_code(
+            "codex",
+            target_origin="https://github.com",
+            purpose="login",
+            origin_policy="messages-read",
+            sender="729725",
+        )
+    assert consumed_exc.value.reason == "otp_consumed"
+
+
+def test_messages_otp_enforces_stale_ambiguity_grants_and_request_auth_code_routing():
+    b = Broker(Store(":memory:", key=b"m" * 32))
+    b.add_source("messages", "messages", "Mac Messages")
+    now = datetime.now(UTC)
+    b.texts = [
+        TextMessage(
+            "sms-stale",
+            "SMS;-;22395",
+            "22395",
+            "Your GitHub verification code is 102030",
+            (now - timedelta(seconds=600)).isoformat(),
+        )
+    ]
+    # Search grant must NOT authorize messages.otp.
+    b.grant("codex", "messages.search", "messages", None, None)
+    with pytest.raises(AuthorizationError):
+        b.request_messages_auth_code("codex", target_origin="https://github.com", purpose="login")
+
+    # Conversation-scoped messages.otp grant authorizes matching conversation only.
+    b.grant("codex", "messages.otp", "SMS;-;22395", "https://github.com", "login")
+    with pytest.raises(AuthCodeError) as stale_exc:
+        b.request_messages_auth_code(
+            "codex",
+            target_origin="https://github.com",
+            purpose="login",
+            max_age_seconds=300,
+            conversation_scope="SMS;-;22395",
+        )
+    assert stale_exc.value.reason == "otp_stale"
+
+    # Trusted local service can also call request_auth_code(account_id="messages", ...).
+    b.create_agent("service:local")
+    b.enable_trusted_local("service:local")
+    b.texts.append(
+        TextMessage(
+            "sms-fresh",
+            "SMS;-;22395",
+            "22395",
+            "Your GitHub verification code is 304050",
+            now.isoformat(),
+        )
+    )
+    routed = b.request_auth_code(
+        "service:local",
+        "messages",
+        target_origin="https://github.com",
+        purpose="login",
+    )
+    assert routed["code"] == "304050"
+    assert routed["provenance"]["source"] == "messages"

@@ -432,6 +432,42 @@ TOOLS = [
         },
     },
     {
+        "name": "request_messages_auth_code",
+        "description": "Retrieve one recent SMS/iMessage 2FA code from local macOS Messages without exposing text bodies. Defaults to target-origin matching (Apple WebOTP @domain #code, domain, or service name). Explicit messages-read mode omits service matching.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "agent_id": {"type": "string"},
+                "source_id": {
+                    "type": "string",
+                    "description": "Optional configured Messages source ID; defaults to the single configured Mac Messages source.",
+                },
+                "target_origin": {"type": "string"},
+                "purpose": {"type": "string"},
+                "max_age_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 3600,
+                    "default": 300,
+                },
+                "origin_policy": {
+                    "type": "string",
+                    "enum": ["target-origin", "messages-read"],
+                    "default": "target-origin",
+                },
+                "conversation_scope": {
+                    "type": "string",
+                    "default": "*",
+                    "description": "Optional conversation ID from list_conversations to restrict lookup.",
+                },
+                "sender": {
+                    "type": "string",
+                    "description": "Optional SMS short code, phone number, or sender handle filter.",
+                },
+            },
+        },
+    },
+    {
         "name": "list_conversations",
         "description": "List available read-only message conversations.",
         "inputSchema": {

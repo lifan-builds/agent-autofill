@@ -16,6 +16,7 @@ from typing import Any, cast
 
 from .chrome import ChromeImportError, default_profile
 from .form_policy import get_form_submission_policy
+from .messages_adapter import MacMessagesAdapter, MessagesUnavailable
 from .service import Broker
 from .storage import CredentialStoreError
 
@@ -176,11 +177,34 @@ def _source_statuses(broker: Broker) -> list[dict[str, str]]:
                 summary = "The email source has no saved connector configuration"
                 next_action = "Reconnect the source with setup or email-add"
         elif kind == "messages":
-            if source_key in message_adapters:
-                status = "ready"
-                summary = "A read-only Messages adapter is connected"
+            adapter = message_adapters.get(source_key)
+            if adapter is not None:
+                checker = getattr(adapter, "check_connection", None)
+                if callable(checker):
+                    try:
+                        checker()
+                        status = "ready"
+                        summary = "A read-only Messages adapter is connected"
+                    except MessagesUnavailable as exc:
+                        status = "needs-attention"
+                        summary = str(exc)
+                        next_action = exc.next_action
+                else:
+                    status = "ready"
+                    summary = "A read-only Messages adapter is connected"
             else:
-                next_action = "Open the local Messages source before requesting data"
+                conn = broker.store.get("connection", source_key)
+                if isinstance(conn, dict) and conn.get("kind") == "messages":
+                    try:
+                        MacMessagesAdapter(conn.get("database")).check_connection()
+                        status = "ready"
+                        summary = "Read-only Mac Messages database is accessible"
+                    except MessagesUnavailable as exc:
+                        status = "needs-attention"
+                        summary = str(exc)
+                        next_action = exc.next_action
+                else:
+                    next_action = "Run messages-test to check local Messages access"
         statuses.append(
             {
                 "kind": str(kind),
@@ -252,10 +276,20 @@ def _local_source_snapshot() -> dict[str, object]:
         chrome_count = 0
         chrome_status = "unavailable"
     messages_path = Path.home() / "Library" / "Messages" / "chat.db"
+    try:
+        MacMessagesAdapter(messages_path).check_connection()
+        messages_status = "available"
+    except MessagesUnavailable as exc:
+        if exc.reason == "messages_not_found":
+            messages_status = "not-found"
+        elif exc.reason == "messages_permission_denied":
+            messages_status = "permission-denied"
+        else:
+            messages_status = "unavailable"
     return {
         "chrome_profiles": chrome_count,
         "chrome_status": chrome_status,
-        "messages_status": "available" if messages_path.exists() else "not-found",
+        "messages_status": messages_status,
     }
 
 

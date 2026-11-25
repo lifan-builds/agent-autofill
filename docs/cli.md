@@ -105,15 +105,19 @@ and exposes only approved requests for that agent and the active site's
 origin. Use **Forget pairing** in the extension to clear its session code;
 `af revoke-agent <agent>` also blocks future discovery and consumption.
 
-## Email and source health
+## Email, Mac Messages, and source health
 
-Configure a read-only IMAP source, test it, and list metadata:
+Configure a read-only IMAP source or local macOS Messages source, test it, and list metadata:
 
 ```bash
 af email-add personal-mail imap.example.test user@example.test --mailbox INBOX
 af email-test personal-mail
+af messages-add
+af messages-test
 af sources
 ```
+
+For SMS 2FA via Mac, enable **Settings > Apps > Messages > Text Message Forwarding** on your iPhone and grant **Full Disk Access** (System Settings > Privacy & Security > Full Disk Access) to the terminal or host app running Agent Autofill, then verify with `af messages-test` or `af doctor --task messages`.
 
 Gmail and Thunderbird setup are documented in the [operator guide](agent-autofill.md).
 Source secrets are stored in the operating-system credential store. Remove a

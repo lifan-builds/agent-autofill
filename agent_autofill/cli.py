@@ -1347,6 +1347,11 @@ def _parser() -> argparse.ArgumentParser:
     messages.add_argument("--source-id", default="messages")
     messages.add_argument("--database")
     messages.add_argument("--label", default="Mac Messages")
+    messages_test = sub.add_parser(
+        "messages-test",
+        help="verify read-only access to a configured macOS Messages database",
+    )
+    messages_test.add_argument("source_id", nargs="?", default="messages")
     sources = sub.add_parser("sources", help="list configured sources")
     sources.add_argument("--kind")
     sources.add_argument("--query")
@@ -2122,6 +2127,8 @@ def main(argv=None) -> int:
             raise SystemExit(str(exc)) from exc
         print(json.dumps({"accounts": imported}, indent=2))
     elif args.command == "messages-add":
+        from .messages_adapter import MacMessagesAdapter, MessagesUnavailable
+
         broker.store.put(
             "connection",
             args.source_id,
@@ -2134,6 +2141,35 @@ def main(argv=None) -> int:
         )
         broker.add_source(args.source_id, "messages", args.label)
         print(f"Configured read-only Messages source {args.source_id}")
+        try:
+            MacMessagesAdapter(args.database).check_connection()
+            print("Messages read-only check passed.")
+        except MessagesUnavailable as exc:
+            print(f"Warning: {exc}")
+            print(f"Fix: {exc.next_action}")
+    elif args.command == "messages-test":
+        from .messages_adapter import MacMessagesAdapter, MessagesUnavailable
+
+        config = broker.store.get("connection", args.source_id)
+        if not isinstance(config, dict) or config.get("kind") != "messages":
+            raise SystemExit(
+                f"No saved Messages source named {args.source_id}; run 'agent-autofill messages-add' first"
+            )
+        try:
+            MacMessagesAdapter(config.get("database")).check_connection()
+        except MessagesUnavailable as exc:
+            raise SystemExit(f"{exc}\nFix: {exc.next_action}") from exc
+        print(
+            json.dumps(
+                {
+                    "source_id": config.get("source_id", args.source_id),
+                    "kind": "messages",
+                    "label": config.get("label") or args.source_id,
+                    "status": "ready",
+                },
+                indent=2,
+            )
+        )
     elif args.command == "audit":
         print(json.dumps(broker.store.audits(), indent=2))
     elif args.command == "grants":

@@ -23,6 +23,7 @@ from .form_memory import (
 from .form_memory import (
     match_form_fields as _match_form_fields,
 )
+from .messages_adapter import _sender_matches_filter
 from .models import EmailMessage, Grant, TextMessage, now_iso
 from .storage import Store
 
@@ -77,8 +78,10 @@ _TRUSTED_LOCAL_READ_OPERATIONS = {
     "messages.search",
     "messages.list",
     "messages.read",
+    "messages.otp",
 }
 _OTP_ORIGIN_POLICIES = {"target-origin", "mailbox-read"}
+_MESSAGES_OTP_ORIGIN_POLICIES = {"target-origin", "messages-read"}
 # Exact aliases documented by each service's verification-email domain.
 _OTP_SENDER_DOMAINS = {
     "accountscenter.facebook.com": {"facebookmail.com", "email.meta.com", "account.meta.com"},
@@ -87,6 +90,57 @@ _OTP_SENDER_DOMAINS = {
     "facebook.com": {"facebookmail.com", "email.meta.com", "account.meta.com"},
     "m.facebook.com": {"facebookmail.com", "email.meta.com", "account.meta.com"},
     "www.facebook.com": {"facebookmail.com", "email.meta.com", "account.meta.com"},
+}
+_SMS_OTP_BRAND_ALIASES = {
+    "accounts.google.com": {"google"},
+    "amazon.com": {"amazon", "aws"},
+    "americanexpress.com": {"amex", "american express"},
+    "apple.com": {"apple", "icloud"},
+    "auth.openai.com": {"openai", "chatgpt"},
+    "aws.amazon.com": {"amazon", "aws"},
+    "bankofamerica.com": {"bank of america", "bofa"},
+    "capitalone.com": {"capital one"},
+    "chase.com": {"chase", "jpmorgan"},
+    "chatgpt.com": {"openai", "chatgpt"},
+    "citi.com": {"citi", "citibank"},
+    "citibank.com": {"citi", "citibank"},
+    "facebook.com": {"facebook", "meta"},
+    "fb.com": {"facebook", "meta"},
+    "google.com": {"google"},
+    "icloud.com": {"apple", "icloud"},
+    "instagram.com": {"instagram", "meta"},
+    "live.com": {"microsoft"},
+    "microsoft.com": {"microsoft"},
+    "microsoftonline.com": {"microsoft"},
+    "office.com": {"microsoft"},
+    "openai.com": {"openai", "chatgpt"},
+    "paypal.com": {"paypal"},
+    "twitter.com": {"twitter"},
+    "wellsfargo.com": {"wells fargo"},
+    "x.com": {"twitter"},
+}
+_SMS_OTP_BRAND_STOPWORDS = {
+    "and",
+    "app",
+    "auth",
+    "code",
+    "com",
+    "for",
+    "login",
+    "mail",
+    "net",
+    "not",
+    "one",
+    "org",
+    "otp",
+    "pin",
+    "sms",
+    "sso",
+    "the",
+    "use",
+    "web",
+    "you",
+    "your",
 }
 _FORBIDDEN_TRANSIENT_PARTS = {
     "access_token",
@@ -144,17 +198,32 @@ _FORBIDDEN_PROFILE_CATEGORIES = {
 }
 _VERIFICATION_LINK_PATTERN = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 _VERIFICATION_LINK_TRAILING = ".,;:!?)]}>'"
-_AUTH_CODE_LABEL = r"(?:one[\s-]*time|verification|confirmation|security|authentication|login|sign[\s-]*in)?[\s-]*(?:code|passcode|otp)"
-_AUTH_CODE_AFTER_LABEL = re.compile(
-    rf"\b{_AUTH_CODE_LABEL}\b[^0-9]{{0,40}}(\d{{4,8}})\b", re.IGNORECASE
-)
-_AUTH_CODE_BEFORE_LABEL = re.compile(
-    rf"\b(\d{{4,8}})\b[^A-Za-z0-9]{{0,40}}{_AUTH_CODE_LABEL}\b", re.IGNORECASE
-)
-_AUTH_CODE_BRANDED = re.compile(
-    r"\byour\s+[A-Za-z][A-Za-z ._-]{0,80}?\b(?:code|passcode|otp)\b[^0-9]{0,200}(\d{4,8})\b",
+_AUTH_CODE_VALUE = r"(?<!\d)(?:G-)?(\d{4,8}|\d{3}[-\s]\d{3})(?!\d)"
+_AUTH_CODE_LABEL = r"(?:one[\s-]*time|verification|confirmation|security|authentication|login|sign[\s-]*in|2fa|mfa|temporary|access)?[\s-]*(?:code|passcode|otp|pin)"
+_AUTH_CODE_WEBOTP = re.compile(
+    r"(?:^|\n)\s*@([A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?)\s+#(\d{4,8})(?!\d)",
     re.IGNORECASE,
 )
+_AUTH_CODE_AFTER_LABEL = re.compile(
+    rf"\b{_AUTH_CODE_LABEL}\b(?:(?![.!?]\s)[^0-9]){{0,40}}{_AUTH_CODE_VALUE}",
+    re.IGNORECASE,
+)
+_AUTH_CODE_BEFORE_LABEL = re.compile(
+    rf"{_AUTH_CODE_VALUE}(?:\s+is\s+(?:your\s+)?(?:[A-Za-z][A-Za-z0-9 ._-]{{0,50}}?\s+)?|[^A-Za-z0-9]{{0,40}}){_AUTH_CODE_LABEL}\b",
+    re.IGNORECASE,
+)
+_AUTH_CODE_BRANDED = re.compile(
+    rf"\byour\s+[A-Za-z][A-Za-z0-9 ._-]{{0,80}}?\b(?:code|passcode|otp|pin)\b(?:(?![.!?]\s)[^0-9]){{0,200}}{_AUTH_CODE_VALUE}",
+    re.IGNORECASE,
+)
+_AUTH_CODE_ACTION = re.compile(
+    rf"\b(?:use|enter|input)\s+{_AUTH_CODE_VALUE}\s+(?:to\s+(?:verify|confirm|sign[\s-]*in|log[\s-]*in|authenticate|complete)|as\s+your)\b",
+    re.IGNORECASE,
+)
+_AUTH_CODE_CJK = re.compile(
+    r"(?:验证码|驗證碼|动态密码|動態密碼|校验码|校驗碼|認証コード|確認コード|인증번호|확인코드)[^0-9]{0,20}(?<!\d)(\d{4,8})(?!\d)"
+)
+_GOOGLE_SMS_PREFIX_PATTERN = re.compile(r"(?<![A-Za-z0-9])G-(\d{4,8})(?!\d)")
 _SAFE_HINT_KEYS = {
     "account_last4",
     "aliases",
@@ -802,6 +871,17 @@ def _normalize_otp_origin_policy(value: Any) -> str:
     return policy
 
 
+def _normalize_messages_otp_origin_policy(value: Any) -> str:
+    if value is None:
+        return "target-origin"
+    if not isinstance(value, str):
+        raise BrokerError("origin_policy must be target-origin or messages-read")
+    policy = value.strip().lower()
+    if policy not in _MESSAGES_OTP_ORIGIN_POLICIES:
+        raise BrokerError("origin_policy must be target-origin or messages-read")
+    return policy
+
+
 def _otp_sender_matches(sender: str, target_origin: str) -> bool:
     # Match the parsed address, never display names, body links, or suffix guesses.
     addresses = getaddresses([sender])
@@ -815,23 +895,94 @@ def _otp_sender_matches(sender: str, target_origin: str) -> bool:
     return domain in ({host} | _OTP_SENDER_DOMAINS.get(host, set()))
 
 
+def _extract_webotp_bindings(body: str) -> list[tuple[str, str]]:
+    """Extract Apple Domain-Bound SMS / WebOTP (@domain #code) pairs."""
+
+    return [
+        (match.group(1).strip().rstrip(".").lower(), match.group(2))
+        for match in _AUTH_CODE_WEBOTP.finditer(body or "")
+    ]
+
+
+def _messages_otp_matches_target(sender: str, body: str, target_origin: str) -> bool:
+    """Match an incoming SMS/iMessage to target_origin using WebOTP, domain, or service name."""
+
+    host = _origin_hostname(target_origin)
+    reg_domain = _registrable_domain(host)
+    allowed_domains = {host}
+    if reg_domain:
+        allowed_domains.add(reg_domain)
+    allowed_domains |= _OTP_SENDER_DOMAINS.get(host, set())
+    if reg_domain:
+        allowed_domains |= _OTP_SENDER_DOMAINS.get(reg_domain, set())
+
+    bindings = _extract_webotp_bindings(body)
+    if bindings:
+        for bound_domain, _ in bindings:
+            if bound_domain in allowed_domains:
+                return True
+            if reg_domain and _registrable_domain(bound_domain) == reg_domain:
+                return True
+        return False
+
+    combined = f"{sender or ''}\n{body or ''}"
+    for domain in allowed_domains:
+        if re.search(
+            rf"(?<![A-Za-z0-9-]){re.escape(domain)}(?![A-Za-z0-9-])",
+            combined,
+            re.IGNORECASE,
+        ):
+            return True
+
+    keywords: set[str] = set()
+    keywords |= _SMS_OTP_BRAND_ALIASES.get(host, set())
+    if reg_domain:
+        keywords |= _SMS_OTP_BRAND_ALIASES.get(reg_domain, set())
+        primary_label = reg_domain.split(".", 1)[0]
+        if len(primary_label) >= 3 and primary_label not in _SMS_OTP_BRAND_STOPWORDS:
+            keywords.add(primary_label)
+    if reg_domain == "google.com" and _GOOGLE_SMS_PREFIX_PATTERN.search(body or ""):
+        return True
+    for keyword in keywords:
+        if re.search(
+            rf"(?<![A-Za-z0-9]){re.escape(keyword)}(?![A-Za-z0-9])",
+            combined,
+            re.IGNORECASE,
+        ):
+            return True
+    return False
+
+
 def _metadata_page(items, limit, offset):
     if type(offset) is not int or offset < 0:
         raise BrokerError("offset must be a nonnegative integer")
     return list(islice(items, offset, offset + _bounded_limit(limit)))
 
 
-def _extract_auth_codes(body: str) -> list[str]:
-    """Prefer numbers explicitly labeled as authentication codes."""
+def _normalize_code_digits(raw: str) -> str:
+    return re.sub(r"[-\s]+", "", raw)
 
+
+def _extract_auth_codes(body: str) -> list[str]:
+    """Prefer WebOTP or explicitly labeled authentication codes."""
+
+    bindings = _extract_webotp_bindings(body)
+    if bindings:
+        return list(dict.fromkeys(code for _, code in bindings))
     labeled = [
-        match.group(1)
-        for pattern in (_AUTH_CODE_AFTER_LABEL, _AUTH_CODE_BEFORE_LABEL, _AUTH_CODE_BRANDED)
+        _normalize_code_digits(match.group(1))
+        for pattern in (
+            _AUTH_CODE_AFTER_LABEL,
+            _AUTH_CODE_BEFORE_LABEL,
+            _AUTH_CODE_BRANDED,
+            _AUTH_CODE_ACTION,
+            _AUTH_CODE_CJK,
+        )
         for match in pattern.finditer(body)
     ]
     if labeled:
         return list(dict.fromkeys(labeled))
-    return re.findall(r"\b\d{4,8}\b", body)
+    return list(dict.fromkeys(re.findall(r"(?<!\d-)\b\d{4,8}\b(?!-\d)", body)))
 
 
 def _message_received_at(value: Any) -> datetime | None:
@@ -3819,6 +3970,42 @@ class Broker:
                 }
         raise BrokerError("message not found")
 
+    def _resolve_messages_source(
+        self, source_id: str | None
+    ) -> tuple[str, object | None]:
+        if source_id is not None:
+            sid = _normal_text(source_id, "source_id")
+            if sid in self.removed_email_sources:
+                raise BrokerError("messages source is not configured")
+            if sid in self.message_adapters:
+                return sid, self.message_adapters[sid]
+            if self.sources.get(sid, {}).get("kind") == "messages":
+                if self.texts:
+                    return sid, None
+                raise BrokerError("messages source is unavailable; run messages-test")
+            if sid == "messages" and self.texts and not self.message_adapters:
+                return sid, None
+            raise BrokerError("messages source is not configured")
+        configured = sorted(
+            {
+                *(
+                    sid
+                    for sid, src in self.sources.items()
+                    if src.get("kind") == "messages"
+                ),
+                *self.message_adapters.keys(),
+            }
+        )
+        if len(configured) == 1:
+            return self._resolve_messages_source(configured[0])
+        if len(configured) > 1:
+            raise BrokerError(
+                "multiple messages sources configured; specify source_id"
+            )
+        if self.texts:
+            return "messages", None
+        raise BrokerError("no messages source is configured; run messages-add")
+
     def request_auth_code(
         self,
         agent_id,
@@ -3828,6 +4015,27 @@ class Broker:
         max_age_seconds=300,
         origin_policy="target-origin",
     ):
+        if (
+            isinstance(account_id, str)
+            and (
+                self.sources.get(account_id, {}).get("kind") == "messages"
+                or account_id in self.message_adapters
+            )
+        ):
+            mapped_policy = (
+                "messages-read"
+                if isinstance(origin_policy, str)
+                and origin_policy.strip().lower() == "mailbox-read"
+                else origin_policy
+            )
+            return self.request_messages_auth_code(
+                agent_id,
+                source_id=account_id,
+                target_origin=target_origin,
+                purpose=purpose,
+                max_age_seconds=max_age_seconds,
+                origin_policy=mapped_policy,
+            )
         origin_policy = _normalize_otp_origin_policy(origin_policy)
         try:
             max_age_seconds = int(max_age_seconds)
@@ -4042,6 +4250,179 @@ class Broker:
                 "account_id": account_id,
                 "message_id": message.message_id,
                 "received_at": message.received_at,
+            },
+        }
+
+    def request_messages_auth_code(
+        self,
+        agent_id: str,
+        source_id: str | None = None,
+        target_origin: str | None = None,
+        purpose: str | None = None,
+        max_age_seconds: int = 300,
+        origin_policy: str = "target-origin",
+        conversation_scope: str = "*",
+        sender: str | None = None,
+    ) -> dict[str, Any]:
+        """Return one recent 2FA code from local macOS Messages without exposing text bodies."""
+
+        policy = _normalize_messages_otp_origin_policy(origin_policy)
+        try:
+            max_age_seconds = int(max_age_seconds)
+        except (TypeError, ValueError):
+            raise BrokerError("max_age_seconds must be an integer")
+        if max_age_seconds < 1 or max_age_seconds > 3600:
+            raise BrokerError("max_age_seconds must be between 1 and 3600 seconds")
+        normalized_target = (
+            _normalize_origin(target_origin, "target_origin")
+            if target_origin
+            else None
+        )
+        normalized_purpose = _normal_text(purpose, "purpose") if purpose else None
+        normalized_scope = (
+            "*"
+            if conversation_scope is None
+            else _normal_text(conversation_scope, "conversation_scope")
+        )
+        normalized_sender = (
+            _normal_text(sender, "sender")
+            if sender is not None and str(sender).strip()
+            else None
+        )
+        if policy == "target-origin" and not normalized_target:
+            raise BrokerError("target-origin OTP selection requires target_origin")
+
+        resolved_source_id, adapter = self._resolve_messages_source(source_id)
+        try:
+            self._authorized(
+                agent_id,
+                "messages.otp",
+                resolved_source_id,
+                normalized_target,
+                normalized_purpose,
+            )
+        except AuthorizationError:
+            if normalized_scope != "*":
+                self._authorized(
+                    agent_id,
+                    "messages.otp",
+                    normalized_scope,
+                    normalized_target,
+                    normalized_purpose,
+                )
+            else:
+                raise
+
+        self.store.purge_legacy_otp_markers()
+        now = datetime.now(UTC)
+        lookback = min(3600, max(900, max_age_seconds * 2))
+        if adapter is not None and hasattr(adapter, "recent"):
+            messages = adapter.recent(
+                lookback,
+                conversation_scope=normalized_scope,
+                sender=normalized_sender,
+            )
+        elif adapter is not None and hasattr(adapter, "search"):
+            messages = adapter.search("", normalized_scope, 100)
+        else:
+            messages = [
+                m
+                for m in self.texts
+                if (normalized_scope == "*" or m.conversation_id == normalized_scope)
+                and m.sender != "me"
+            ]
+
+        candidates = []
+        stale = False
+        unmatched = False
+        for m in messages:
+            if normalized_scope != "*" and m.conversation_id != normalized_scope:
+                continue
+            if m.sender == "me":
+                continue
+            if normalized_sender and not _sender_matches_filter(
+                m.sender, normalized_sender
+            ):
+                continue
+            received_at = _message_received_at(m.sent_at)
+            if received_at is None:
+                continue
+            age = (now - received_at).total_seconds()
+            if age < 0 or age > 3600:
+                continue
+            codes = _extract_auth_codes(m.body)
+            if not codes:
+                continue
+            if policy == "target-origin" and not _messages_otp_matches_target(
+                m.sender, m.body, normalized_target or ""
+            ):
+                unmatched = unmatched or age <= max_age_seconds
+                continue
+            if age > max_age_seconds:
+                stale = True
+                continue
+            candidates.extend((m, c, received_at) for c in codes)
+
+        if not candidates:
+            if stale:
+                raise AuthCodeError(
+                    "otp_stale",
+                    "Only expired authentication codes were found in Messages",
+                    "Request a new SMS code on the website, then retry",
+                )
+            if unmatched:
+                raise AuthCodeError(
+                    "otp_service_mismatch",
+                    "No recent Messages code matched the target service",
+                    "Verify the SMS sender or retry with explicit origin_policy='messages-read' or a sender filter if the service sends generic texts",
+                )
+            raise AuthCodeError(
+                "otp_not_found",
+                "No authentication code was found in recent Messages",
+                "Wait for SMS delivery and retry; ensure iPhone Text Message Forwarding to this Mac is enabled",
+            )
+
+        newest_received_at = max(item[2] for item in candidates)
+        newest = [item for item in candidates if item[2] == newest_received_at]
+        if len(newest) != 1:
+            raise AuthCodeError(
+                "otp_ambiguous",
+                "No unambiguous recent authentication code in Messages",
+                "Complete verification manually, narrow with sender/conversation_scope, or request one new code",
+            )
+        m, code, _ = newest[0]
+        used_key = hashlib.sha256(
+            f"messages\0{resolved_source_id}\0{m.message_id}".encode()
+        ).hexdigest()
+        if not self.store.put_if_absent(
+            "otp-consumed", used_key, {"used_at": now_iso()}
+        ):
+            raise AuthCodeError(
+                "otp_consumed",
+                "Authentication code already consumed",
+                "Check whether sign-in succeeded; otherwise request a new SMS code on the website",
+            )
+        self.store.audit(
+            agent_id,
+            "messages.otp",
+            resolved_source_id,
+            now_iso(),
+            {
+                "conversation_id": m.conversation_id,
+                "message_id": m.message_id,
+                "target_origin": normalized_target,
+                "purpose": normalized_purpose,
+                "origin_policy": policy,
+            },
+        )
+        return {
+            "code": code,
+            "provenance": {
+                "source": "messages",
+                "source_id": resolved_source_id,
+                "conversation_id": m.conversation_id,
+                "message_id": m.message_id,
+                "received_at": m.sent_at,
             },
         }
 

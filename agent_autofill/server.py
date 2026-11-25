@@ -15,7 +15,7 @@ from .context_memory import ContextMemory
 from .google_oauth import GoogleOAuthError
 from .imap_adapter import IMAPAuthenticationError, IMAPEmailAdapter
 from .local import LocalConnection, connect_service, default_database_path
-from .messages_adapter import MacMessagesAdapter
+from .messages_adapter import MacMessagesAdapter, MessagesUnavailable
 from .service import AuthCodeError, Broker, BrokerError
 from .storage import KeyringProvider, Store
 
@@ -77,6 +77,9 @@ def _call(
         "get_email_message": lambda: broker.get_email_message(agent, **params),
         "request_auth_code": lambda: broker.request_auth_code(agent, **params),
         "request_auth_code_for_recipient": lambda: broker.request_auth_code_for_recipient(
+            agent, **params
+        ),
+        "request_messages_auth_code": lambda: broker.request_messages_auth_code(
             agent, **params
         ),
         "match_email_sources": lambda: broker.match_email_sources(**params),
@@ -263,13 +266,17 @@ def main(argv=None):
                                 "code": -32000,
                                 "type": type(e).__name__,
                                 "message": (
-                                    str(e) if isinstance(e, BrokerError)
+                                    str(e)
+                                    if isinstance(e, (BrokerError, MessagesUnavailable))
                                     else "Email authentication failed; run email-test for this source and reconnect its authorization"
                                     if isinstance(e, IMAPAuthenticationError)
                                     else "Request failed; backend details were withheld"
                                 ),
-                                **({"reason": e.reason, "next_action": e.next_action}
-                                   if isinstance(e, AuthCodeError) else {}),
+                                **(
+                                    {"reason": e.reason, "next_action": e.next_action}
+                                    if isinstance(e, (AuthCodeError, MessagesUnavailable))
+                                    else {}
+                                ),
                             },
                         }
                     ),

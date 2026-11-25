@@ -114,7 +114,14 @@ Run the source-specific read-only check and inspect metadata:
 ```bash
 agent-autofill --db ~/.agent-autofill.sqlite3 sources
 agent-autofill --db ~/.agent-autofill.sqlite3 email-test <account-id>
+agent-autofill --db ~/.agent-autofill.sqlite3 messages-test
 ```
+
+### Mac Messages 2FA reports permission denied or missing SMS codes
+
+- `messages_permission_denied`: macOS blocks reading `~/Library/Messages/chat.db` until the launching terminal or host app has **Full Disk Access** in **System Settings > Privacy & Security > Full Disk Access**. Grant access, restart the terminal/host app, and rerun `agent-autofill messages-test`. Agent Autofill reads `chat.db` read-only in place and never copies it.
+- `otp_not_found` for SMS codes: confirm your iPhone forwards SMS texts to this Mac under **iPhone Settings > Apps > Messages > Text Message Forwarding** and that the code arrived in the Mac Messages app.
+- `otp_service_mismatch`: `request_messages_auth_code` defaults to `origin_policy="target-origin"` (matching Apple WebOTP `@domain #code`, domain, or service brand). For generic short-code texts that omit the service name, specify `sender` or explicitly select `origin_policy="messages-read"`.
 
 Connector passwords and OAuth payloads remain in Keychain. Remove a source
 explicitly when it is no longer needed; a failed secret removal leaves the

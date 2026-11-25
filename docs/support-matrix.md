@@ -12,7 +12,7 @@ listed platform-specific smoke test before they can be called supported.
 | macOS Keychain-backed key and connector secrets | Supported | Coming soon | Coming soon | Uses the operating-system credential store |
 | Chrome profile metadata intake | Supported | Coming soon | Coming soon | Read-only snapshot plus review |
 | Chrome Password Manager v10/v11 import | Supported with explicit opt-in | Coming soon | Coming soon | v20/App-Bound Encryption and passkeys stop safely |
-| macOS Messages read/search | Supported with macOS privacy permission | Not applicable | Not applicable | Read-only; no send/delete |
+| macOS Messages read/search and scoped SMS/iMessage 2FA | Supported with macOS Full Disk Access | Not applicable | Not applicable | Read-only (`request_messages_auth_code`); enable iPhone Text Message Forwarding for SMS; no send/delete |
 | IMAP/Gmail read-only email and scoped OTP | Supported | Coming soon | Coming soon | Connector setup and provider permissions apply |
 | Profile and financial records | Supported | CI-covered core | CI-covered core | Encrypted local records; field-selective reads |
 | Direct selected-field delivery | Supported | CI-covered core | CI-covered core | Authentication and active grant required |

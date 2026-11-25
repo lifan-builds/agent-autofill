@@ -1299,3 +1299,49 @@ def test_default_setup_profile_accepts_explicit_numbered_profile(tmp_path):
     profile1 = tmp_path / "Profile 1"
     profile1.mkdir()
     assert cli._default_setup_profile(str(profile1)) == str(profile1)
+
+
+def test_messages_add_and_messages_test_verify_readonly_access(
+    tmp_path, monkeypatch, capsys
+):
+    import sqlite3
+
+    db_path = tmp_path / "chat.db"
+    db = sqlite3.connect(db_path)
+    db.execute("create table chat (ROWID integer primary key, guid text, display_name text)")
+    db.commit()
+    db.close()
+
+    broker = _broker()
+    monkeypatch.setattr(cli, "_broker", lambda _path: broker)
+
+    assert (
+        cli.main(
+            [
+                "--db",
+                "unused.sqlite",
+                "messages-add",
+                "--database",
+                str(db_path),
+            ]
+        )
+        == 0
+    )
+    add_out = capsys.readouterr().out
+    assert "Configured read-only Messages source messages" in add_out
+    assert "Messages read-only check passed." in add_out
+
+    assert cli.main(["--db", "unused.sqlite", "messages-test"]) == 0
+    test_payload = json.loads(capsys.readouterr().out)
+    assert test_payload == {
+        "source_id": "messages",
+        "kind": "messages",
+        "label": "Mac Messages",
+        "status": "ready",
+    }
+
+    db_path.unlink()
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--db", "unused.sqlite", "messages-test"])
+    assert "Messages database not found" in str(exc.value)
+    assert "Fix:" in str(exc.value)
