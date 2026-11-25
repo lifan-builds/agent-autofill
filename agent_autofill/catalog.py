@@ -69,7 +69,7 @@ TOOLS = [
     },
     {
         "name": "list_profile_groups",
-        "description": "List metadata-only profile/address groups with bounded disambiguation summaries (group_label, is_primary, masked recipient initials, state/country codes) and field types.",
+        "description": "List metadata-only profile/address groups with bounded disambiguation summaries (group_label, is_primary, masked recipient initials, state/country codes), field types, and fields_by_type mappings.",
         "inputSchema": {
             "type": "object",
             "properties": {"agent_id": {"type": "string"}},
@@ -107,7 +107,7 @@ TOOLS = [
     },
     {
         "name": "request_profile_fields",
-        "description": "Read selected profile values; optionally constrain the read to one explicitly selected profile group.",
+        "description": "Read selected profile values; when group_id is specified, constrains the read to that profile group and resolves semantic field_type names (such as phone, street, city, state, postcode) to that group's concrete field_ids.",
         "inputSchema": {
             "type": "object",
             "required": ["field_ids"],

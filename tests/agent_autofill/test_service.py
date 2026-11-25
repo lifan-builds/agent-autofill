@@ -875,7 +875,12 @@ def test_profile_groups_are_metadata_only_and_local_profiles_are_fallback_groups
     assert chrome_group["source_profile_id"] == "chrome-profile-fixture"
     assert chrome_group["field_ids"] == ["city", "street"]
     assert set(chrome_group["field_types"]) == {"addressLevel2", "streetAddress"}
+    assert chrome_group["fields_by_type"] == {
+        "addressLevel2": "city",
+        "streetAddress": "street",
+    }
     assert local_group["source"] == "local-profile"
+    assert local_group["fields_by_type"] == {"Nickname": "nickname"}
     assert "Secret St" not in str(groups)
     assert "Secretville" not in str(groups)
 
@@ -1811,3 +1816,151 @@ def test_matching_and_provenance_hints_support_value_free_search():
     assert len(broker.list_financial_records(query="SaaS subscriptions")) == 1
     assert len(broker.match_financial_records(matching_hints={"hint": "Use for work SaaS subscriptions"})) == 1
     assert len(broker.list_credentials(query="Staging environment")) == 1
+
+
+def test_list_credentials_applies_username_hint_without_target_origin():
+    broker = Broker(Store(":memory:", key=b"u" * 32))
+    broker.put_credential(
+        "site-a",
+        "Site A",
+        "https://alpha.example/login",
+        "Trash.Lifan@gmail.com",
+        "synthetic-secret-a",
+    )
+    broker.put_credential(
+        "site-b",
+        "Site B",
+        "https://beta.example/login",
+        "other.person@example.com",
+        "synthetic-secret-b",
+    )
+    broker.put_credential(
+        "site-c",
+        "Site C",
+        "https://gamma.example/login",
+        "trash.lifan+shopping@gmail.com",
+        "synthetic-secret-c",
+    )
+
+    matched = broker.list_credentials(username_hint="trash.lifan@gmail.com")
+    assert [item["credential_id"] for item in matched] == ["site-a"]
+    assert "synthetic-secret" not in str(matched)
+
+    partial = broker.list_credentials(username_hint="TRASH.LIFAN")
+    assert [item["credential_id"] for item in partial] == ["site-a", "site-c"]
+
+    combined = broker.list_credentials(query="gamma", username_hint="trash.lifan")
+    assert [item["credential_id"] for item in combined] == ["site-c"]
+
+    assert len(broker.list_credentials(username_hint="   ")) == 3
+    with pytest.raises(BrokerError, match="username_hint must be a string"):
+        broker.list_credentials(username_hint=123)  # type: ignore[arg-type]
+
+
+def test_profile_groups_expose_fields_by_type_and_resolve_semantic_requests():
+    b = Broker(Store(":memory:", key=b"p" * 32))
+    home_prov = {
+        "source": "chrome-structured-address",
+        "source_profile_id": "chrome-profile",
+        "source_guid_hash": "home-guid",
+    }
+    work_prov = {
+        "source": "chrome-structured-address",
+        "source_profile_id": "chrome-profile",
+        "source_guid_hash": "work-guid",
+    }
+    # Opaque IDs whose alphabetical order differs from field_type order.
+    home_fields = {
+        "phone": ("chrome_addr_z_phone", "+1-555-0101"),
+        "street": ("chrome_addr_m_street", "100 Home Ln"),
+        "city": ("chrome_addr_x_city", "Portland"),
+        "state": ("chrome_addr_a_state", "OR"),
+        "postcode": ("chrome_addr_k_postcode", "97205"),
+    }
+    for ftype, (fid, value) in home_fields.items():
+        b.put_profile(
+            fid,
+            "chrome-address",
+            f"Chrome {ftype}",
+            value,
+            provenance={**home_prov, "field_type": ftype},
+        )
+    b.put_profile(
+        "chrome_addr_work_street",
+        "chrome-address",
+        "Chrome street",
+        "200 Work Ave",
+        provenance={**work_prov, "field_type": "street"},
+    )
+    b.put_profile(
+        "chrome_addr_work_company",
+        "chrome-address",
+        "Chrome company",
+        "Acme Corp",
+        provenance={**work_prov, "field_type": "company"},
+    )
+
+    groups = b.list_profile_groups()
+    home_group = next(g for g in groups if g["field_count"] == 5)
+    assert home_group["fields_by_type"] == {
+        "city": "chrome_addr_x_city",
+        "phone": "chrome_addr_z_phone",
+        "postcode": "chrome_addr_k_postcode",
+        "state": "chrome_addr_a_state",
+        "street": "chrome_addr_m_street",
+    }
+
+    b.grant("codex", "profile.read", "*", "example.com", "signup")
+    resolved = b.request_profile_fields(
+        "codex",
+        ["phone", "street", "city", "state", "postcode"],
+        "example.com",
+        "signup",
+        group_id=home_group["group_id"],
+    )
+    assert resolved["chrome_addr_z_phone"]["value"] == "+1-555-0101"
+    assert resolved["chrome_addr_m_street"]["value"] == "100 Home Ln"
+    assert resolved["chrome_addr_x_city"]["value"] == "Portland"
+    assert resolved["chrome_addr_a_state"]["value"] == "OR"
+    assert resolved["chrome_addr_k_postcode"]["value"] == "97205"
+
+    # Canonical semantic aliases (e.g. postal_code -> postcode) also resolve within the group.
+    alias_resolved = b.request_profile_fields(
+        "codex",
+        ["postal_code"],
+        "example.com",
+        "signup",
+        group_id=home_group["group_id"],
+    )
+    assert alias_resolved["chrome_addr_k_postcode"]["value"] == "97205"
+
+    # Strict single-group isolation: reject concrete or semantic fields outside the group.
+    with pytest.raises(BrokerError, match="outside profile group"):
+        b.request_profile_fields(
+            "codex",
+            ["phone", "chrome_addr_work_street"],
+            "example.com",
+            "signup",
+            group_id=home_group["group_id"],
+        )
+    with pytest.raises(BrokerError, match="outside profile group"):
+        b.request_profile_fields(
+            "codex",
+            ["company"],
+            "example.com",
+            "signup",
+            group_id=home_group["group_id"],
+        )
+    # Without group_id, semantic names must not resolve across groups.
+    with pytest.raises(BrokerError, match="unknown profile field: phone"):
+        b.request_profile_fields("codex", ["phone"], "example.com", "signup")
+
+    # Reject semantic + concrete reference to the same field as duplicate.
+    with pytest.raises(BrokerError, match="duplicate"):
+        b.request_profile_fields(
+            "codex",
+            ["phone", "chrome_addr_z_phone"],
+            "example.com",
+            "signup",
+            group_id=home_group["group_id"],
+        )

@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .form_memory import (
+    _CHROME_FIELD_SEMANTICS,
     build_group_summary,
     masked_recipient_initials,
     normalize_form_label,
@@ -988,6 +989,11 @@ class Broker:
         normalized_query = (
             _normal_text(query, "query").casefold() if query is not None else None
         )
+        hint = (
+            _normal_text(username_hint, "username_hint", required=False).casefold()
+            if username_hint is not None
+            else ""
+        )
         result = []
         for row in self.store.db.execute(
             "select key from kv where namespace='credential' order by key"
@@ -1008,6 +1014,8 @@ class Broker:
                     ).casefold()
                     if normalized_query not in searchable:
                         continue
+                if hint and hint not in str(metadata.get("username") or "").casefold():
+                    continue
                 result.append(metadata)
         return _metadata_page(iter(result), limit, offset)
 
@@ -3218,17 +3226,21 @@ class Broker:
                     "source_profile_id": profile_id,
                     "field_ids": [],
                     "field_types": [],
+                    "fields_by_type": {},
                 },
             )
             group["field_ids"].append(item["field_id"])
             field_type = provenance.get("field_type") or item.get("display_name")
             if isinstance(field_type, str) and field_type not in group["field_types"]:
                 group["field_types"].append(field_type)
+            if isinstance(field_type, str) and field_type and field_type not in group["fields_by_type"]:
+                group["fields_by_type"][field_type] = item["field_id"]
             group_raw_items.setdefault(group_id, []).append(item)
 
         for group_id, group in groups.items():
             group["field_ids"].sort()
             group["field_types"].sort()
+            group["fields_by_type"] = dict(sorted(group["fields_by_type"].items()))
             group["field_count"] = len(group["field_ids"])
             is_chrome_group = group["source"] == "chrome-structured-address"
             group["needs_selection"] = is_chrome_group and group["field_count"] > 1
@@ -3547,13 +3559,53 @@ class Broker:
             "outcome": outcome,
         }
 
-    def _profile_group_field_ids(self, group_id: str) -> set[str]:
+    def _profile_group(self, group_id: str) -> dict[str, Any]:
         if not isinstance(group_id, str) or not group_id.strip():
             raise BrokerError("group_id must be a string")
         for group in self.list_profile_groups():
             if group["group_id"] == group_id:
-                return set(group["field_ids"])
+                return group
         raise BrokerError("unknown profile group")
+
+    def _profile_group_field_ids(self, group_id: str) -> set[str]:
+        return set(self._profile_group(group_id)["field_ids"])
+
+    def _resolve_profile_group_fields(
+        self, group_id: str, requested: list[str]
+    ) -> list[str]:
+        group = self._profile_group(group_id)
+        group_fields = set(group["field_ids"])
+        fields_by_type = group.get("fields_by_type", {})
+        by_type_ci = {
+            ftype.strip().lower(): fid
+            for ftype, fid in fields_by_type.items()
+        }
+        semantics_ci = {k.lower(): v for k, v in _CHROME_FIELD_SEMANTICS.items()}
+        by_semantic: dict[str, list[str]] = {}
+        for ftype, fid in fields_by_type.items():
+            semantic = semantics_ci.get(ftype.strip().lower())
+            if semantic is not None:
+                by_semantic.setdefault(semantic, []).append(fid)
+
+        resolved: list[str] = []
+        for raw_fid in requested:
+            if raw_fid in group_fields:
+                target_fid = raw_fid
+            elif raw_fid in by_type_ci:
+                target_fid = by_type_ci[raw_fid]
+            else:
+                semantic = semantics_ci.get(raw_fid)
+                candidates = by_semantic.get(semantic, []) if semantic else []
+                if len(candidates) == 1:
+                    target_fid = candidates[0]
+                elif semantic and semantic in by_type_ci:
+                    target_fid = by_type_ci[semantic]
+                else:
+                    raise BrokerError("requested profile fields are outside profile group")
+            if target_fid in resolved:
+                raise BrokerError("field_ids cannot contain duplicate fields")
+            resolved.append(target_fid)
+        return resolved
 
     def request_profile_fields(
         self,
@@ -3569,9 +3621,7 @@ class Broker:
             field_ids, "field_ids", identifiers=True
         )
         if group_id is not None:
-            group_fields = self._profile_group_field_ids(group_id)
-            if not set(requested).issubset(group_fields):
-                raise BrokerError("requested profile fields are outside profile group")
+            requested = self._resolve_profile_group_fields(group_id, requested)
         bundle = None
         if bundle_id is not None:
             from .context_memory import ContextMemory, scope_matches
