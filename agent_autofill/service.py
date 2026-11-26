@@ -5,6 +5,7 @@ import hmac
 import ipaddress
 import re
 import secrets
+import unicodedata
 from datetime import UTC, datetime, timedelta
 from email.utils import getaddresses
 from itertools import islice
@@ -23,7 +24,7 @@ from .form_memory import (
 from .form_memory import (
     match_form_fields as _match_form_fields,
 )
-from .messages_adapter import _sender_matches_filter
+from .messages_adapter import _sender_matches_filter, is_tapback_reaction_body
 from .models import EmailMessage, Grant, TextMessage, now_iso
 from .storage import Store
 
@@ -198,14 +199,31 @@ _FORBIDDEN_PROFILE_CATEGORIES = {
 }
 _VERIFICATION_LINK_PATTERN = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 _VERIFICATION_LINK_TRAILING = ".,;:!?)]}>'"
-_AUTH_CODE_VALUE = r"(?<!\d)(?:G-)?(\d{4,8}|\d{3}[-\s]\d{3})(?!\d)"
+_UNICODE_DASH_RE = re.compile(r"[\u2010-\u2015\u2212\ufe63\uff0d]")
+_UNICODE_SPACE_RE = re.compile(r"[\u00a0\u2009\u202f\u3000]")
+_FULLWIDTH_ASCII_RE = re.compile(r"[\uff01-\uff5e]")
+_AUTH_CODE_VALUE = (
+    r"(?<![A-Za-z0-9]-)(?<![A-Za-z0-9])(?:(?:G|FB)-)?"
+    r"(\d{4,8}|\d{4}[-\s]\d{4}|\d{3}[-\s]\d{3}|\d{2}[-\s]\d{2}[-\s]\d{2})"
+    r"(?!-\d)(?!\d)"
+)
+_AUTH_CODE_PREFIXED = re.compile(
+    r"(?<![A-Za-z0-9]-)(?<![A-Za-z0-9])(?:G|FB)-"
+    r"(\d{4,8}|\d{4}[-\s]\d{4}|\d{3}[-\s]\d{3}|\d{2}[-\s]\d{2}[-\s]\d{2})"
+    r"(?!-\d)(?!\d)"
+)
 _AUTH_CODE_LABEL = r"(?:one[\s-]*time|verification|confirmation|security|authentication|login|sign[\s-]*in|2fa|mfa|temporary|access)?[\s-]*(?:code|passcode|otp|pin)"
+_AUTH_CODE_CONNECTOR = (
+    r"(?:[^0-9.!?()]{0,40}"
+    r"(?:\([^)]{0,40}\)[^0-9.!?()]{0,30}"
+    r"|(?:valid|expires?)\s+(?:for|in)\s+\d{1,2}\s*(?:min(?:ute)?s?|sec(?:ond)?s?|hrs?|hours?)[^0-9.!?]{0,30})?)"
+)
 _AUTH_CODE_WEBOTP = re.compile(
     r"(?:^|\n)\s*@([A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?)\s+#(\d{4,8})(?!\d)",
     re.IGNORECASE,
 )
 _AUTH_CODE_AFTER_LABEL = re.compile(
-    rf"\b{_AUTH_CODE_LABEL}\b(?:(?![.!?]\s)[^0-9]){{0,40}}{_AUTH_CODE_VALUE}",
+    rf"\b{_AUTH_CODE_LABEL}\b{_AUTH_CODE_CONNECTOR}{_AUTH_CODE_VALUE}",
     re.IGNORECASE,
 )
 _AUTH_CODE_BEFORE_LABEL = re.compile(
@@ -213,22 +231,68 @@ _AUTH_CODE_BEFORE_LABEL = re.compile(
     re.IGNORECASE,
 )
 _AUTH_CODE_BRANDED = re.compile(
-    rf"\byour\s+[A-Za-z][A-Za-z0-9 ._-]{{0,80}}?\b(?:code|passcode|otp|pin)\b(?:(?![.!?]\s)[^0-9]){{0,200}}{_AUTH_CODE_VALUE}",
+    rf"\byour\s+[A-Za-z][A-Za-z0-9 ._-]{{0,80}}?\b(?:code|passcode|otp|pin)\b{_AUTH_CODE_CONNECTOR}{_AUTH_CODE_VALUE}",
     re.IGNORECASE,
 )
 _AUTH_CODE_ACTION = re.compile(
     rf"\b(?:use|enter|input)\s+{_AUTH_CODE_VALUE}\s+(?:to\s+(?:verify|confirm|sign[\s-]*in|log[\s-]*in|authenticate|complete)|as\s+your)\b",
     re.IGNORECASE,
 )
-_AUTH_CODE_CJK = re.compile(
-    r"(?:验证码|驗證碼|动态密码|動態密碼|校验码|校驗碼|認証コード|確認コード|인증번호|확인코드)[^0-9]{0,20}(?<!\d)(\d{4,8})(?!\d)"
+_AUTH_CODE_ALPHANUMERIC = re.compile(
+    r"\b(?:one[\s-]*time|verification|confirmation|security|authentication|login|sign[\s-]*in|2fa|mfa|temporary|access)[\s-]*(?:code|passcode|otp)\b"
+    r"(?:\s+is|\s*[:=])\s*"
+    r"(?<![A-Za-z0-9-])([A-Za-z0-9]{5,10}|[A-Za-z0-9]{3,4}-[A-Za-z0-9]{3,4})(?![A-Za-z0-9-])",
+    re.IGNORECASE,
+)
+_AUTH_CODE_INTL = re.compile(
+    r"(?:"
+    r"\bc[oó]digo(?:\s+(?:de\s+)?(?:verificaci[oó]n|verifica[çc][aã]o|seguridad|seguran[çc]a|acceso|inicio|confirmaci[oó]n))?\b"
+    r"|\bcodice(?:\s+di\s+(?:verifica|sicurezza|accesso))?\b"
+    r"|\b(?:bestätigungs|sicherheits|verifizierungs|anmelde|einmal|zugangs)code\b"
+    r"|код\s+(?:подтверждения|безопасности|входа|доступа)"
+    r"|одноразовый\s+код"
+    r")"
+    rf"{_AUTH_CODE_CONNECTOR}{_AUTH_CODE_VALUE}",
+    re.IGNORECASE,
+)
+_AUTH_CODE_CJK_AFTER = re.compile(
+    r"(?:验证码|驗證碼|动态密码|動態密碼|校验码|校驗碼|安全码|安全碼|一次性密码|一次性密碼|"
+    r"認証コード|確認コード|ワンタイムパスワード|セキュリティコード|"
+    r"인증번호|인증\s*코드|확인코드|보안코드)"
+    rf"[^0-9.!?。！？]{{0,20}}{_AUTH_CODE_VALUE}"
+)
+_AUTH_CODE_CJK_BEFORE = re.compile(
+    rf"{_AUTH_CODE_VALUE}[^0-9.!?。！？]{{0,12}}"
+    r"(?:验证码|驗證碼|动态密码|動態密碼|校验码|校驗碼|安全码|安全碼|認証コード|確認コード|인증번호|확인코드)"
 )
 _GOOGLE_SMS_PREFIX_PATTERN = re.compile(r"(?<![A-Za-z0-9])G-(\d{4,8})(?!\d)")
-_CALENDAR_DATE_PATTERN = re.compile(
-    r"\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
-    r"Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|"
-    r"Dec(?:ember)?)\.?\s+\d{1,2},?\s+(?:19|20)\d{2}\b",
-    re.IGNORECASE,
+_NON_OTP_NOISE_PATTERNS = (
+    # Month DD, YYYY and DD Month YYYY
+    re.compile(
+        r"\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+        r"Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|"
+        r"Dec(?:ember)?)\.?\s+\d{1,2},?\s+(?:19|20)\d{2}\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b\d{1,2}\s+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+        r"Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|"
+        r"Dec(?:ember)?)\.?,?\s+(?:19|20)\d{2}\b",
+        re.IGNORECASE,
+    ),
+    # ISO / slash / dot dates
+    re.compile(r"\b(?:19|20)\d{2}[-/.]\d{1,2}[-/.]\d{1,2}\b"),
+    re.compile(r"\b\d{1,2}[-/.]\d{1,2}[-/.](?:19|20)\d{2}\b"),
+    # Copyright years
+    re.compile(r"(?:©|\(c\)|copyright)\s*(?:19|20)\d{2}\b", re.IGNORECASE),
+    # Non-OTP labeled numbers (orders, invoices, tracking, SKU, PO, ZIP, phone)
+    re.compile(
+        r"\b(?:order|invoice|inv|sku|po|tracking|case|ticket|ref|reference|zip|postal(?:\s+code)?|"
+        r"suite|ext|phone|tel|call)\b\s*(?:#|no\.?|number|:)?\s*[A-Za-z0-9-]{4,24}",
+        re.IGNORECASE,
+    ),
+    # Prefixed non-OTP codes like INV-88412, SKU-7741, PO-202604
+    re.compile(r"\b(?!(?:G|FB)-)[A-Za-z]{2,8}-\d{3,10}\b"),
 )
 _SAFE_HINT_KEYS = {
     "account_last4",
@@ -932,10 +996,25 @@ def _messages_otp_matches_target(sender: str, body: str, target_origin: str) -> 
         return False
 
     combined = f"{sender or ''}\n{body or ''}"
+    urls = _VERIFICATION_LINK_PATTERN.findall(combined)
+    for raw_url in urls:
+        cleaned_url = raw_url.rstrip(_VERIFICATION_LINK_TRAILING)
+        url_host = (urlparse(cleaned_url).hostname or "").rstrip(".").lower()
+        if not url_host:
+            continue
+        if url_host in allowed_domains or (
+            reg_domain and _registrable_domain(url_host) == reg_domain
+        ):
+            return True
+
+    # Strip full URLs before bare-domain/brand keyword scans so lookalike hosts
+    # (e.g. https://github.com.evil.test) or path tricks (https://evil.test/github.com)
+    # cannot spoof a target-origin match.
+    without_urls = _VERIFICATION_LINK_PATTERN.sub(" ", combined)
     for domain in allowed_domains:
         if re.search(
-            rf"(?<![A-Za-z0-9-]){re.escape(domain)}(?![A-Za-z0-9-])",
-            combined,
+            rf"(?<![A-Za-z0-9./-]){re.escape(domain)}(?![A-Za-z0-9-]|(?:\.[A-Za-z0-9-]))",
+            without_urls,
             re.IGNORECASE,
         ):
             return True
@@ -952,7 +1031,7 @@ def _messages_otp_matches_target(sender: str, body: str, target_origin: str) -> 
     for keyword in keywords:
         if re.search(
             rf"(?<![A-Za-z0-9]){re.escape(keyword)}(?![A-Za-z0-9])",
-            combined,
+            without_urls,
             re.IGNORECASE,
         ):
             return True
@@ -965,31 +1044,88 @@ def _metadata_page(items, limit, offset):
     return list(islice(items, offset, offset + _bounded_limit(limit)))
 
 
+def _normalize_otp_text(text: str) -> str:
+    """Normalize fullwidth ASCII, Unicode dashes, and non-breaking spaces for OTP parsing."""
+
+    if not text:
+        return ""
+    normalized = _FULLWIDTH_ASCII_RE.sub(
+        lambda m: chr(ord(m.group(0)) - 0xFEE0), text
+    )
+    normalized = _UNICODE_DASH_RE.sub("-", normalized)
+    normalized = _UNICODE_SPACE_RE.sub(" ", normalized)
+    return normalized
+
+
 def _normalize_code_digits(raw: str) -> str:
-    return re.sub(r"[-\s]+", "", raw)
+    cleaned = unicodedata.normalize("NFKC", raw)
+    return re.sub(r"[-\s]+", "", cleaned).upper()
+
+
+def _extract_labeled_auth_codes(text: str) -> list[str]:
+    normalized = _normalize_otp_text(text)
+    bindings = _extract_webotp_bindings(normalized)
+    if bindings:
+        return list(dict.fromkeys(_normalize_code_digits(code) for _, code in bindings))
+    labeled: list[str] = []
+    for pattern in (
+        _AUTH_CODE_AFTER_LABEL,
+        _AUTH_CODE_BEFORE_LABEL,
+        _AUTH_CODE_BRANDED,
+        _AUTH_CODE_ACTION,
+        _AUTH_CODE_INTL,
+        _AUTH_CODE_CJK_AFTER,
+        _AUTH_CODE_CJK_BEFORE,
+        _AUTH_CODE_PREFIXED,
+    ):
+        for match in pattern.finditer(normalized):
+            labeled.append(_normalize_code_digits(match.group(1)))
+    if not labeled:
+        for match in _AUTH_CODE_ALPHANUMERIC.finditer(normalized):
+            raw_tok = match.group(1)
+            compact = _normalize_code_digits(raw_tok)
+            if (
+                raw_tok == raw_tok.upper()
+                and any(ch.isalpha() for ch in compact)
+                and any(ch.isdigit() for ch in compact)
+            ):
+                labeled.append(compact)
+    return list(dict.fromkeys(labeled))
+
+
+def _extract_unlabeled_auth_codes(text: str) -> list[str]:
+    scrubbed = _normalize_otp_text(text)
+    for pattern in _NON_OTP_NOISE_PATTERNS:
+        scrubbed = pattern.sub(" ", scrubbed)
+    return list(
+        dict.fromkeys(
+            re.findall(r"(?<![A-Za-z0-9]-)\b\d{4,8}\b(?!-\d)", scrubbed)
+        )
+    )
 
 
 def _extract_auth_codes(body: str) -> list[str]:
     """Prefer WebOTP or explicitly labeled authentication codes."""
 
-    bindings = _extract_webotp_bindings(body)
-    if bindings:
-        return list(dict.fromkeys(code for _, code in bindings))
-    labeled = [
-        _normalize_code_digits(match.group(1))
-        for pattern in (
-            _AUTH_CODE_AFTER_LABEL,
-            _AUTH_CODE_BEFORE_LABEL,
-            _AUTH_CODE_BRANDED,
-            _AUTH_CODE_ACTION,
-            _AUTH_CODE_CJK,
-        )
-        for match in pattern.finditer(body)
-    ]
+    labeled = _extract_labeled_auth_codes(body)
     if labeled:
-        return list(dict.fromkeys(labeled))
-    scrubbed = _CALENDAR_DATE_PATTERN.sub(" ", body)
-    return list(dict.fromkeys(re.findall(r"(?<!\d-)\b\d{4,8}\b(?!-\d)", scrubbed)))
+        return labeled
+    return _extract_unlabeled_auth_codes(body)
+
+
+def _extract_email_auth_codes(subject: str, body: str) -> list[str]:
+    """Extract OTPs from email body, falling back to subject when body has no labeled/bare code."""
+
+    body_labeled = _extract_labeled_auth_codes(body)
+    if body_labeled:
+        return body_labeled
+    subject_labeled = _extract_labeled_auth_codes(subject)
+    if subject_labeled:
+        return subject_labeled
+    body_bare = _extract_unlabeled_auth_codes(body)
+    if body_bare:
+        return body_bare
+    return _extract_unlabeled_auth_codes(subject)
 
 
 def _message_received_at(value: Any) -> datetime | None:
@@ -4083,7 +4219,7 @@ class Broker:
             age = (now - received_at).total_seconds()
             if age < 0 or age > 3600:
                 continue
-            codes = _extract_auth_codes(m.body)
+            codes = _extract_email_auth_codes(m.subject, m.body)
             if not codes:
                 continue
             if origin_policy == "target-origin" and not _otp_sender_matches(m.sender, normalized_target):
@@ -4321,7 +4457,6 @@ class Broker:
                 raise
 
         self.store.purge_legacy_otp_markers()
-        now = datetime.now(UTC)
         lookback = min(3600, max(900, max_age_seconds * 2))
         if adapter is not None and hasattr(adapter, "recent"):
             messages = adapter.recent(
@@ -4338,6 +4473,9 @@ class Broker:
                 if (normalized_scope == "*" or m.conversation_id == normalized_scope)
                 and m.sender != "me"
             ]
+        # Capture `now` after reading the adapter so AX rows stamped "Now" do not
+        # appear microseconds in the future and get silently discarded.
+        now = datetime.now(UTC)
 
         candidates: list[tuple[TextMessage, str, datetime]] = []
         stale = False
@@ -4345,7 +4483,7 @@ class Broker:
         for m in messages:
             if normalized_scope != "*" and m.conversation_id != normalized_scope:
                 continue
-            if m.sender == "me":
+            if m.sender == "me" or is_tapback_reaction_body(m.body):
                 continue
             if normalized_sender and not _sender_matches_filter(
                 m.sender, normalized_sender
@@ -4355,7 +4493,7 @@ class Broker:
             if received_at is None:
                 continue
             age = (now - received_at).total_seconds()
-            if age < 0 or age > 3600:
+            if age < -5 or age > 3600:
                 continue
             codes = _extract_auth_codes(m.body)
             if not codes:

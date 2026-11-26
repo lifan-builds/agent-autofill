@@ -1,0 +1,271 @@
+{
+  "schema_version": 1,
+  "description": "Adversarial multi-step checkout, login, and profile HTML form DOM corpus covering obscure ARIA labels, split phone/CC/expiry inputs, shadow/nested labels, misleading autocomplete attributes, billing vs shipping collisions, and false-positive substrings.",
+  "scenarios": [
+    {
+      "id": "dom_a01",
+      "category": "obscure_aria",
+      "description": "ARIA-only inputs, multi-node aria-labelledby, verbose nested label helper text, (optional)/(required) suffixes, and placeholder-only ZIP.",
+      "target_origin": "https://shop.example.test",
+      "purpose": "checkout",
+      "profile_setup": "single_home",
+      "html": "<form><div id=\"fn-lbl\">First Name</div><div id=\"fn-hint\">(as shown on ID)</div><input id=\"aria_first\" type=\"text\" aria-labelledby=\"fn-lbl fn-hint\" required><input id=\"aria_last\" type=\"text\" aria-label=\"Family name (required)\"><label for=\"verbose_email\">Email address <span class=\"hint\">(we will send your receipt here)</span> <span aria-hidden=\"true\">*</span></label><input id=\"verbose_email\" type=\"email\" required><input id=\"ph_zip\" type=\"text\" placeholder=\"ZIP / Postal Code (5 digits)\"><label for=\"opt_company\">Company name (optional)</label><input id=\"opt_company\" type=\"text\"></form>",
+      "expected_fields": [
+        {"field_id": "aria_first", "expected_status": "matched", "expected_semantic": "first_name", "expected_section": null},
+        {"field_id": "aria_last", "expected_status": "matched", "expected_semantic": "last_name", "expected_section": null},
+        {"field_id": "verbose_email", "expected_status": "matched", "expected_semantic": "email", "expected_section": null},
+        {"field_id": "ph_zip", "expected_status": "matched", "expected_semantic": "postcode", "expected_section": null},
+        {"field_id": "opt_company", "expected_status": "matched", "expected_semantic": "company", "expected_section": null}
+      ]
+    },
+    {
+      "id": "dom_a02",
+      "category": "shadow_nested_labels",
+      "description": "Declarative Shadow DOM address inputs and deeply nested label wrappers.",
+      "target_origin": "https://checkout.example.test",
+      "purpose": "shipping",
+      "profile_setup": "single_home",
+      "html": "<form><custom-address><template shadowrootmode=\"open\"><label><div class=\"row\"><span>Street Address (Line 1)</span><span>*</span></div><input id=\"sh_street\" name=\"addr1\" autocomplete=\"address-line1\" required></label><label><div><span>City / Town</span></div><input id=\"sh_city\" name=\"locality\" autocomplete=\"address-level2\" required></label><label><div><span>State / Province</span></div><input id=\"sh_state\" name=\"region\" autocomplete=\"address-level1\" required></label><label><div><span>Postal Code</span></div><input id=\"sh_zip\" name=\"postal\" autocomplete=\"postal-code\" required></label><label><div><span>Country/Region</span></div><select id=\"sh_country\" name=\"country\" autocomplete=\"country\"><option value=\"US\">United States</option></select></label></template></custom-address></form>",
+      "expected_fields": [
+        {"field_id": "sh_street", "expected_status": "matched", "expected_semantic": "street", "expected_section": null},
+        {"field_id": "sh_city", "expected_status": "matched", "expected_semantic": "city", "expected_section": null},
+        {"field_id": "sh_state", "expected_status": "matched", "expected_semantic": "state", "expected_section": null},
+        {"field_id": "sh_zip", "expected_status": "matched", "expected_semantic": "postcode", "expected_section": null},
+        {"field_id": "sh_country", "expected_status": "matched", "expected_semantic": "country", "expected_section": null}
+      ]
+    },
+    {
+      "id": "dom_a03",
+      "category": "shadow_nested_labels",
+      "description": "Address Line 1 vs Address Line 2 (Apt, suite, unit) must not match Line 2 to Street Line 1.",
+      "target_origin": "https://checkout.example.test",
+      "purpose": "shipping",
+      "profile_setup": "single_home",
+      "html": "<form><label for=\"addr1\">Street address (Line 1) *</label><input id=\"addr1\" name=\"address1\" autocomplete=\"address-line1\" required><label for=\"addr2\">Address line 2 (Apt, suite, unit, building)</label><input id=\"addr2\" name=\"address2\" autocomplete=\"address-line2\"><label for=\"apt_only\">Apt / Suite (optional)</label><input id=\"apt_only\" name=\"apt\"><label for=\"city1\">City</label><input id=\"city1\" name=\"city\" autocomplete=\"address-level2\"></form>",
+      "expected_fields": [
+        {"field_id": "addr1", "expected_status": "matched", "expected_semantic": "street", "expected_section": null},
+        {"field_id": "addr2", "expected_status": "missing", "expected_semantic": null, "expected_section": null},
+        {"field_id": "apt_only", "expected_status": "missing", "expected_semantic": null, "expected_section": null},
+        {"field_id": "city1", "expected_status": "matched", "expected_semantic": "city", "expected_section": null}
+      ]
+    },
+    {
+      "id": "dom_s01",
+      "category": "split_inputs",
+      "description": "Split 3-box US phone inputs with tel-area-code/prefix/suffix autocomplete must remain ambiguous rather than dumping full phone into each box.",
+      "target_origin": "https://portal.example.test",
+      "purpose": "profile-update",
+      "profile_setup": "single_home",
+      "html": "<form><fieldset><legend>Phone Number</legend><input id=\"tel_area\" type=\"tel\" maxlength=\"3\" autocomplete=\"tel-area-code\" aria-label=\"Area code\"><input id=\"tel_prefix\" type=\"tel\" maxlength=\"3\" autocomplete=\"tel-local-prefix\" aria-label=\"Phone prefix\"><input id=\"tel_line\" type=\"tel\" maxlength=\"4\" autocomplete=\"tel-local-suffix\" aria-label=\"Phone line number\"></fieldset><label for=\"full_phone\">Backup Phone</label><input id=\"full_phone\" type=\"tel\" autocomplete=\"tel\"></form>",
+      "expected_fields": [
+        {"field_id": "tel_area", "expected_status": "ambiguous", "expected_semantic": "phone", "expected_section": null},
+        {"field_id": "tel_prefix", "expected_status": "ambiguous", "expected_semantic": "phone", "expected_section": null},
+        {"field_id": "tel_line", "expected_status": "ambiguous", "expected_semantic": "phone", "expected_section": null},
+        {"field_id": "full_phone", "expected_status": "matched", "expected_semantic": "phone", "expected_section": null}
+      ]
+    },
+    {
+      "id": "dom_s02",
+      "category": "split_inputs",
+      "description": "Split Phone (Part 1/2/3) without autocomplete must remain ambiguous, never blindly matched to a single phone record.",
+      "target_origin": "https://portal.example.test",
+      "purpose": "contact",
+      "profile_setup": "single_home",
+      "html": "<form><label for=\"p1\">Phone (Part 1)</label><input id=\"p1\" type=\"tel\" maxlength=\"3\"><label for=\"p2\">Phone (Part 2)</label><input id=\"p2\" type=\"tel\" maxlength=\"3\"><label for=\"p3\">Phone (Part 3)</label><input id=\"p3\" type=\"tel\" maxlength=\"4\"><label for=\"cc_dial\">Country dialing code</label><input id=\"cc_dial\" type=\"tel\" maxlength=\"4\" autocomplete=\"tel-country-code\"></form>",
+      "expected_fields": [
+        {"field_id": "p1", "expected_status": "ambiguous", "expected_semantic": "phone", "expected_section": null},
+        {"field_id": "p2", "expected_status": "ambiguous", "expected_semantic": "phone", "expected_section": null},
+        {"field_id": "p3", "expected_status": "ambiguous", "expected_semantic": "phone", "expected_section": null},
+        {"field_id": "cc_dial", "expected_status": "ambiguous", "expected_semantic": "phone", "expected_section": null}
+      ]
+    },
+    {
+      "id": "dom_s03",
+      "category": "split_inputs",
+      "description": "Split 4-box credit card number, split expiration month/year, CVV, and Name on Card must ALL route to financial, never profile memory.",
+      "target_origin": "https://pay.example.test",
+      "purpose": "payment",
+      "profile_setup": "single_home",
+      "html": "<form><fieldset><legend>Card Number</legend><input id=\"cc1\" type=\"text\" maxlength=\"4\" inputmode=\"numeric\" aria-label=\"Card digits 1 to 4\"><input id=\"cc2\" type=\"text\" maxlength=\"4\" inputmode=\"numeric\" aria-label=\"Card digits 5 to 8\"><input id=\"cc3\" type=\"text\" maxlength=\"4\" inputmode=\"numeric\" aria-label=\"Card digits 9 to 12\"><input id=\"cc4\" type=\"text\" maxlength=\"4\" inputmode=\"numeric\" aria-label=\"Card digits 13 to 16\"></fieldset><label for=\"exp_m\">Exp Month</label><select id=\"exp_m\" autocomplete=\"cc-exp-month\"><option value=\"01\">01</option></select><label for=\"exp_y\">Exp Year</label><select id=\"exp_y\" autocomplete=\"cc-exp-year\"><option value=\"2029\">2029</option></select><label for=\"cvv\">CVV / CVC</label><input id=\"cvv\" type=\"text\" maxlength=\"4\" autocomplete=\"cc-csc\"><label for=\"cc_holder\">Name on card</label><input id=\"cc_holder\" type=\"text\" autocomplete=\"cc-name\"></form>",
+      "expected_fields": [
+        {"field_id": "cc1", "expected_status": "financial", "expected_semantic": null, "expected_section": null},
+        {"field_id": "cc2", "expected_status": "financial", "expected_semantic": null, "expected_section": null},
+        {"field_id": "cc3", "expected_status": "financial", "expected_semantic": null, "expected_section": null},
+        {"field_id": "cc4", "expected_status": "financial", "expected_semantic": null, "expected_section": null},
+        {"field_id": "exp_m", "expected_status": "financial", "expected_semantic": null, "expected_section": null},
+        {"field_id": "exp_y", "expected_status": "financial", "expected_semantic": null, "expected_section": null},
+        {"field_id": "cvv", "expected_status": "financial", "expected_semantic": null, "expected_section": null},
+        {"field_id": "cc_holder", "expected_status": "financial", "expected_semantic": null, "expected_section": null}
+      ]
+    },
+    {
+      "id": "dom_s04",
+      "category": "split_inputs",
+      "description": "Combined card & bank payment form without autocomplete attributes must still classify all payment fields as financial.",
+      "target_origin": "https://pay.example.test",
+      "purpose": "payment",
+      "profile_setup": "single_home",
+      "html": "<form><label for=\"card_num\">Credit Card Number *</label><input id=\"card_num\" type=\"text\" required><label for=\"exp_mmyy\">Expiration Date (MM / YY)</label><input id=\"exp_mmyy\" type=\"text\" placeholder=\"MM/YY\"><label for=\"card_cid\">Card Security Code (CID)</label><input id=\"card_cid\" type=\"text\" maxlength=\"4\"><label for=\"bank_rt\">Bank Routing Number</label><input id=\"bank_rt\" type=\"text\"><label for=\"iban\">IBAN</label><input id=\"iban\" type=\"text\"></form>",
+      "expected_fields": [
+        {"field_id": "card_num", "expected_status": "financial", "expected_semantic": null, "expected_section": null},
+        {"field_id": "exp_mmyy", "expected_status": "financial", "expected_semantic": null, "expected_section": null},
+        {"field_id": "card_cid", "expected_status": "financial", "expected_semantic": null, "expected_section": null},
+        {"field_id": "bank_rt", "expected_status": "financial", "expected_semantic": null, "expected_section": null},
+        {"field_id": "iban", "expected_status": "financial", "expected_semantic": null, "expected_section": null}
+      ]
+    },
+    {
+      "id": "dom_m01",
+      "category": "misleading_autocomplete",
+      "description": "Anti-autofill hacks (autocomplete=new-password/off/nope/chrome-off on ordinary address/contact text inputs) must NOT block matching or misclassify as credential.",
+      "target_origin": "https://checkout.example.test",
+      "purpose": "checkout",
+      "profile_setup": "single_home",
+      "html": "<form><label for=\"anti_street\">Street Address</label><input id=\"anti_street\" type=\"text\" autocomplete=\"new-password\"><label for=\"anti_email\">Email Address</label><input id=\"anti_email\" type=\"email\" autocomplete=\"off\"><label for=\"anti_city\">City</label><input id=\"anti_city\" type=\"text\" autocomplete=\"nope\"><label for=\"anti_zip\">Postal Code</label><input id=\"anti_zip\" type=\"text\" autocomplete=\"chrome-off\"><label for=\"anti_state\">State</label><input id=\"anti_state\" type=\"text\" autocomplete=\"do-not-autofill\"></form>",
+      "expected_fields": [
+        {"field_id": "anti_street", "expected_status": "matched", "expected_semantic": "street", "expected_section": null},
+        {"field_id": "anti_email", "expected_status": "matched", "expected_semantic": "email", "expected_section": null},
+        {"field_id": "anti_city", "expected_status": "matched", "expected_semantic": "city", "expected_section": null},
+        {"field_id": "anti_zip", "expected_status": "matched", "expected_semantic": "postcode", "expected_section": null},
+        {"field_id": "anti_state", "expected_status": "matched", "expected_semantic": "state", "expected_section": null}
+      ]
+    },
+    {
+      "id": "dom_m02",
+      "category": "misleading_autocomplete",
+      "description": "Conflicting autocomplete vs explicit label (Promo Code with one-time-code) and obscure generic labels disambiguated by semantic autocomplete/type.",
+      "target_origin": "https://checkout.example.test",
+      "purpose": "checkout",
+      "profile_setup": "single_home",
+      "html": "<form><label for=\"promo_tricky\">Promo Code</label><input id=\"promo_tricky\" type=\"text\" name=\"coupon\" autocomplete=\"one-time-code\"><label for=\"obscure_cc\">Number</label><input id=\"obscure_cc\" type=\"text\" autocomplete=\"cc-number\" inputmode=\"numeric\"><label for=\"obscure_otp\">Code</label><input id=\"obscure_otp\" type=\"text\" autocomplete=\"one-time-code\" inputmode=\"numeric\"><label for=\"obscure_pw\">Enter secret</label><input id=\"obscure_pw\" type=\"password\" autocomplete=\"current-password\"><label for=\"obscure_zip\">Location</label><input id=\"obscure_zip\" type=\"text\" autocomplete=\"postal-code\"></form>",
+      "expected_fields": [
+        {"field_id": "promo_tricky", "expected_status": "task_specific", "expected_semantic": null, "expected_section": null},
+        {"field_id": "obscure_cc", "expected_status": "financial", "expected_semantic": null, "expected_section": null},
+        {"field_id": "obscure_otp", "expected_status": "transient", "expected_semantic": null, "expected_section": null},
+        {"field_id": "obscure_pw", "expected_status": "credential", "expected_semantic": null, "expected_section": null},
+        {"field_id": "obscure_zip", "expected_status": "matched", "expected_semantic": "postcode", "expected_section": null}
+      ]
+    },
+    {
+      "id": "dom_m03",
+      "category": "false_positive_substrings",
+      "description": "Substring traps: Statement number (contains 'state'), Footpath access notes (contains 'otp'), Original order reference (contains 'origin'), Gift recipient email, Name on card.",
+      "target_origin": "https://orders.example.test",
+      "purpose": "order-form",
+      "profile_setup": "single_home",
+      "html": "<form><label for=\"stmt_no\">Statement number</label><input id=\"stmt_no\" type=\"text\"><label for=\"footpath\">Footpath access notes</label><textarea id=\"footpath\"></textarea><label for=\"orig_ref\">Original order reference</label><input id=\"orig_ref\" type=\"text\"><label for=\"gift_email\">Gift recipient email</label><input id=\"gift_email\" type=\"email\"><label for=\"card_name\">Name on card</label><input id=\"card_name\" type=\"text\"></form>",
+      "expected_fields": [
+        {"field_id": "stmt_no", "expected_status": "missing", "expected_semantic": null, "expected_section": null},
+        {"field_id": "footpath", "expected_status": "task_specific", "expected_semantic": null, "expected_section": null},
+        {"field_id": "orig_ref", "expected_status": "task_specific", "expected_semantic": null, "expected_section": null},
+        {"field_id": "gift_email", "expected_status": "task_specific", "expected_semantic": null, "expected_section": null},
+        {"field_id": "card_name", "expected_status": "financial", "expected_semantic": null, "expected_section": null}
+      ]
+    },
+    {
+      "id": "dom_m04",
+      "category": "multistep_login_checkout",
+      "description": "Multi-step login + MFA + consent + coupon form with single_home profile.",
+      "target_origin": "https://auth.example.test",
+      "purpose": "login",
+      "profile_setup": "single_home",
+      "html": "<form><label for=\"login_user\">Username or Email</label><input id=\"login_user\" type=\"text\" autocomplete=\"username\"><label for=\"login_pass\">Password</label><input id=\"login_pass\" type=\"password\" autocomplete=\"current-password\"><label for=\"mfa_code\">6-digit authenticator code</label><input id=\"mfa_code\" type=\"text\" autocomplete=\"one-time-code\" inputmode=\"numeric\"><label for=\"tos_chk\"><input id=\"tos_chk\" type=\"checkbox\">I agree to the Terms of Service and Privacy Policy</label><label for=\"mkt_chk\"><input id=\"mkt_chk\" type=\"checkbox\">Email me product marketing updates</label><label for=\"coupon_box\">Discount / Coupon code</label><input id=\"coupon_box\" type=\"text\"></form>",
+      "expected_fields": [
+        {"field_id": "login_user", "expected_status": "credential", "expected_semantic": null, "expected_section": null},
+        {"field_id": "login_pass", "expected_status": "credential", "expected_semantic": null, "expected_section": null},
+        {"field_id": "mfa_code", "expected_status": "transient", "expected_semantic": null, "expected_section": null},
+        {"field_id": "tos_chk", "expected_status": "consent", "expected_semantic": null, "expected_section": null},
+        {"field_id": "mkt_chk", "expected_status": "consent", "expected_semantic": null, "expected_section": null},
+        {"field_id": "coupon_box", "expected_status": "task_specific", "expected_semantic": null, "expected_section": null}
+      ]
+    },
+    {
+      "id": "dom_b01",
+      "category": "billing_vs_shipping",
+      "description": "Prefixed Shipping + Billing address fields on one checkout page with single_home profile preserve section and resolve cleanly.",
+      "target_origin": "https://store.example.test",
+      "purpose": "checkout",
+      "profile_setup": "single_home",
+      "html": "<form><label for=\"ship_street\">Shipping Street Address</label><input id=\"ship_street\" name=\"shipping_street\"><label for=\"ship_city\">Shipping City</label><input id=\"ship_city\" name=\"shipping_city\"><label for=\"ship_state\">Shipping State</label><input id=\"ship_state\" name=\"shipping_state\"><label for=\"ship_zip\">Shipping ZIP Code</label><input id=\"ship_zip\" name=\"shipping_zip\"><label for=\"bill_street\">Billing Street Address</label><input id=\"bill_street\" name=\"billing_street\"><label for=\"bill_city\">Billing City</label><input id=\"bill_city\" name=\"billing_city\"><label for=\"bill_state\">Billing State</label><input id=\"bill_state\" name=\"billing_state\"><label for=\"bill_zip\">Billing ZIP Code</label><input id=\"bill_zip\" name=\"billing_zip\"></form>",
+      "expected_fields": [
+        {"field_id": "ship_street", "expected_status": "matched", "expected_semantic": "street", "expected_section": "shipping"},
+        {"field_id": "ship_city", "expected_status": "matched", "expected_semantic": "city", "expected_section": "shipping"},
+        {"field_id": "ship_state", "expected_status": "matched", "expected_semantic": "state", "expected_section": "shipping"},
+        {"field_id": "ship_zip", "expected_status": "matched", "expected_semantic": "postcode", "expected_section": "shipping"},
+        {"field_id": "bill_street", "expected_status": "matched", "expected_semantic": "street", "expected_section": "billing"},
+        {"field_id": "bill_city", "expected_status": "matched", "expected_semantic": "city", "expected_section": "billing"},
+        {"field_id": "bill_state", "expected_status": "matched", "expected_semantic": "state", "expected_section": "billing"},
+        {"field_id": "bill_zip", "expected_status": "matched", "expected_semantic": "postcode", "expected_section": "billing"}
+      ]
+    },
+    {
+      "id": "dom_b02",
+      "category": "billing_vs_shipping",
+      "description": "Identical unprefixed labels inside separate Shipping and Billing fieldsets with section-qualified autocomplete attributes.",
+      "target_origin": "https://store.example.test",
+      "purpose": "checkout",
+      "profile_setup": "single_home",
+      "html": "<form><fieldset><legend>Shipping Address</legend><label for=\"s_addr\">Street address</label><input id=\"s_addr\" autocomplete=\"shipping street-address\"><label for=\"s_city\">City</label><input id=\"s_city\" autocomplete=\"shipping address-level2\"><label for=\"s_zip\">ZIP Code</label><input id=\"s_zip\" autocomplete=\"shipping postal-code\"><label for=\"s_country\">Country</label><input id=\"s_country\" autocomplete=\"shipping country\"></fieldset><fieldset><legend>Billing Address</legend><label for=\"b_addr\">Street address</label><input id=\"b_addr\" autocomplete=\"billing street-address\"><label for=\"b_city\">City</label><input id=\"b_city\" autocomplete=\"billing address-level2\"><label for=\"b_zip\">ZIP Code</label><input id=\"b_zip\" autocomplete=\"billing postal-code\"><label for=\"b_country\">Country</label><input id=\"b_country\" autocomplete=\"billing country\"></fieldset></form>",
+      "expected_fields": [
+        {"field_id": "s_addr", "expected_status": "matched", "expected_semantic": "street", "expected_section": "shipping"},
+        {"field_id": "s_city", "expected_status": "matched", "expected_semantic": "city", "expected_section": "shipping"},
+        {"field_id": "s_zip", "expected_status": "matched", "expected_semantic": "postcode", "expected_section": "shipping"},
+        {"field_id": "s_country", "expected_status": "matched", "expected_semantic": "country", "expected_section": "shipping"},
+        {"field_id": "b_addr", "expected_status": "matched", "expected_semantic": "street", "expected_section": "billing"},
+        {"field_id": "b_city", "expected_status": "matched", "expected_semantic": "city", "expected_section": "billing"},
+        {"field_id": "b_zip", "expected_status": "matched", "expected_semantic": "postcode", "expected_section": "billing"},
+        {"field_id": "b_country", "expected_status": "matched", "expected_semantic": "country", "expected_section": "billing"}
+      ]
+    },
+    {
+      "id": "dom_b03",
+      "category": "billing_vs_shipping",
+      "description": "Dual Shipping + Billing checkout with two equal address groups (home and work) keeps every component ambiguous with section metadata preserved.",
+      "target_origin": "https://store.example.test",
+      "purpose": "checkout",
+      "profile_setup": "two_addresses_home_and_work",
+      "html": "<form><fieldset><legend>Shipping Address</legend><label for=\"sh2_street\">Street address</label><input id=\"sh2_street\" autocomplete=\"shipping street-address\"><label for=\"sh2_city\">City</label><input id=\"sh2_city\" autocomplete=\"shipping address-level2\"><label for=\"sh2_zip\">ZIP Code</label><input id=\"sh2_zip\" autocomplete=\"shipping postal-code\"></fieldset><fieldset><legend>Billing Address</legend><label for=\"bi2_street\">Street address</label><input id=\"bi2_street\" autocomplete=\"billing street-address\"><label for=\"bi2_city\">City</label><input id=\"bi2_city\" autocomplete=\"billing address-level2\"><label for=\"bi2_zip\">ZIP Code</label><input id=\"bi2_zip\" autocomplete=\"billing postal-code\"></fieldset></form>",
+      "expected_fields": [
+        {"field_id": "sh2_street", "expected_status": "ambiguous", "expected_semantic": "street", "expected_section": "shipping"},
+        {"field_id": "sh2_city", "expected_status": "ambiguous", "expected_semantic": "city", "expected_section": "shipping"},
+        {"field_id": "sh2_zip", "expected_status": "ambiguous", "expected_semantic": "postcode", "expected_section": "shipping"},
+        {"field_id": "bi2_street", "expected_status": "ambiguous", "expected_semantic": "street", "expected_section": "billing"},
+        {"field_id": "bi2_city", "expected_status": "ambiguous", "expected_semantic": "city", "expected_section": "billing"},
+        {"field_id": "bi2_zip", "expected_status": "ambiguous", "expected_semantic": "postcode", "expected_section": "billing"}
+      ]
+    },
+    {
+      "id": "dom_b04",
+      "category": "billing_vs_shipping",
+      "description": "Shipping checkout with primary home group + 'Billing address same as shipping' checkbox (must NOT match street) + delivery instructions + terms consent.",
+      "target_origin": "https://store.example.test",
+      "purpose": "checkout",
+      "profile_setup": "two_addresses_with_primary_home",
+      "html": "<form><fieldset><legend>Shipping Address</legend><label for=\"sp_street\">Shipping Street</label><input id=\"sp_street\"><label for=\"sp_city\">Shipping City</label><input id=\"sp_city\"><label for=\"sp_zip\">Shipping Postal Code</label><input id=\"sp_zip\"></fieldset><label for=\"same_bill\"><input id=\"same_bill\" type=\"checkbox\">Billing address same as shipping</label><label for=\"deliv_notes\">Delivery instructions</label><textarea id=\"deliv_notes\"></textarea><label for=\"terms_ok\"><input id=\"terms_ok\" type=\"checkbox\">Accept Terms of Service</label></form>",
+      "expected_fields": [
+        {"field_id": "sp_street", "expected_status": "matched", "expected_semantic": "street", "expected_section": "shipping"},
+        {"field_id": "sp_city", "expected_status": "matched", "expected_semantic": "city", "expected_section": "shipping"},
+        {"field_id": "sp_zip", "expected_status": "matched", "expected_semantic": "postcode", "expected_section": "shipping"},
+        {"field_id": "same_bill", "expected_status": "task_specific", "expected_semantic": null, "expected_section": null},
+        {"field_id": "deliv_notes", "expected_status": "task_specific", "expected_semantic": null, "expected_section": null},
+        {"field_id": "terms_ok", "expected_status": "consent", "expected_semantic": null, "expected_section": null}
+      ]
+    },
+    {
+      "id": "dom_b05",
+      "category": "multistep_login_checkout",
+      "description": "Empty vault profile form cleanly separates missing profile fields, payment fields, consent, and task-specific notes.",
+      "target_origin": "https://signup.example.test",
+      "purpose": "account-signup",
+      "profile_setup": "empty",
+      "html": "<form><label for=\"e_full\">Full name *</label><input id=\"e_full\" required><label for=\"e_mail\">Email address *</label><input id=\"e_mail\" type=\"email\" required><label for=\"e_cc\">Card number</label><input id=\"e_cc\" autocomplete=\"cc-number\"><label for=\"e_gift\">Gift message</label><textarea id=\"e_gift\"></textarea><label for=\"e_optin\"><input id=\"e_optin\" type=\"checkbox\">Opt in to promotional emails</label></form>",
+      "expected_fields": [
+        {"field_id": "e_full", "expected_status": "missing", "expected_semantic": "full_name", "expected_section": null},
+        {"field_id": "e_mail", "expected_status": "missing", "expected_semantic": "email", "expected_section": null},
+        {"field_id": "e_cc", "expected_status": "financial", "expected_semantic": null, "expected_section": null},
+        {"field_id": "e_gift", "expected_status": "task_specific", "expected_semantic": null, "expected_section": null},
+        {"field_id": "e_optin", "expected_status": "consent", "expected_semantic": null, "expected_section": null}
+      ]
+    }
+  ]
+}

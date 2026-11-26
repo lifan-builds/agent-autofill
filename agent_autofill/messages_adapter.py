@@ -80,6 +80,10 @@ _AX_TAPBACK_PREFIXES = (
     'questioned "',
     "questioned \u201c",
 )
+_AX_TAPBACK_RE = re.compile(
+    r'^(?:reacted\s+[^\s"\u201c]{1,24}\s+to|removed\s+(?:an?\s+)?[^"\u201c]{1,32}\s+from)\s+["\u201c]',
+    re.IGNORECASE,
+)
 
 
 class MessagesUnavailable(RuntimeError):
@@ -241,9 +245,20 @@ def _parse_ax_sidebar_row(text: str, now_local: datetime) -> TextMessage | None:
     )
 
 
+def is_tapback_reaction_body(body: str) -> bool:
+    """Return True if a Messages body is a Tapback reaction quoting another message."""
+
+    cleaned = (body or "").strip()
+    if not cleaned:
+        return False
+    lowered = cleaned.lower()
+    if any(lowered.startswith(prefix) for prefix in _AX_TAPBACK_PREFIXES):
+        return True
+    return bool(_AX_TAPBACK_RE.match(cleaned))
+
+
 def _is_ax_tapback_body(body: str) -> bool:
-    lowered = (body or "").strip().lower()
-    return any(lowered.startswith(prefix) for prefix in _AX_TAPBACK_PREFIXES)
+    return is_tapback_reaction_body(body)
 
 
 def _unescape_ax_text(raw: str) -> str:

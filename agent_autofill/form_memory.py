@@ -15,6 +15,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 _REQUIRED_MARKERS = re.compile(r"(?:\s*[✱*†‡]+)+\s*$")
+_PARENTHETICAL_RE = re.compile(r"\([^)]*\)")
 _SPACE = re.compile(r"\s+")
 _PUNCTUATION = re.compile(r"[^a-z0-9]+")
 _MAX_CANDIDATE_ROWS = 25
@@ -30,7 +31,15 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "first_name": ("first name", "given name", "forename"),
     "last_name": ("last name", "family name", "surname"),
     "full_name": ("full name", "name", "your name"),
-    "phone": ("phone", "phone number", "mobile", "mobile number", "telephone"),
+    "phone": (
+        "phone",
+        "phone number",
+        "mobile",
+        "mobile number",
+        "telephone",
+        "backup phone",
+        "phone ext",
+    ),
     "company": ("company", "company name", "organization", "organisation"),
     "street": (
         "street",
@@ -40,7 +49,7 @@ _ALIASES: dict[str, tuple[str, ...]] = {
         "street address line 1",
         "address",
     ),
-    "city": ("city", "town", "locality"),
+    "city": ("city", "town", "locality", "city town"),
     "state": (
         "state",
         "province",
@@ -64,6 +73,100 @@ _ALIASES: dict[str, tuple[str, ...]] = {
         "country region",
     ),
 }
+
+_AUTOCOMPLETE_TO_SEMANTIC: dict[str, str] = {
+    "email": "email",
+    "given-name": "first_name",
+    "family-name": "last_name",
+    "name": "full_name",
+    "tel": "phone",
+    "tel-national": "phone",
+    "organization": "company",
+    "street-address": "street",
+    "address-line1": "street",
+    "address-level2": "city",
+    "address-level1": "state",
+    "postal-code": "postcode",
+    "country": "country",
+    "country-name": "country",
+}
+_SPLIT_PHONE_AUTOCOMPLETE = {
+    "tel-country-code",
+    "tel-area-code",
+    "tel-local",
+    "tel-local-prefix",
+    "tel-local-suffix",
+    "tel-extension",
+}
+_SPLIT_PHONE_TERMS = {
+    "area code",
+    "phone prefix",
+    "phone line number",
+    "country dialing code",
+    "dialing code",
+    "country code",
+    "phone part 1",
+    "phone part 2",
+    "phone part 3",
+    "phone part 4",
+}
+_ADDRESS_LINE2_TERMS = {
+    "address line 2",
+    "address 2",
+    "apt",
+    "apartment",
+    "suite",
+    "unit",
+    "building",
+    "floor",
+}
+_FINANCIAL_AUTOCOMPLETE = {
+    "cc-name",
+    "cc-given-name",
+    "cc-additional-name",
+    "cc-family-name",
+    "cc-number",
+    "cc-exp",
+    "cc-exp-month",
+    "cc-exp-year",
+    "cc-csc",
+    "cc-type",
+    "transaction-currency",
+    "transaction-amount",
+}
+_FINANCIAL_TERMS = {
+    "card number",
+    "credit card",
+    "debit card",
+    "card digits",
+    "cardholder",
+    "card holder",
+    "name on card",
+    "cvv",
+    "cvc",
+    "cid",
+    "card security code",
+    "expiration date",
+    "expiration month",
+    "expiration year",
+    "exp month",
+    "exp year",
+    "expiry",
+    "mm yy",
+    "routing number",
+    "bank routing",
+    "iban",
+    "bank account",
+    "swift code",
+    "sort code",
+}
+_CREDENTIAL_AUTOCOMPLETE = {"username", "current-password", "new-password"}
+_SECTION_PREFIXES: dict[str, str] = {
+    "shipping": "shipping",
+    "delivery": "shipping",
+    "billing": "billing",
+}
+_STRIPPABLE_LABEL_QUALIFIERS = ("optional", "required", "line 1")
 
 _CHROME_FIELD_SEMANTICS = {
     "name": "full_name",
@@ -230,6 +333,10 @@ _TRANSIENT_TERMS = {
     "security code",
     "verification code",
     "confirmation code",
+    "authenticator code",
+    "2fa code",
+    "mfa code",
+    "sms code",
 }
 _CREDENTIAL_TERMS = {
     "password",
@@ -268,6 +375,18 @@ _TASK_SPECIFIC_TERMS = {
     "what are you sending",
     "what zip code are you mailing",
     "package type",
+    "promo code",
+    "coupon code",
+    "discount code",
+    "coupon",
+    "gift message",
+    "gift recipient",
+    "delivery instructions",
+    "same as shipping",
+    "same as billing",
+    "access notes",
+    "order reference",
+    "order number",
 }
 _CONSENT_TERMS = {
     "consent",
@@ -291,11 +410,154 @@ def normalize_form_label(label: Any) -> str:
     return _SPACE.sub(" ", text).strip()
 
 
-def _semantic_label(label: str) -> str | None:
+_NORMALIZED_ALIAS_TO_SEMANTIC: dict[str, str] = {
+    normalize_form_label(alias): semantic
+    for semantic, aliases in _ALIASES.items()
+    for alias in aliases
+}
+
+
+def _parse_autocomplete(raw: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Return (section, field_token) parsed from an HTML autocomplete attribute."""
+
+    ac = raw.get("autocomplete")
+    if not isinstance(ac, str) or not ac.strip():
+        return (None, None)
+    tokens = [tok.strip().lower() for tok in ac.split() if tok.strip()]
+    if not tokens:
+        return (None, None)
+    section: str | None = None
+    filtered: list[str] = []
+    for tok in tokens:
+        if tok in {"shipping", "billing"}:
+            section = tok
+        elif tok.startswith("section-") or tok in {
+            "home",
+            "work",
+            "mobile",
+            "fax",
+            "pager",
+            "webauthn",
+        }:
+            continue
+        else:
+            filtered.append(tok)
+    field_token = filtered[-1] if filtered else None
+    return (section, field_token)
+
+
+def _contains_term(label: str, terms: set[str]) -> bool:
     normalized = normalize_form_label(label)
-    for semantic, aliases in _ALIASES.items():
-        if normalized in {normalize_form_label(alias) for alias in aliases}:
+    if not normalized:
+        return False
+    padded = f" {normalized} "
+    return any(f" {term} " in padded for term in terms)
+
+
+def _strip_label_hints(label: str) -> str:
+    without_parens = _PARENTHETICAL_RE.sub(" ", label)
+    cleaned = normalize_form_label(without_parens)
+    for qualifier in _STRIPPABLE_LABEL_QUALIFIERS:
+        if cleaned.endswith(f" {qualifier}"):
+            cleaned = cleaned[: -(len(qualifier) + 1)].strip()
+    return cleaned
+
+
+def _semantic_label(label: str) -> str | None:
+    if _contains_term(label, _ADDRESS_LINE2_TERMS):
+        return None
+    candidates = [normalize_form_label(label)]
+    stripped = _strip_label_hints(label)
+    if stripped and stripped not in candidates:
+        candidates.append(stripped)
+    for cand in list(candidates):
+        parts = cand.split(" ", 1)
+        if len(parts) == 2 and parts[0] in _SECTION_PREFIXES:
+            rest = parts[1].strip()
+            if rest and cand not in _ADDRESS_GROUP_LABELS and rest not in candidates:
+                candidates.append(rest)
+    for cand in candidates:
+        semantic = _NORMALIZED_ALIAS_TO_SEMANTIC.get(cand)
+        if semantic:
             return semantic
+    return None
+
+
+def _infer_section(raw: dict[str, Any], label: str) -> str | None:
+    explicit = raw.get("section")
+    if isinstance(explicit, str) and explicit.strip().lower() in {"shipping", "billing"}:
+        return explicit.strip().lower()
+    ac_section, _ = _parse_autocomplete(raw)
+    if ac_section:
+        return ac_section
+    normalized = normalize_form_label(label)
+    first_word = normalized.split(" ", 1)[0] if normalized else ""
+    if first_word in _SECTION_PREFIXES and normalized not in _ADDRESS_GROUP_LABELS:
+        return _SECTION_PREFIXES[first_word]
+    name_norm = normalize_form_label(raw.get("name", ""))
+    name_first = name_norm.split(" ", 1)[0] if name_norm else ""
+    if name_first in _SECTION_PREFIXES:
+        return _SECTION_PREFIXES[name_first]
+    legend = raw.get("group_legend")
+    if isinstance(legend, str) and legend.strip():
+        legend_norm = normalize_form_label(legend)
+        has_ship = "shipping" in legend_norm or "delivery" in legend_norm
+        has_bill = "billing" in legend_norm
+        if has_ship and not has_bill:
+            return "shipping"
+        if has_bill and not has_ship:
+            return "billing"
+    return None
+
+
+def _is_address_line2_field(raw: dict[str, Any], label: str) -> bool:
+    _, ac_token = _parse_autocomplete(raw)
+    if ac_token == "address-line2":
+        return True
+    return _contains_term(label, _ADDRESS_LINE2_TERMS)
+
+
+def _is_financial_field(raw: dict[str, Any], label: str) -> bool:
+    _, ac_token = _parse_autocomplete(raw)
+    if ac_token in _FINANCIAL_AUTOCOMPLETE:
+        return True
+    if _contains_term(label, _FINANCIAL_TERMS):
+        return True
+    legend = raw.get("group_legend")
+    if isinstance(legend, str) and _contains_term(legend, _FINANCIAL_TERMS):
+        return True
+    return False
+
+
+def _is_split_phone_field(raw: dict[str, Any], label: str, semantic: str | None) -> bool:
+    _, ac_token = _parse_autocomplete(raw)
+    if ac_token in _SPLIT_PHONE_AUTOCOMPLETE:
+        return True
+    if _contains_term(label, _SPLIT_PHONE_TERMS):
+        return True
+    maxlength = raw.get("maxlength")
+    if isinstance(maxlength, int) and 1 <= maxlength <= 4:
+        legend = str(raw.get("group_legend") or "")
+        if (
+            semantic == "phone"
+            or _contains_term(label, {"phone", "telephone", "mobile"})
+            or _contains_term(legend, {"phone", "telephone", "mobile"})
+        ):
+            return True
+    return False
+
+
+def _resolve_semantic(raw: dict[str, Any], label: str) -> str | None:
+    if _is_address_line2_field(raw, label):
+        return None
+    semantic = _semantic_label(label)
+    if semantic:
+        return semantic
+    if _is_split_phone_field(raw, label, None):
+        return "phone"
+    _, ac_token = _parse_autocomplete(raw)
+    if ac_token in _AUTOCOMPLETE_TO_SEMANTIC:
+        return _AUTOCOMPLETE_TO_SEMANTIC[ac_token]
     return None
 
 
@@ -333,11 +595,6 @@ def profile_group_id(field: dict[str, Any]) -> str:
     return "profile_group_" + "_".join(
         digest[index : index + 4] for index in range(0, 24, 4)
     )
-
-
-def _contains_term(label: str, terms: set[str]) -> bool:
-    normalized = normalize_form_label(label)
-    return any(term in normalized for term in terms)
 
 
 def _locator_hints(field: dict[str, Any]) -> dict[str, str]:
@@ -553,8 +810,13 @@ def _candidate_score(field: dict[str, Any], normalized: str, semantic: str | Non
         score += 70
     if semantic and semantic in {field_id, display, category}:
         score += 40
-    if normalized and (normalized in display or display in normalized):
-        score += 20
+    if normalized and display:
+        norm_pad = f" {normalized} "
+        disp_pad = f" {display} "
+        if (len(normalized.split()) >= 2 and norm_pad in disp_pad) or (
+            len(display.split()) >= 2 and disp_pad in norm_pad
+        ):
+            score += 20
     return score
 
 
@@ -689,7 +951,7 @@ def match_form_fields(
             excluded_fields.append(field)
 
     form_address_semantics: set[str] = set()
-    shared_preferred_address_group: str | None = None
+    shared_preferred_by_section: dict[str | None, str] = {}
     for raw in fields:
         label = raw.get("label", raw.get("display_name", raw.get("field_id", "")))
         if not isinstance(label, str) or not label.strip():
@@ -700,21 +962,23 @@ def match_form_fields(
             or raw.get("validation_error")
             or raw.get("task_specific") is True
             or raw.get("consent") is True
+            or _is_financial_field(raw, label)
             or _contains_term(label, _CREDENTIAL_TERMS)
             or _contains_term(label, _CONSENT_TERMS)
-            or _contains_term(label, _TRANSIENT_TERMS)
             or _contains_term(label, _TASK_SPECIFIC_TERMS)
+            or _contains_term(label, _TRANSIENT_TERMS)
         ):
             continue
-        sem = _semantic_label(label)
+        sem = _resolve_semantic(raw, label)
         norm = normalize_form_label(label)
+        sec = _infer_section(raw, label)
         if sem in _ADDRESS_COMPONENT_SEMANTICS:
             form_address_semantics.add(sem)
         if sem in _ADDRESS_COMPONENT_SEMANTICS or norm in _ADDRESS_GROUP_LABELS:
             pref = (preferences or {}).get(norm, {})
             pref_gid = pref.get("group_id")
             if isinstance(pref_gid, str) and pref_gid:
-                shared_preferred_address_group = pref_gid
+                shared_preferred_by_section[sec] = pref_gid
 
     multi_component_address_form = len(form_address_semantics) >= 2
     group_semantics: dict[str, set[str]] = {}
@@ -743,15 +1007,19 @@ def match_form_fields(
         return isinstance(info, dict) and info.get("matches_self_profile") is True
 
     result: list[dict[str, Any]] = []
-    address_row_indices: list[tuple[int, str, bool]] = []
+    address_rows_by_section: dict[str | None, list[tuple[int, str, bool]]] = {}
 
     for raw in fields:
         label = raw.get("label", raw.get("display_name", raw.get("field_id", "")))
         if not isinstance(label, str) or not label.strip():
             raise ValueError("each form field needs a label")
         normalized = normalize_form_label(label)
-        semantic = _semantic_label(label)
-        base = {
+        label_semantic = _semantic_label(label)
+        semantic = _resolve_semantic(raw, label)
+        section = _infer_section(raw, label)
+        _, ac_token = _parse_autocomplete(raw)
+        input_type = str(raw.get("type") or "").strip().lower()
+        base: dict[str, Any] = {
             "field_id": raw.get("field_id"),
             "label": label,
             "normalized_label": normalized,
@@ -784,39 +1052,6 @@ def match_form_fields(
                 | _decision_fields("validation_error", label)
             )
             continue
-        if _contains_term(label, _CREDENTIAL_TERMS):
-            result.append(
-                base
-                | {
-                    "status": "credential",
-                    "candidates": [],
-                    "reason": "credential fields use the credential workflow and are not profile memory",
-                }
-                | _decision_fields("credential", label)
-            )
-            continue
-        if _contains_term(label, _CONSENT_TERMS):
-            result.append(
-                base
-                | {
-                    "status": "consent",
-                    "candidates": [],
-                    "reason": "consent and legal controls are decisions, not profile memory",
-                }
-                | _decision_fields("consent", label)
-            )
-            continue
-        if _contains_term(label, _TRANSIENT_TERMS):
-            result.append(
-                base
-                | {
-                    "status": "transient",
-                    "candidates": [],
-                    "reason": "one-time or challenge values are never saved as profile memory",
-                }
-                | _decision_fields("transient", label)
-            )
-            continue
         if raw.get("task_specific") is True:
             result.append(
                 base
@@ -841,6 +1076,49 @@ def match_form_fields(
                 | _decision_fields("consent", label)
             )
             continue
+        if _is_financial_field(raw, label):
+            result.append(
+                base
+                | {
+                    "status": "financial",
+                    "candidates": [],
+                    "reason": "payment and financial fields use the financial workflow and are never saved as profile memory",
+                }
+                | _decision_fields("financial", label)
+            )
+            continue
+        if (
+            _contains_term(label, _CREDENTIAL_TERMS)
+            or input_type == "password"
+            or (
+                ac_token in _CREDENTIAL_AUTOCOMPLETE
+                and label_semantic is None
+                and not _contains_term(label, _CONSENT_TERMS)
+                and not _contains_term(label, _TASK_SPECIFIC_TERMS)
+                and not _contains_term(label, _TRANSIENT_TERMS)
+            )
+        ):
+            result.append(
+                base
+                | {
+                    "status": "credential",
+                    "candidates": [],
+                    "reason": "credential fields use the credential workflow and are not profile memory",
+                }
+                | _decision_fields("credential", label)
+            )
+            continue
+        if _contains_term(label, _CONSENT_TERMS):
+            result.append(
+                base
+                | {
+                    "status": "consent",
+                    "candidates": [],
+                    "reason": "consent and legal controls are decisions, not profile memory",
+                }
+                | _decision_fields("consent", label)
+            )
+            continue
         if _contains_term(label, _TASK_SPECIFIC_TERMS):
             result.append(
                 base
@@ -852,12 +1130,30 @@ def match_form_fields(
                 | _decision_fields("task_specific", label)
             )
             continue
+        if _contains_term(label, _TRANSIENT_TERMS) or (
+            ac_token == "one-time-code" and label_semantic is None
+        ):
+            result.append(
+                base
+                | {
+                    "status": "transient",
+                    "candidates": [],
+                    "reason": "one-time or challenge values are never saved as profile memory",
+                }
+                | _decision_fields("transient", label)
+            )
+            continue
 
+        if section:
+            base["section"] = section
+
+        split_phone = _is_split_phone_field(raw, label, semantic)
+        is_address_line2 = _is_address_line2_field(raw, label)
         composite_semantics = _COMPOSITE_SEMANTICS.get(normalized)
         preference = (preferences or {}).get(normalized, {})
         preferred_field_ids = set(preference.get("field_ids", []))
         preferred_group_id = preference.get("group_id") or (
-            shared_preferred_address_group
+            shared_preferred_by_section.get(section)
             if semantic in _ADDRESS_COMPONENT_SEMANTICS
             else None
         )
@@ -873,7 +1169,10 @@ def match_form_fields(
             composite_semantics=composite_semantics,
             preferred_field_ids=preferred_field_ids,
             preferred_group_id=preferred_group_id,
+            is_address_line2=is_address_line2,
         ) -> int:
+            if is_address_line2:
+                return 0
             gid = profile_group_id(field)
             if (
                 multi_component_address_form
@@ -923,7 +1222,7 @@ def match_form_fields(
         )
 
         if not scored_entries:
-            excluded_matches = any(
+            excluded_matches = not is_address_line2 and any(
                 _candidate_score(field, normalized, semantic) > 0
                 or bool(
                     composite_semantics
@@ -936,6 +1235,12 @@ def match_form_fields(
                 "saved profile fields for this label are restricted to other origins or purposes"
                 if excluded_matches
                 else "no compatible saved profile field"
+            )
+        elif split_phone:
+            status = "ambiguous"
+            reason = (
+                "split phone input requires formatting the saved phone number into parts; "
+                "do not paste the full number"
             )
         elif normalized in _ADDRESS_GROUP_LABELS:
             status = "ambiguous"
@@ -983,7 +1288,9 @@ def match_form_fields(
         ]
         row_index = len(result)
         if semantic in _ADDRESS_COMPONENT_SEMANTICS and candidate_rows:
-            address_row_indices.append((row_index, label, has_learned_preference))
+            address_rows_by_section.setdefault(section, []).append(
+                (row_index, label, has_learned_preference)
+            )
         result.append(
             base
             | {
@@ -1015,15 +1322,17 @@ def match_form_fields(
             }
         )
 
-    if multi_component_address_form and len(address_row_indices) >= 2:
-        _enforce_address_group_coherence(
-            result,
-            address_row_indices=address_row_indices,
-            group_address_coverage=group_address_coverage,
-            group_is_structured=group_is_structured,
-            shared_preferred_group_id=shared_preferred_address_group,
-            group_metadata=group_metadata,
-        )
+    if multi_component_address_form:
+        for sec, rows_in_section in address_rows_by_section.items():
+            if len(rows_in_section) >= 2:
+                _enforce_address_group_coherence(
+                    result,
+                    address_row_indices=rows_in_section,
+                    group_address_coverage=group_address_coverage,
+                    group_is_structured=group_is_structured,
+                    shared_preferred_group_id=shared_preferred_by_section.get(sec),
+                    group_metadata=group_metadata,
+                )
     return result
 
 
