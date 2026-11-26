@@ -55,6 +55,9 @@ class MemoryKeys(KeyProvider):
     def __init__(self):
         self.values = {}
 
+    def load(self, name):
+        return self.values.get(name)
+
     def load_or_create(self, name):
         return self.values.setdefault(name, b"z" * 32)
 
@@ -192,6 +195,59 @@ def test_store_persists_encrypted_values_across_connections(tmp_path):
     assert second.get("profile", "x") == {"value": "Ada"}
     raw = second.db.execute("select value from kv").fetchone()[0]
     assert "Ada" not in raw
+
+
+def test_store_reopens_with_legacy_key_without_migrating_it(tmp_path):
+    path = tmp_path / "broker.sqlite"
+    key = b"l" * 32
+    first = Store(path, key=key)
+    first.put("profile", "x", {"value": "Ada"})
+    first.db.close()
+    backend = FakeKeychain({("agent-autofill", "db"): base64.urlsafe_b64encode(key).decode()})
+
+    reopened = Store(path, key_provider=KeyringProvider(backend=backend), key_name="db")
+
+    assert reopened.get("profile", "x") == {"value": "Ada"}
+    assert len(backend.set_calls) == len(backend.delete_calls) == 0
+    reopened.db.close()
+
+
+@pytest.mark.parametrize(
+    ("key_state", "error"),
+    [("missing", "existing database key unavailable"), ("wrong", "store integrity check failed")],
+)
+def test_store_refuses_populated_vault_with_missing_or_wrong_key(tmp_path, key_state, error):
+    path = tmp_path / "broker.sqlite"
+    key = b"k" * 32
+    first = Store(path, key=key)
+    first.put("profile", "x", {"value": "Ada"})
+    first.db.close()
+    backend = FakeKeychain()
+    if key_state == "wrong":
+        backend.values[("agent-autofill", "db")] = base64.urlsafe_b64encode(b"w" * 32).decode()
+    provider = KeyringProvider(backend=backend)
+
+    with pytest.raises(ValueError, match=error):
+        Store(path, key_provider=provider, key_name="db")
+
+    assert len(backend.set_calls) == len(backend.delete_calls) == 0
+    reopened = Store(path, key=key)
+    assert reopened.get("profile", "x") == {"value": "Ada"}
+    reopened.db.close()
+
+
+def test_store_refuses_to_provision_a_key_for_a_populated_vault(tmp_path):
+    class CreateOnlyKeys:
+        def load_or_create(self, name):
+            pytest.fail("provisioning must not run for a populated vault")
+
+    path = tmp_path / "broker.sqlite"
+    first = Store(path, key=b"f" * 32)
+    first.put("profile", "x", {"value": "Ada"})
+    first.db.close()
+
+    with pytest.raises(ValueError, match="existing database key unavailable"):
+        Store(path, key_provider=CreateOnlyKeys(), key_name="db")
 
 
 def test_store_purges_legacy_plaintext_otp_keys_on_reopen(tmp_path):

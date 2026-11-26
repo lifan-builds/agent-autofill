@@ -148,6 +148,9 @@ def _redact_audit(value: Any) -> Any:
 
 
 class KeyProvider:
+    def load(self, name: str) -> bytes | None:
+        return None
+
     def load_or_create(self, name: str) -> bytes:
         raise NotImplementedError
 
@@ -290,12 +293,18 @@ class KeyringProvider(KeyProvider):
                 return
             raise CredentialStoreError(exc) from exc
 
-    def load_existing(self, name: str) -> bytes:
-        """Read a database key without creating or migrating any credentials."""
+    def load(self, name: str) -> bytes | None:
         vault = self._load_vault(force=True)
         encoded = vault["database_keys"].get(name)
         raw = self._decode(encoded, "database key") if encoded else self._legacy_get(name)
-        if not raw or len(raw) < 16:
+        if raw and len(raw) >= 16:
+            return raw
+        return None
+
+    def load_existing(self, name: str) -> bytes:
+        """Read a database key without creating or migrating any credentials."""
+        raw = self.load(name)
+        if raw is None:
             raise RuntimeError("existing database key unavailable")
         return raw
 
@@ -386,30 +395,53 @@ class Store:
         key_provider: KeyProvider | None = None,
         key_name: str = "default",
     ):
-        raw_key = key or (
-            key_provider.load_or_create(key_name)
-            if key_provider
-            else secrets.token_bytes(32)
-        )
-        self.cipher = Fernet(base64.urlsafe_b64encode(raw_key[:32].ljust(32, b"0")))
         db_path = (
             ":memory:" if str(path) == ":memory:" else str(Path(path).expanduser())
         )
         if db_path != ":memory:":
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(db_path)
-        if db_path != ":memory:":
-            os.chmod(db_path, 0o600)
-        self.db.row_factory = sqlite3.Row
-        self.db.executescript("""
-        create table if not exists kv (namespace text, key text, value text not null, primary key(namespace,key));
-        create table if not exists audit (id integer primary key, agent_id text, operation text, resource text, created_at text, metadata text);
-        """)
-        # Older releases used the plaintext OTP in the ``otp-used`` key.  The
-        # current broker stores only a non-secret hash in ``otp-consumed``;
-        # remove legacy keys as soon as a compatible store is opened so a code
-        # cannot remain in SQLite identifiers indefinitely.
-        self.purge_legacy_otp_markers()
+        try:
+            if db_path != ":memory:":
+                os.chmod(db_path, 0o600)
+            self.db.row_factory = sqlite3.Row
+            self.db.executescript("""
+            create table if not exists kv (namespace text, key text, value text not null, primary key(namespace,key));
+            create table if not exists audit (id integer primary key, agent_id text, operation text, resource text, created_at text, metadata text);
+            """)
+
+            row = None
+            if not key and key_provider is not None:
+                row = self.db.execute("select value from kv limit 1").fetchone()
+                if row is None:
+                    key = key_provider.load_or_create(key_name)
+                else:
+                    load = getattr(key_provider, "load", None)
+                    if load is not None:
+                        key = load(key_name)
+                    elif hasattr(key_provider, "load_existing"):
+                        try:
+                            key = key_provider.load_existing(key_name)
+                        except Exception as exc:
+                            raise ValueError("existing database key unavailable") from exc
+                    else:
+                        key = None
+                    if not key:
+                        raise ValueError("existing database key unavailable")
+            else:
+                key = key or secrets.token_bytes(32)
+
+            self.cipher = Fernet(base64.urlsafe_b64encode(key[:32].ljust(32, b"0")))
+            if row is not None:
+                self._decrypt(row["value"])
+            # Older releases used the plaintext OTP in the ``otp-used`` key.  The
+            # current broker stores only a non-secret hash in ``otp-consumed``;
+            # remove legacy keys as soon as a compatible store is opened so a code
+            # cannot remain in SQLite identifiers indefinitely.
+            self.purge_legacy_otp_markers()
+        except Exception:
+            self.db.close()
+            raise
 
     def _seal(self, value: Any) -> str:
         raw = json.dumps(value, separators=(",", ":")).encode()
@@ -422,8 +454,11 @@ class Store:
         ).fetchone()[0]
 
     def _open(self, envelope: str) -> Any:
+        return json.loads(self._decrypt(envelope))
+
+    def _decrypt(self, envelope: str) -> bytes:
         try:
-            return json.loads(self.cipher.decrypt(envelope.encode()))
+            return self.cipher.decrypt(envelope.encode())
         except InvalidToken as exc:
             raise ValueError("store integrity check failed") from exc
 

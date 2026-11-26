@@ -29,6 +29,9 @@ class FixtureKeyring:
         self.keys = {}
         self.secrets = {}
 
+    def load(self, name):
+        return self.keys.get(name)
+
     def load_or_create(self, name):
         return self.keys.setdefault(name, b"f" * 32)
 

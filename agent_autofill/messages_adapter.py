@@ -112,9 +112,11 @@ def _sender_matches_filter(candidate: str, wanted: str) -> bool:
         return True
     if cand_clean.casefold() == want_clean.casefold():
         return True
+    if any(char == "@" or char.isalpha() for char in cand_clean + want_clean):
+        return False
     cand_digits = _normalize_sender_digits(cand_clean)
     want_digits = _normalize_sender_digits(want_clean)
-    if not want_digits or not cand_digits:
+    if min(len(cand_digits), len(want_digits)) < 5:
         return False
     if cand_digits == want_digits:
         return True

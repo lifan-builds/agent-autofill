@@ -11,8 +11,11 @@ for troubleshooting.
 from __future__ import annotations
 
 import json
+import secrets
 from html import escape
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from socket import AF_INET, AF_INET6
+from urllib.parse import parse_qs
 
 from .form_policy import get_form_submission_policy
 from .service import Broker
@@ -322,24 +325,60 @@ def build_html(broker: Broker) -> str:
     )
 
 
-def serve(broker: Broker, host: str = "127.0.0.1", port: int = 8765) -> None:
+def make_server(
+    broker: Broker, host: str = "127.0.0.1", port: int = 8765,
+) -> tuple[HTTPServer, str]:
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise ValueError("inbox-web only permits loopback hosts")
+    capability = secrets.token_urlsafe(32)
+
+    class Server(HTTPServer):
+        address_family = AF_INET6 if host == "::1" else AF_INET
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            if self.path != "/":
+            hosts = self.headers.get_all("Host", [])
+            if len(hosts) != 1 or hosts[0] not in allowed_hosts:
+                self.send_error(403)
+                return
+            path, _, query = self.path.partition("?")
+            token = self.headers.get("X-Inbox-Token") or parse_qs(query).get("token", [""])[0]
+            if not secrets.compare_digest(token.encode(), capability.encode()):
+                self.send_error(403)
+                return
+            if path != "/":
                 self.send_error(404)
                 return
             payload = build_html(broker).encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
 
+        def end_headers(self):
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'none'; style-src 'unsafe-inline'; "
+                "frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+            )
+            super().end_headers()
+
         def log_message(self, *_):
             return
 
-    HTTPServer((host, port), Handler).serve_forever()
+    server = Server(("127.0.0.1" if host == "localhost" else host, port), Handler)
+    bound_port = server.server_port
+    allowed_hosts = {f"127.0.0.1:{bound_port}", f"localhost:{bound_port}", f"[::1]:{bound_port}"}
+    return server, capability
+
+
+def serve(broker: Broker, host: str = "127.0.0.1", port: int = 8765) -> None:
+    server, capability = make_server(broker, host, port)
+    url_host = "[::1]" if host == "::1" else host
+    with server:
+        print(f"Agent Inbox available at http://{url_host}:{server.server_port}/?token={capability}", flush=True)
+        server.serve_forever()

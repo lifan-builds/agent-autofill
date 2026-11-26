@@ -2257,7 +2257,6 @@ def main(argv=None) -> int:
 
         if args.host not in {"127.0.0.1", "localhost", "::1"}:
             raise SystemExit("inbox-web only permits loopback hosts")
-        print(f"Agent Inbox available at http://{args.host}:{args.port}/")
         serve(broker, args.host, args.port)
     elif args.command == "chrome":
         profile_dir = _default_setup_profile(args.profile_dir)

@@ -9,8 +9,23 @@ from agent_autofill.messages_adapter import (
     _APPLE_EPOCH,
     MacMessagesAdapter,
     MessagesUnavailable,
+    _sender_matches_filter,
     parse_ax_messages_snapshot,
 )
+
+
+@pytest.mark.parametrize(("candidate", "wanted", "matches"), [
+    ("alice12345@example.com", "other12345@example.net", False),
+    ("Alice12345", "12345", False),
+    ("12345", "名12345", False),
+    ("123@45", "12345", False),
+    ("12-34", "1234", False),
+    ("ALICE12345@EXAMPLE.COM", "alice12345@example.com", True),
+    ("12-345", "12345", True),
+    ("(800) 555-1234", "+18005551234", True),
+])
+def test_sender_filter_only_normalizes_phone_numbers(candidate, wanted, matches):
+    assert _sender_matches_filter(candidate, wanted) is matches
 
 
 def test_messages_adapter_reads_only_requested_scope(tmp_path):

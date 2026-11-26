@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (C) 2026 lifan-builds. Agent Autofill; Section 7 attribution terms in ATTRIBUTION.md.
+import ssl
 from email.message import EmailMessage as MIMEEmailMessage
 
 import pytest
@@ -45,9 +46,17 @@ class FakeConnection:
 
 def test_check_connection_authenticates_readonly_and_logs_out(monkeypatch):
     connection = FakeConnection()
+
+    def connect(host, port, *, ssl_context, timeout):
+        assert (host, port) == ("imap.example.test", 993)
+        assert ssl_context.check_hostname
+        assert ssl_context.verify_mode == ssl.CERT_REQUIRED
+        assert timeout == 30.0
+        return connection
+
     monkeypatch.setattr(
         "agent_autofill.imap_adapter.imaplib.IMAP4_SSL",
-        lambda host, port: connection,
+        connect,
     )
 
     IMAPEmailAdapter(
@@ -66,7 +75,7 @@ def test_check_connection_uses_xoauth2_without_printing_token(monkeypatch):
     connection = FakeConnection()
     monkeypatch.setattr(
         "agent_autofill.imap_adapter.imaplib.IMAP4_SSL",
-        lambda host, port: connection,
+        lambda host, port, **kwargs: connection,
     )
 
     IMAPEmailAdapter(
@@ -97,7 +106,7 @@ def test_check_connection_reports_safe_auth_and_mailbox_failures(monkeypatch):
     auth_connection = FakeConnection(login_error=RuntimeError("provider detail"))
     monkeypatch.setattr(
         "agent_autofill.imap_adapter.imaplib.IMAP4_SSL",
-        lambda host, port: auth_connection,
+        lambda host, port, **kwargs: auth_connection,
     )
     with pytest.raises(IMAPAuthenticationError, match="IMAP authentication failed"):
         IMAPEmailAdapter("mail", "imap.example.test", "user", password="fixture").check_connection()
@@ -106,7 +115,7 @@ def test_check_connection_reports_safe_auth_and_mailbox_failures(monkeypatch):
     mailbox_connection = FakeConnection(select_status="NO")
     monkeypatch.setattr(
         "agent_autofill.imap_adapter.imaplib.IMAP4_SSL",
-        lambda host, port: mailbox_connection,
+        lambda host, port, **kwargs: mailbox_connection,
     )
     with pytest.raises(IMAPMailboxError, match="IMAP mailbox selection failed"):
         IMAPEmailAdapter("mail", "imap.example.test", "user", password="fixture").check_connection()
@@ -117,7 +126,7 @@ def test_check_connection_rejects_non_ok_login_and_xoauth2_status(monkeypatch):
     password_connection = FakeConnection(auth_status="NO")
     monkeypatch.setattr(
         "agent_autofill.imap_adapter.imaplib.IMAP4_SSL",
-        lambda host, port: password_connection,
+        lambda host, port, **kwargs: password_connection,
     )
     with pytest.raises(IMAPAuthenticationError, match="IMAP authentication failed"):
         IMAPEmailAdapter("mail", "imap.example.test", "user", password="fixture").check_connection()
@@ -126,7 +135,7 @@ def test_check_connection_rejects_non_ok_login_and_xoauth2_status(monkeypatch):
     oauth_connection = FakeConnection(auth_status="BAD")
     monkeypatch.setattr(
         "agent_autofill.imap_adapter.imaplib.IMAP4_SSL",
-        lambda host, port: oauth_connection,
+        lambda host, port, **kwargs: oauth_connection,
     )
     with pytest.raises(IMAPAuthenticationError, match="IMAP authentication failed"):
         IMAPEmailAdapter(

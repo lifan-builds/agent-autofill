@@ -8,6 +8,7 @@ adapter intentionally has no send or mutation methods.
 
 import imaplib
 import re
+import ssl
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from email import message_from_bytes
@@ -271,7 +272,9 @@ class IMAPEmailAdapter:
                 "IMAP adapter needs a Keychain-provided password or OAuth token"
             )
         try:
-            conn = imaplib.IMAP4_SSL(self.host, self.port)
+            conn = imaplib.IMAP4_SSL(
+                self.host, self.port, ssl_context=ssl.create_default_context(), timeout=30.0
+            )
         except Exception as exc:
             raise IMAPConnectionError("IMAP connection failed") from exc
 

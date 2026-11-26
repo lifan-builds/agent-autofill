@@ -65,7 +65,7 @@ def test_server_reconstructs_gmail_provider_and_refreshes_in_fresh_process(monke
     connection = FakeConnection()
     monkeypatch.setattr(
         "agent_autofill.imap_adapter.imaplib.IMAP4_SSL",
-        lambda host, port: connection,
+        lambda host, port, **_kw: connection,
     )
     refresh_calls = []
 
@@ -109,7 +109,7 @@ def test_server_persists_rotated_microsoft_refresh_in_the_correct_keychain_item(
     original_gmail = keyring.values["imap:fixture:gmail"]
     connection = FakeConnection()
     monkeypatch.setattr(
-        "agent_autofill.imap_adapter.imaplib.IMAP4_SSL", lambda *_: connection
+        "agent_autofill.imap_adapter.imaplib.IMAP4_SSL", lambda *_, **_kw: connection
     )
     monkeypatch.setattr(google_oauth, "_post_form", lambda *_: {
         "access_token": "fixture-access", "refresh_token": "fixture-rotated-refresh"

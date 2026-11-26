@@ -2,10 +2,13 @@
 # Copyright (C) 2026 lifan-builds. Agent Autofill; Section 7 attribution terms in ATTRIBUTION.md.
 import re
 from datetime import UTC, datetime, timedelta
+from http.client import HTTPConnection
+from queue import Queue
+from threading import Thread
 
 import pytest
 
-from agent_autofill.inbox import _grant_counts, build_html, serve
+from agent_autofill.inbox import _grant_counts, build_html, make_server, serve
 from agent_autofill.service import Broker
 from agent_autofill.storage import Store
 
@@ -46,6 +49,60 @@ def test_inbox_server_rejects_non_loopback_hosts():
 
     with pytest.raises(ValueError, match="loopback"):
         serve(broker, host="0.0.0.0")
+
+
+def test_inbox_http_requires_loopback_host_and_capability():
+    ready = Queue()
+
+    def run():
+        store = Store(":memory:", key=b"h" * 32)
+        server, capability = make_server(Broker(store), port=0)
+        with server:
+            ready.put((server, capability))
+            server.serve_forever()
+        store.db.close()
+
+    thread = Thread(target=run, daemon=True)
+    thread.start()
+    server, capability = ready.get(timeout=5)
+    port = server.server_port
+
+    def request(path="/", headers=None):
+        connection = HTTPConnection("127.0.0.1", port, timeout=5)
+        try:
+            connection.request("GET", path, headers=headers or {})
+            with connection.getresponse() as response:
+                return response.status, response.read(), dict(response.getheaders())
+        finally:
+            connection.close()
+
+    try:
+        assert request()[0] == 403
+        assert request("/?token=%C3%A9")[0] == 403
+        assert request(headers={"X-Inbox-Token": "invalid"})[0] == 403
+        for host in (f"foreign.test:{port}", "127.0.0.1:0", "127.0.0.1"):
+            status, _, _ = request(headers={"Host": host, "X-Inbox-Token": capability})
+            assert status == 403
+
+        headers = {"X-Inbox-Token": capability}
+        status, body, security_headers = request(headers=headers)
+        assert status == 200 and b"Agent Inbox" in body
+        assert security_headers["Cache-Control"] == "no-store"
+        assert security_headers["Referrer-Policy"] == "no-referrer"
+        assert security_headers["X-Content-Type-Options"] == "nosniff"
+        assert security_headers["Content-Security-Policy"] == (
+            "default-src 'none'; style-src 'unsafe-inline'; "
+            "frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+        )
+        status, _, _ = request("/missing", headers=headers)
+        assert status == 404
+
+        for host in ("127.0.0.1", "localhost", "[::1]"):
+            status, _, _ = request(f"/?token={capability}", {"Host": f"{host}:{port}"})
+            assert status == 200
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
 
 
 def test_inbox_overview_shows_profile_fields_and_attention_without_values():
