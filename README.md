@@ -7,6 +7,7 @@
 
 <p align="center">
   <a href="https://pypi.org/project/agent-autofill/"><img alt="PyPI version" src="https://img.shields.io/pypi/v/agent-autofill?color=3776AB"></a>
+  <a href="https://glama.ai/mcp/servers/lifan-builds/agent-autofill"><img alt="lifan-builds/agent-autofill MCP server" src="https://glama.ai/mcp/servers/lifan-builds/agent-autofill/badges/score.svg"></a>
   <a href="https://www.python.org/downloads/"><img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white"></a>
   <a href="https://modelcontextprotocol.io/"><img alt="MCP local stdio" src="https://img.shields.io/badge/MCP-local%20stdio-6E56CF"></a>
   <img alt="Local first" src="https://img.shields.io/badge/storage-local--first-0F766E">
@@ -15,6 +16,7 @@
 </p>
 
 <p align="center">
+  <a href="https://clifan.com/agent-autofill/">Website</a> ·
   <a href="#try-it-in-10-seconds">1-command quickstart</a> ·
   <a href="#zero-full-disk-access-mac-messages-2fa">Zero-FDA Mac Messages 2FA</a> ·
   <a href="#watch-the-33-second-product-tour">Product tour</a> ·
