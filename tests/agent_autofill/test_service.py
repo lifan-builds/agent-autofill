@@ -2127,3 +2127,26 @@ def test_messages_otp_enforces_stale_ambiguity_grants_and_request_auth_code_rout
     )
     assert routed["code"] == "304050"
     assert routed["provenance"]["source"] == "messages"
+
+
+def test_messages_otp_ignores_calendar_year_in_billing_alert():
+    b = Broker(Store(":memory:", key=b"m" * 32))
+    b.add_source("messages", "messages", "Mac Messages")
+    b.texts = [
+        TextMessage(
+            "sms-bill",
+            "SMS;-;72166",
+            "72166",
+            "Chase Alert: Your payment of $150.00 is due Nov 25, 2026. Visit chase.com.",
+            datetime.now(UTC).isoformat(),
+        )
+    ]
+    b.create_agent("service:local")
+    b.enable_trusted_local("service:local")
+    with pytest.raises(AuthCodeError) as exc:
+        b.request_messages_auth_code(
+            "service:local",
+            origin_policy="messages-read",
+            max_age_seconds=300,
+        )
+    assert exc.value.reason == "otp_not_found"

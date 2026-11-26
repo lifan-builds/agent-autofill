@@ -224,6 +224,12 @@ _AUTH_CODE_CJK = re.compile(
     r"(?:验证码|驗證碼|动态密码|動態密碼|校验码|校驗碼|認証コード|確認コード|인증번호|확인코드)[^0-9]{0,20}(?<!\d)(\d{4,8})(?!\d)"
 )
 _GOOGLE_SMS_PREFIX_PATTERN = re.compile(r"(?<![A-Za-z0-9])G-(\d{4,8})(?!\d)")
+_CALENDAR_DATE_PATTERN = re.compile(
+    r"\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+    r"Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|"
+    r"Dec(?:ember)?)\.?\s+\d{1,2},?\s+(?:19|20)\d{2}\b",
+    re.IGNORECASE,
+)
 _SAFE_HINT_KEYS = {
     "account_last4",
     "aliases",
@@ -982,7 +988,8 @@ def _extract_auth_codes(body: str) -> list[str]:
     ]
     if labeled:
         return list(dict.fromkeys(labeled))
-    return list(dict.fromkeys(re.findall(r"(?<!\d-)\b\d{4,8}\b(?!-\d)", body)))
+    scrubbed = _CALENDAR_DATE_PATTERN.sub(" ", body)
+    return list(dict.fromkeys(re.findall(r"(?<!\d-)\b\d{4,8}\b(?!-\d)", scrubbed)))
 
 
 def _message_received_at(value: Any) -> datetime | None:
