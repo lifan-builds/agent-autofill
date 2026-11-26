@@ -11,8 +11,7 @@ import re
 import ssl
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from email import message_from_bytes
-from email.header import decode_header, make_header
+from email import message_from_bytes, policy
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from typing import ClassVar
@@ -33,7 +32,7 @@ class IMAPAuthenticationError(IMAPAdapterError):
 
 
 class IMAPMailboxError(IMAPAdapterError):
-    """The configured mailbox could not be selected read-only."""
+    """The configured mailbox could not be selected or read."""
 
 
 class IMAPConfigurationError(IMAPAdapterError):
@@ -41,7 +40,7 @@ class IMAPConfigurationError(IMAPAdapterError):
 
 
 def _header(value: str | None) -> str:
-    return str(make_header(decode_header(value or "")))
+    return str(policy.default.header_fetch_parse("Subject", str(value or "")))
 
 
 _SUPPRESSED_HTML_BLOCKS = re.compile(
@@ -189,13 +188,18 @@ def _html_body(value: str) -> str:
 
 
 def _body(msg) -> str:
-    parts = list(msg.walk()) if msg.is_multipart() else [msg]
+    parts = [msg]
     plain: list[str] = []
     html: list[str] = []
-    for part in parts:
-        if "attachment" in str(part.get("Content-Disposition", "")).lower():
+    while parts:
+        part = parts.pop()
+        content_type = part.get_content_type()
+        if part.get_content_disposition() == "attachment" or content_type == "message/rfc822":
             continue
-        if part.get_content_type() not in {"text/plain", "text/html"}:
+        if part.is_multipart():
+            parts.extend(reversed(part.get_payload()))
+            continue
+        if content_type not in {"text/plain", "text/html"}:
             continue
         try:
             payload = part.get_payload(decode=True)
@@ -207,7 +211,7 @@ def _body(msg) -> str:
         except (LookupError, ValueError, TypeError):
             # Skip malformed MIME without logging message data.
             continue
-        if part.get_content_type() == "text/plain":
+        if content_type == "text/plain":
             cleaned = _sanitize_email_text(value)
             if cleaned:
                 plain.append(cleaned)
@@ -254,12 +258,12 @@ class IMAPEmailAdapter:
                 if getter is None:
                     raise TypeError("OAuth provider has no access-token method")
                 token = getter() if callable(getter) else getter
-            except Exception as exc:
+            except Exception:
                 # Provider exceptions can contain an HTTP response or token;
                 # translate them before they reach CLI, MCP, or audit output.
                 raise IMAPAuthenticationError(
                     "IMAP OAuth authentication failed"
-                ) from exc
+                ) from None
             if not isinstance(token, str) or not token:
                 raise IMAPAuthenticationError("IMAP OAuth authentication failed")
             return token
@@ -275,8 +279,8 @@ class IMAPEmailAdapter:
             conn = imaplib.IMAP4_SSL(
                 self.host, self.port, ssl_context=ssl.create_default_context(), timeout=30.0
             )
-        except Exception as exc:
-            raise IMAPConnectionError("IMAP connection failed") from exc
+        except Exception:
+            raise IMAPConnectionError("IMAP connection failed") from None
 
         try:
             if oauth2_token:
@@ -287,19 +291,24 @@ class IMAPEmailAdapter:
                 status, _ = conn.authenticate("XOAUTH2", auth)
             else:
                 status, _ = conn.login(self.username, self.password)
-            if status != "OK":
-                raise IMAPAuthenticationError("IMAP authentication failed")
-        except Exception as exc:
+        except Exception:
             self._logout(conn)
-            if isinstance(exc, IMAPAuthenticationError):
-                raise
-            raise IMAPAuthenticationError("IMAP authentication failed") from exc
+            raise IMAPAuthenticationError("IMAP authentication failed") from None
+        if status != "OK":
+            self._logout(conn)
+            raise IMAPAuthenticationError("IMAP authentication failed")
 
         try:
-            status, _ = conn.select(self.mailbox, readonly=True)
-        except Exception as exc:
+            mailbox = self.mailbox
+            if any(char in mailbox for char in "\r\n\0"):
+                raise ValueError("Invalid mailbox name")
+            if re.search(r'[\x00-\x20\x7f(){%*"\\]', mailbox):
+                escaped = mailbox.replace("\\", "\\\\").replace('"', '\\"')
+                mailbox = f'"{escaped}"'
+            status, _ = conn.select(mailbox, readonly=True)
+        except Exception:
             self._logout(conn)
-            raise IMAPMailboxError("IMAP mailbox selection failed") from exc
+            raise IMAPMailboxError("IMAP mailbox selection failed") from None
         if status != "OK":
             self._logout(conn)
             raise IMAPMailboxError("IMAP mailbox selection failed")
@@ -318,7 +327,7 @@ class IMAPEmailAdapter:
         conn = self._connect()
         self._logout(conn)
 
-    def _parse(self, uid: bytes, raw: bytes) -> EmailMessage:
+    def _parse(self, uid: bytes, raw: bytes, internal_date: str | None = None) -> EmailMessage:
         msg = message_from_bytes(raw)
         return EmailMessage(
             uid.decode(),
@@ -326,25 +335,46 @@ class IMAPEmailAdapter:
             _header(msg.get("From")),
             _header(msg.get("Subject")),
             _body(msg),
-            _date(msg.get("Date")),
+            _date(msg.get("Date") if internal_date is None else internal_date),
         )
+
+    @staticmethod
+    def _uid(conn, command, *args):
+        try:
+            status, data = conn.uid(command, *args)
+        except (imaplib.IMAP4.error, OSError):
+            raise IMAPMailboxError(f"IMAP {command} failed") from None
+        if status != "OK":
+            raise IMAPMailboxError(f"IMAP {command} failed")
+        return data
+
+    def _fetch(self, conn, uid: bytes) -> EmailMessage | None:
+        if not re.fullmatch(rb"[1-9][0-9]{0,9}", uid) or int(uid) > 0xFFFFFFFF:
+            raise IMAPMailboxError("Invalid IMAP message UID")
+        fetched = iter(self._uid(conn, "fetch", uid, "(INTERNALDATE RFC822)"))
+        for part in fetched:
+            if isinstance(part, tuple):
+                metadata, raw = part
+                if not raw:
+                    return None
+                # imaplib splits FETCH metadata around the message literal.
+                metadata += next(fetched, b"")
+                date = re.search(rb'[( ]INTERNALDATE(?= |\)|$)(?: +"([^"]* [+-]\d{4})")?', metadata, re.I)
+                internal_date = (date[1] or b"").decode("ascii", "replace") if date else None
+                if internal_date and internal_date.endswith(" -0000"):
+                    # The email date parser treats -0000 as a naive datetime.
+                    internal_date = internal_date[:-5] + "+0000"
+                return self._parse(uid, raw, internal_date)
+        return None
 
     def search(self, query: str, limit: int = 20) -> list[EmailMessage]:
         conn = self._connect()
         try:
-            _, data = conn.uid(
-                "search", None, "TEXT", f'"{query.replace(chr(34), "")}"'
-            )
+            conn.literal = query.encode("utf-8")
+            charset = () if query.isascii() else ("CHARSET", "UTF-8")
+            data = self._uid(conn, "search", *charset, "TEXT")
             uids = (data[0] or b"").split()[-limit:][::-1]
-            result = []
-            for uid in uids:
-                _, fetched = conn.uid("fetch", uid, "(RFC822)")
-                raw = next(
-                    (part[1] for part in fetched if isinstance(part, tuple)), None
-                )
-                if raw:
-                    result.append(self._parse(uid, raw))
-            return result
+            return [msg for uid in uids if (msg := self._fetch(conn, uid)) is not None]
         finally:
             self._logout(conn)
 
@@ -356,23 +386,17 @@ class IMAPEmailAdapter:
             since = (
                 datetime.now(UTC) - timedelta(seconds=max_age_seconds, days=1)
             ).strftime("%d-%b-%Y")
-            _, data = conn.uid("search", None, "SINCE", since)
+            data = self._uid(conn, "search", "SINCE", since)
             result = []
             for uid in (data[0] or b"").split()[-100:][::-1]:
-                _, fetched = conn.uid("fetch", uid, "(RFC822)")
-                raw = next(
-                    (part[1] for part in fetched if isinstance(part, tuple)), None
-                )
-                if raw:
-                    msg = self._parse(uid, raw)
-                    if msg.received_at is None:
-                        continue
-                    age = (
-                        datetime.now(UTC)
-                        - datetime.fromisoformat(msg.received_at)
-                    ).total_seconds()
-                    if 0 <= age <= max_age_seconds:
-                        result.append(msg)
+                msg = self._fetch(conn, uid)
+                if msg is None or msg.received_at is None:
+                    continue
+                age = (
+                    datetime.now(UTC) - datetime.fromisoformat(msg.received_at)
+                ).total_seconds()
+                if 0 <= age <= max_age_seconds:
+                    result.append(msg)
             return result
         finally:
             self._logout(conn)
@@ -380,10 +404,9 @@ class IMAPEmailAdapter:
     def get(self, message_id: str) -> EmailMessage:
         conn = self._connect()
         try:
-            _, fetched = conn.uid("fetch", message_id.encode(), "(RFC822)")
-            raw = next((part[1] for part in fetched if isinstance(part, tuple)), None)
-            if not raw:
+            msg = self._fetch(conn, message_id.encode("ascii", "replace"))
+            if msg is None:
                 raise KeyError(message_id)
-            return self._parse(message_id.encode(), raw)
+            return msg
         finally:
             self._logout(conn)

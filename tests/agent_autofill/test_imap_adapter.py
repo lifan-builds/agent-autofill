@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (C) 2026 lifan-builds. Agent Autofill; Section 7 attribution terms in ATTRIBUTION.md.
 import ssl
+import traceback
 from email.message import EmailMessage as MIMEEmailMessage
 
 import pytest
@@ -14,14 +15,17 @@ from agent_autofill.imap_adapter import (
 
 
 class FakeConnection:
-    def __init__(self, login_error=None, select_status="OK", auth_status="OK"):
+    def __init__(self, login_error=None, select_status="OK", auth_status="OK", responses=()):
         self.login_error = login_error
         self.select_status = select_status
         self.auth_status = auth_status
         self.login_calls = []
         self.auth_calls = []
         self.select_calls = []
+        self.uid_calls = []
         self.logout_calls = 0
+        self.literal = None
+        self.responses = iter(responses)
 
     def login(self, username, password):
         self.login_calls.append((username, password))
@@ -38,6 +42,11 @@ class FakeConnection:
     def select(self, mailbox, readonly=False):
         self.select_calls.append((mailbox, readonly))
         return self.select_status, []
+
+    def uid(self, command, *args):
+        self.uid_calls.append((command, args, self.literal))
+        self.literal = None
+        return next(self.responses)
 
     def logout(self):
         self.logout_calls += 1
@@ -69,6 +78,18 @@ def test_check_connection_authenticates_readonly_and_logs_out(monkeypatch):
     assert connection.login_calls == [("user@example.test", "fixture-password")]
     assert connection.select_calls == [("INBOX", True)]
     assert connection.logout_calls == 1
+
+
+def test_check_connection_quotes_and_escapes_mailbox_names(monkeypatch):
+    connection = FakeConnection()
+    monkeypatch.setattr("agent_autofill.imap_adapter.imaplib.IMAP4_SSL", lambda *_, **__: connection)
+
+    IMAPEmailAdapter(
+        "mail", "imap.example.test", "user", password="fixture",
+        mailbox=r'Shared Team/"Review"\2026',
+    ).check_connection()
+
+    assert connection.select_calls == [(r'"Shared Team/\"Review\"\\2026"', True)]
 
 
 def test_check_connection_uses_xoauth2_without_printing_token(monkeypatch):
@@ -108,8 +129,9 @@ def test_check_connection_reports_safe_auth_and_mailbox_failures(monkeypatch):
         "agent_autofill.imap_adapter.imaplib.IMAP4_SSL",
         lambda host, port, **kwargs: auth_connection,
     )
-    with pytest.raises(IMAPAuthenticationError, match="IMAP authentication failed"):
+    with pytest.raises(IMAPAuthenticationError, match="IMAP authentication failed") as failure:
         IMAPEmailAdapter("mail", "imap.example.test", "user", password="fixture").check_connection()
+    assert "provider detail" not in "".join(traceback.format_exception(failure.value))
     assert auth_connection.logout_calls == 1
 
     mailbox_connection = FakeConnection(select_status="NO")
@@ -142,6 +164,111 @@ def test_check_connection_rejects_non_ok_login_and_xoauth2_status(monkeypatch):
             "mail", "imap.example.test", "user", oauth2_token="fixture-token"
         ).check_connection()
     assert oauth_connection.logout_calls == 1
+
+
+def test_oauth_provider_failure_suppresses_private_diagnostic():
+    class Provider:
+        def get_access_token(self):
+            raise RuntimeError("private provider diagnostic")
+
+    with pytest.raises(IMAPAuthenticationError, match="IMAP OAuth authentication failed") as failure:
+        IMAPEmailAdapter("mail", "imap.example.test", "user", oauth_provider=Provider()).check_connection()
+
+    assert "private provider diagnostic" not in "".join(traceback.format_exception(failure.value))
+
+
+@pytest.mark.parametrize("query, criteria", [
+    ('Review "receipt"', ("TEXT",)),
+    ('Café "receipt"', ("CHARSET", "UTF-8", "TEXT")),
+])
+def test_search_sends_the_query_as_a_literal(monkeypatch, query, criteria):
+    raw = b"Subject: Receipt\r\n\r\nExample message\r\n"
+    metadata = f"2 (UID 2 RFC822 {{{len(raw)}}}".encode()
+    connection = FakeConnection(responses=[("OK", [b"1 2"]), ("OK", [(metadata, raw), b")"])])
+    monkeypatch.setattr(IMAPEmailAdapter, "_connect", lambda _: connection)
+
+    messages = IMAPEmailAdapter("mail", "imap.example.test", "user").search(query, limit=1)
+
+    assert [message.message_id for message in messages] == ["2"]
+    assert connection.uid_calls == [
+        ("search", criteria, query.encode("utf-8")),
+        ("fetch", (b"2", "(INTERNALDATE RFC822)"), None),
+    ]
+    assert connection.logout_calls == 1
+
+
+@pytest.mark.parametrize("command, responses", [
+    ("search", [("NO", [b"provider detail"])]),
+    ("fetch", [("OK", [b"1"]), ("BAD", [b"provider detail"])]),
+])
+def test_uid_status_failure_is_reported_without_provider_detail(monkeypatch, command, responses):
+    connection = FakeConnection(responses=responses)
+    monkeypatch.setattr(IMAPEmailAdapter, "_connect", lambda _: connection)
+
+    with pytest.raises(IMAPMailboxError, match=f"^IMAP {command} failed$"):
+        IMAPEmailAdapter("mail", "imap.example.test", "user").search("receipt")
+
+    assert connection.logout_calls == 1
+
+
+@pytest.mark.parametrize("message_id", ["", "mail", "1:2", "1,2", "*", "0", "4294967296", "٢"])
+def test_get_rejects_invalid_uids_before_fetching(monkeypatch, message_id):
+    connection = FakeConnection()
+    monkeypatch.setattr(IMAPEmailAdapter, "_connect", lambda _: connection)
+
+    with pytest.raises(IMAPMailboxError, match="^Invalid IMAP message UID$"):
+        IMAPEmailAdapter("mail", "imap.example.test", "user").get(message_id)
+
+    assert not connection.uid_calls
+    assert connection.logout_calls == 1
+
+
+def test_search_rejects_sequence_sets_in_the_uid_response(monkeypatch):
+    connection = FakeConnection(responses=[("OK", [b"1:2"])])
+    monkeypatch.setattr(IMAPEmailAdapter, "_connect", lambda _: connection)
+
+    with pytest.raises(IMAPMailboxError, match="^Invalid IMAP message UID$"):
+        IMAPEmailAdapter("mail", "imap.example.test", "user").search("receipt")
+
+    assert [command for command, _, _ in connection.uid_calls] == ["search"]
+    assert connection.logout_calls == 1
+
+
+def test_get_treats_an_empty_message_literal_as_missing(monkeypatch):
+    connection = FakeConnection(responses=[("OK", [(b"1 (RFC822 {0}", b""), b")"])])
+    monkeypatch.setattr(IMAPEmailAdapter, "_connect", lambda _: connection)
+
+    with pytest.raises(KeyError, match="1"):
+        IMAPEmailAdapter("mail", "imap.example.test", "user").get("1")
+
+
+def test_parse_decodes_headers_with_unknown_rfc2047_charsets():
+    raw = (
+        b"From: =?x-unknown?Q?M=C3=BCller?= <sender@example.test>\r\n"
+        b"Subject: =?x-unknown?Q?Caf=C3=A9?= receipt\r\n\r\n"
+        b"Example message\r\n"
+    )
+    parsed = IMAPEmailAdapter("mail", "imap.example.test", "user")._parse(b"2", raw)
+
+    assert parsed.sender == "Müller <sender@example.test>"
+    assert parsed.subject == "Café receipt"
+
+
+def test_parse_does_not_include_text_from_attached_subtrees():
+    forwarded = MIMEEmailMessage()
+    forwarded.set_content("Forwarded message text")
+    attachment = MIMEEmailMessage()
+    attachment.make_mixed()
+    attachment["Content-Disposition"] = "attachment"
+    attachment.attach(forwarded)
+    message = MIMEEmailMessage()
+    message.set_content("<p>Outer message text</p>", subtype="html")
+    message.add_attachment(forwarded, disposition="inline")
+    message.attach(attachment)
+
+    parsed = IMAPEmailAdapter("mail", "imap.example.test", "user")._parse(b"2", message.as_bytes())
+
+    assert parsed.body == "Outer message text"
 
 
 def test_parse_extracts_auth_text_from_html_only_message():

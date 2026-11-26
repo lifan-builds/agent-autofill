@@ -75,10 +75,10 @@ class GoogleOAuthClient:
         if isinstance(value, (str, bytes)):
             try:
                 value = json.loads(value)
-            except (TypeError, ValueError) as exc:
+            except (TypeError, ValueError):
                 raise GoogleOAuthConfigurationError(
                     "Google OAuth client JSON is invalid"
-                ) from exc
+                ) from None
         if not isinstance(value, Mapping):
             raise GoogleOAuthConfigurationError(
                 "Google OAuth client JSON must be an object"
@@ -106,10 +106,10 @@ class GoogleOAuthClient:
 
         try:
             raw = Path(path).expanduser().read_bytes()
-        except (OSError, TypeError, ValueError) as exc:
+        except (OSError, TypeError, ValueError):
             raise GoogleOAuthConfigurationError(
                 "Could not read Google OAuth client JSON"
-            ) from exc
+            ) from None
         return cls.from_json(raw)
 
 
@@ -131,8 +131,8 @@ def _safe_response_json(raw: Mapping[str, Any] | str | bytes) -> Mapping[str, An
         return raw
     try:
         decoded = json.loads(raw)
-    except (TypeError, ValueError) as exc:
-        raise GoogleOAuthTokenError("Google OAuth token response was invalid") from exc
+    except (TypeError, ValueError):
+        raise GoogleOAuthTokenError("Google OAuth token response was invalid") from None
     if not isinstance(decoded, Mapping):
         raise GoogleOAuthTokenError("Google OAuth token response was invalid")
     return decoded
@@ -153,8 +153,8 @@ def _post_form(
     try:
         with urlopen(request, timeout=timeout) as response:
             raw = response.read()
-    except (HTTPError, URLError, TimeoutError, OSError) as exc:
-        raise GoogleOAuthTokenError("Google OAuth token exchange failed") from exc
+    except (HTTPError, URLError, TimeoutError, OSError):
+        raise GoogleOAuthTokenError("Google OAuth token exchange failed") from None
     return _safe_response_json(raw)
 
 
@@ -164,8 +164,8 @@ def _expires_in(response: Mapping[str, Any]) -> float:
         raise GoogleOAuthTokenError("Google OAuth token response was invalid")
     try:
         seconds = float(value)
-    except (TypeError, ValueError) as exc:
-        raise GoogleOAuthTokenError("Google OAuth token response was invalid") from exc
+    except (TypeError, ValueError):
+        raise GoogleOAuthTokenError("Google OAuth token response was invalid") from None
     if seconds <= 0:
         raise GoogleOAuthTokenError("Google OAuth token response was invalid")
     return seconds
@@ -176,6 +176,10 @@ def _access_token(response: Mapping[str, Any]) -> str:
     if not isinstance(value, str) or not value:
         raise GoogleOAuthTokenError("Google OAuth token response did not contain an access token")
     return value
+
+
+def _encode_keychain_secret(payload: dict[str, Any]) -> bytes:
+    return json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
 
 class GoogleOAuthTokenProvider:
@@ -228,7 +232,7 @@ class GoogleOAuthTokenProvider:
         response: Mapping[str, Any] | str | bytes,
         *,
         http_post: HttpPost | None = None,
-        token_endpoint: str = TOKEN_ENDPOINT,
+        token_endpoint: str | None = None,
         clock: Callable[[], float] | None = None,
     ) -> GoogleOAuthTokenProvider:
         decoded = _safe_response_json(response)
@@ -265,17 +269,17 @@ class GoogleOAuthTokenProvider:
         if isinstance(value, bytes):
             try:
                 value = value.decode("utf-8")
-            except UnicodeDecodeError as exc:
+            except UnicodeDecodeError:
                 raise GoogleOAuthConfigurationError(
                     "Saved Google OAuth state is invalid"
-                ) from exc
+                ) from None
         if isinstance(value, str):
             try:
                 value = json.loads(value)
-            except (TypeError, ValueError) as exc:
+            except (TypeError, ValueError):
                 raise GoogleOAuthConfigurationError(
                     "Saved Google OAuth state is invalid"
-                ) from exc
+                ) from None
         if not isinstance(value, Mapping):
             raise GoogleOAuthConfigurationError("Saved Google OAuth state is invalid")
         allowed = {
@@ -325,9 +329,7 @@ class GoogleOAuthTokenProvider:
     def to_keychain_secret(self) -> bytes:
         """Encode only refresh/client state for operating-system storage."""
 
-        return json.dumps(
-            self.keychain_payload(), separators=(",", ":"), sort_keys=True
-        ).encode("utf-8")
+        return _encode_keychain_secret(self.keychain_payload())
 
     # Common serialization aliases used by callers that do not need to know
     # whether Keychain stores text or bytes.
@@ -354,24 +356,29 @@ class GoogleOAuthTokenProvider:
             response = self._http_post(
                 self.token_endpoint, fields, TOKEN_HTTP_TIMEOUT_SECONDS
             )
-        except Exception as exc:
+        except Exception:
             # An injected provider must not be able to leak a response body or
             # token through an exception at the adapter/CLI boundary.
-            raise GoogleOAuthTokenError("Google OAuth token refresh failed") from exc
+            raise GoogleOAuthTokenError("Google OAuth token refresh failed") from None
         decoded = _safe_response_json(response)
         token = _access_token(decoded)
         expires = _expires_in(decoded)
         rotated_refresh = decoded.get("refresh_token")
-        if isinstance(rotated_refresh, str) and rotated_refresh:
-            changed = rotated_refresh != self._refresh_token
-            self._refresh_token = rotated_refresh
-            if changed and self._on_refresh is not None:
+        if (
+            isinstance(rotated_refresh, str)
+            and rotated_refresh
+            and rotated_refresh != self._refresh_token
+        ):
+            if self._on_refresh is not None:
+                payload = self.keychain_payload()
+                payload["refresh_token"] = rotated_refresh
                 try:
-                    self._on_refresh(self.to_keychain_secret())
-                except Exception as exc:
+                    self._on_refresh(_encode_keychain_secret(payload))
+                except Exception:
                     raise GoogleOAuthTokenError(
                         "Could not save refreshed OAuth state in Keychain"
-                    ) from exc
+                    ) from None
+            self._refresh_token = rotated_refresh
         self._access_token = token
         self._expires_at = now + expires
         return token
@@ -423,13 +430,13 @@ def oauth_provider_from_keychain_secret(
     if isinstance(raw, bytes):
         try:
             raw = raw.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise GoogleOAuthConfigurationError("Saved OAuth state is invalid") from exc
+        except UnicodeDecodeError:
+            raise GoogleOAuthConfigurationError("Saved OAuth state is invalid") from None
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
-        except (TypeError, ValueError) as exc:
-            raise GoogleOAuthConfigurationError("Saved OAuth state is invalid") from exc
+        except (TypeError, ValueError):
+            raise GoogleOAuthConfigurationError("Saved OAuth state is invalid") from None
     if not isinstance(raw, Mapping):
         raise GoogleOAuthConfigurationError("Saved OAuth state is invalid")
     provider_name = raw.get("provider")
@@ -504,6 +511,7 @@ class _CallbackServer(http.server.HTTPServer):
 
 class _CallbackHandler(http.server.BaseHTTPRequestHandler):
     server: _CallbackServer
+    timeout = 1.0
 
     def log_message(self, _format: str, *args: Any) -> None:
         # OAuth callback details, including query parameters, do not belong in
@@ -575,12 +583,12 @@ def authorize_google_desktop(
             client = GoogleOAuthClient.from_json(client)  # type: ignore[arg-type]
         except GoogleOAuthError:
             raise
-        except Exception as exc:
-            raise GoogleOAuthConfigurationError("Google OAuth client is invalid") from exc
+        except Exception:
+            raise GoogleOAuthConfigurationError("Google OAuth client is invalid") from None
     try:
         timeout_value = float(timeout)
-    except (TypeError, ValueError) as exc:
-        raise GoogleOAuthConfigurationError("Google OAuth callback timeout is invalid") from exc
+    except (TypeError, ValueError):
+        raise GoogleOAuthConfigurationError("Google OAuth callback timeout is invalid") from None
     if timeout_value <= 0:
         raise GoogleOAuthConfigurationError("Google OAuth callback timeout is invalid")
     if not callback_path.startswith("/") or "?" in callback_path or "#" in callback_path:
@@ -593,10 +601,10 @@ def authorize_google_desktop(
         server = _CallbackServer(
             (LOOPBACK_HOST, 0), state, callback_path, callback_state
         )
-    except OSError as exc:
+    except OSError:
         raise GoogleOAuthAuthorizationError(
             "Could not start the local Google OAuth callback"
-        ) from exc
+        ) from None
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     redirect_uri = _callback_url(server)
@@ -611,10 +619,10 @@ def authorize_google_desktop(
     try:
         try:
             opened = browser(url)
-        except Exception as exc:
+        except Exception:
             raise GoogleOAuthAuthorizationError(
                 "Could not open the Google authorization page"
-            ) from exc
+            ) from None
         if opened is False:
             raise GoogleOAuthAuthorizationError(
                 "Could not open the Google authorization page"
@@ -638,8 +646,8 @@ def authorize_google_desktop(
             response = (http_post or _post_form)(
                 token_endpoint, fields, TOKEN_HTTP_TIMEOUT_SECONDS
             )
-        except Exception as exc:
-            raise GoogleOAuthTokenError("Google OAuth token exchange failed") from exc
+        except Exception:
+            raise GoogleOAuthTokenError("Google OAuth token exchange failed") from None
         return GoogleOAuthTokenProvider.from_token_response(
             client,
             response,

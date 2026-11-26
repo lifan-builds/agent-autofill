@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (C) 2026 lifan-builds. Agent Autofill; Section 7 attribution terms in ATTRIBUTION.md.
 import json
+import socket
+import traceback
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
 from urllib.request import urlopen
@@ -11,6 +13,7 @@ from agent_autofill.google_oauth import (
     CALLBACK_PATH,
     GMAIL_SCOPE,
     MICROSOFT_TOKEN_ENDPOINT,
+    TOKEN_ENDPOINT,
     GoogleOAuthAuthorizationError,
     GoogleOAuthClient,
     GoogleOAuthConfigurationError,
@@ -141,7 +144,29 @@ def test_authorize_desktop_rejects_wrong_state_and_times_out():
         )
 
 
-def test_token_provider_caches_and_refreshes_without_serializing_access_token():
+def test_callback_closes_idle_preconnect():
+    def preconnect(url):
+        callback = urlsplit(parse_qs(urlsplit(url).query)["redirect_uri"][0])
+        with socket.create_connection((callback.hostname, callback.port), timeout=3) as idle:
+            assert idle.recv(1) == b""
+        return True
+
+    with pytest.raises(GoogleOAuthAuthorizationError, match="timed out"):
+        authorize_google_desktop(
+            GoogleOAuthClient("client-id", None), open_browser=preconnect, timeout=0.01
+        )
+
+
+@pytest.mark.parametrize(
+    ("provider_type", "endpoint"),
+    [
+        (GoogleOAuthTokenProvider, TOKEN_ENDPOINT),
+        (MicrosoftOAuthTokenProvider, MICROSOFT_TOKEN_ENDPOINT),
+    ],
+)
+def test_token_provider_caches_and_refreshes_without_serializing_access_token(
+    provider_type, endpoint
+):
     now = [1000.0]
     calls = []
 
@@ -149,7 +174,7 @@ def test_token_provider_caches_and_refreshes_without_serializing_access_token():
         calls.append((endpoint, dict(fields)))
         return {"access_token": "refreshed-access-token", "expires_in": 3600}
 
-    provider = GoogleOAuthTokenProvider.from_token_response(
+    provider = provider_type.from_token_response(
         GoogleOAuthClient("client-id", "client-secret"),
         {
             "access_token": "initial-access-token",
@@ -163,6 +188,7 @@ def test_token_provider_caches_and_refreshes_without_serializing_access_token():
     assert calls == []
     now[0] = 4550.0
     assert provider.get_access_token() == "refreshed-access-token"
+    assert calls[0][0] == endpoint
     assert calls[0][1]["grant_type"] == "refresh_token"
     assert calls[0][1]["refresh_token"] == "refresh-token-fixture"
     assert provider.get_access_token() == "refreshed-access-token"
@@ -235,8 +261,9 @@ def test_exchange_and_refresh_normalize_arbitrary_oauth_errors():
             timeout=1,
             http_post=failing_request,
         )
-    assert "access-token-fixture" not in str(exchange.value)
-    assert "refresh-token-fixture" not in str(exchange.value)
+    exchange_trace = "".join(traceback.format_exception(exchange.value))
+    assert "access-token-fixture" not in exchange_trace
+    assert "refresh-token-fixture" not in exchange_trace
 
     provider = GoogleOAuthTokenProvider(
         "client-id",
@@ -246,8 +273,9 @@ def test_exchange_and_refresh_normalize_arbitrary_oauth_errors():
     )
     with pytest.raises(GoogleOAuthTokenError, match="token refresh failed") as refresh:
         provider.get_access_token()
-    assert "access-token-fixture" not in str(refresh.value)
-    assert "refresh-token-fixture" not in str(refresh.value)
+    refresh_trace = "".join(traceback.format_exception(refresh.value))
+    assert "access-token-fixture" not in refresh_trace
+    assert "refresh-token-fixture" not in refresh_trace
 
 
 def test_saved_microsoft_provider_refreshes_only_at_microsoft_and_saves_rotation():
@@ -276,7 +304,10 @@ def test_saved_microsoft_provider_refreshes_only_at_microsoft_and_saves_rotation
 
 
 def test_refresh_save_failure_is_sanitized_and_does_not_cache_access():
-    def fail(value):
+    observed = []
+
+    def fail(_value):
+        observed.append(provider.to_keychain_secret())
         raise RuntimeError("fixture-private-refresh")
 
     provider = MicrosoftOAuthTokenProvider(
@@ -287,7 +318,10 @@ def test_refresh_save_failure_is_sanitized_and_does_not_cache_access():
         },
         on_refresh=fail,
     )
+    original = provider.to_keychain_secret()
     with pytest.raises(GoogleOAuthTokenError, match="Keychain") as caught:
         provider.get_access_token()
-    assert "fixture-private" not in str(caught.value)
+    assert "fixture-private" not in "".join(traceback.format_exception(caught.value))
+    assert observed == [original]
+    assert provider.to_keychain_secret() == original
     assert provider.expires_at == 0
