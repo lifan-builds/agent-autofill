@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.0
+
+- Added zero-Full-Disk-Access macOS Messages reading via read-only
+  `faster-mac-use` (`fmu-ax`) Accessibility snapshots of `Messages.app` with
+  zero focus theft; explicit `--database` / `--backend db` keeps read-only
+  `chat.db` support.
+- Added scoped macOS SMS and iMessage 2FA code retrieval via
+  `request_messages_auth_code` (origin-matched by default, Tapback-filtered,
+  transient response only) and routed `request_auth_code` through Messages
+  when targeting a configured Messages source.
+- Fixed unlabeled OTP fallback extraction to ignore calendar years (`1990`–`2099`).
+- Allowed trusted local `write_records` calls and defaulted dual-save for newly
+  created website logins.
+- Added `username_hint` filtering to `list_credentials` and improved semantic
+  profile group field resolution.
+- Fixed cross-platform `mypy` type checking across Linux, macOS, and Windows.
+- Tightened `README.md` quickstart, visual proof, and Mac Messages 2FA docs.
+
 ## 0.1.3
 
 - Relicensed as open source `AGPL-3.0-only` with Section 7 attribution terms
