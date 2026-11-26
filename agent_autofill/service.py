@@ -4068,7 +4068,7 @@ class Broker:
         self.store.purge_legacy_otp_markers()
         adapter = self._ensure_email_source(account_id)
         now = datetime.now(UTC)
-        candidates = []
+        candidates: list[tuple[EmailMessage, str, datetime]] = []
         stale = False
         unmatched = False
         messages = (
@@ -4339,7 +4339,7 @@ class Broker:
                 and m.sender != "me"
             ]
 
-        candidates = []
+        candidates: list[tuple[TextMessage, str, datetime]] = []
         stale = False
         unmatched = False
         for m in messages:

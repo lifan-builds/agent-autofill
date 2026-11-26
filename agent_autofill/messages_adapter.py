@@ -316,9 +316,10 @@ class MacMessagesAdapter:
     # -- Read-only faster-mac-use AX backend (zero Full Disk Access) -----------
 
     def _query_fmu_socket(self, payload: bytes) -> str | None:
-        if not self.fmu_socket.exists():
+        af_unix = getattr(socket, "AF_UNIX", None)
+        if af_unix is None or not self.fmu_socket.exists():
             return None
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock = socket.socket(af_unix, socket.SOCK_STREAM)
         try:
             sock.settimeout(3.0)
             sock.connect(str(self.fmu_socket))
