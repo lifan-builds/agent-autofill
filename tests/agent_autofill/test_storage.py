@@ -266,6 +266,22 @@ def test_store_purges_legacy_plaintext_otp_keys_on_reopen(tmp_path):
     ).fetchone()[0] == 0
 
 
+def test_store_allows_concurrent_reader_and_writer_connections(tmp_path):
+    keys = MemoryKeys()
+    path = tmp_path / "broker.sqlite"
+    Store(path, key_provider=keys, key_name="db").put("profile", "x", {"value": "Ada"})
+    reader = sqlite3.connect(path)
+    reader.execute("begin")
+    assert reader.execute("select count(*) from kv").fetchone()[0] == 1
+
+    writer = Store(path, key_provider=keys, key_name="db")
+    writer.put("profile", "y", {"value": "Grace"})
+
+    reader.rollback()
+    reader.close()
+    assert writer.get("profile", "y") == {"value": "Grace"}
+
+
 def test_store_purges_legacy_otp_keys_when_broker_reuses_open_store():
     from agent_autofill.service import Broker
 

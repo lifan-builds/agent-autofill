@@ -400,10 +400,12 @@ class Store:
         )
         if db_path != ":memory:":
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(db_path)
+        self.db = sqlite3.connect(db_path, timeout=10)
         try:
+            self.db.execute("pragma busy_timeout=10000")
             if db_path != ":memory:":
                 os.chmod(db_path, 0o600)
+                self.db.execute("pragma journal_mode=wal")
             self.db.row_factory = sqlite3.Row
             self.db.executescript("""
             create table if not exists kv (namespace text, key text, value text not null, primary key(namespace,key));
