@@ -232,6 +232,15 @@ def make_server(
     class Handler(BaseHTTPRequestHandler):
         timeout = request_timeout
 
+        def parse_request(self):
+            if not super().parse_request():
+                return False
+            hosts = self.headers.get_all("Host", [])
+            if len(hosts) != 1 or hosts[0].lower() not in allowed_hosts:
+                self.send_error(403)
+                return False
+            return True
+
         def do_OPTIONS(self):
             if self.path not in {"/v1/consume", "/v1/pending"}:
                 self.send_error(404)
@@ -252,6 +261,10 @@ def make_server(
                 self.send_error(404)
                 return
             origin = self.headers.get("Origin")
+            if (len(self.headers.get_all("Content-Type", [])) != 1
+                    or self.headers.get_content_type() != "application/json"):
+                _json_response(self, 415, {"error": "expected application/json"}, origin)
+                return
             try:
                 length = int(self.headers.get("Content-Length", "0"))
             except ValueError:
@@ -290,7 +303,12 @@ def make_server(
         def log_message(self, *_):
             return
 
-    return _FillHTTPServer((host, port), Handler)
+    server = _FillHTTPServer((host, port), Handler)
+    loopback_hosts = {"127.0.0.1", "localhost", "[::1]"}
+    allowed_hosts = {f"{name}:{server.server_port}" for name in loopback_hosts}
+    if server.server_port == 80:
+        allowed_hosts.update(loopback_hosts)
+    return server
 
 
 def serve(

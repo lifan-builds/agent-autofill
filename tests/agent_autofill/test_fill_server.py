@@ -5,6 +5,7 @@ import json
 import socket
 import threading
 import time
+from http.client import HTTPConnection
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -309,9 +310,8 @@ def test_fill_server_threading_avoids_head_of_line_blocking_and_times_out_stalle
     try:
         # Send incomplete POST body so this connection stalls.
         stalled.sendall(
-            b"POST /v1/consume HTTP/1.1\r\n"
-            b"Host: 127.0.0.1\r\n"
-            b"Content-Type: application/json\r\n"
+            f"POST /v1/consume HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n".encode()
+            + b"Content-Type: application/json\r\n"
             b"Content-Length: 100\r\n"
             b"Origin: " + _ORIGIN.encode() + b"\r\n\r\n{"
         )
@@ -341,7 +341,7 @@ def test_fill_server_threading_avoids_head_of_line_blocking_and_times_out_stalle
                 "agent_id": "fill-helper",
                 "target_origin": "https://example.test",
             }).encode(),
-            headers={"Content-Type": "application/json", "Origin": _ORIGIN},
+            headers={"Content-Type": "application/json; charset=utf-8", "Origin": _ORIGIN},
             method="POST",
         )
         with urlopen(paired_req, timeout=1.0) as response:
@@ -360,3 +360,39 @@ def test_fill_server_threading_avoids_head_of_line_blocking_and_times_out_stalle
         server.shutdown()
         server.server_close()
         thread.join(timeout=2.0)
+
+
+def test_bridge_validates_authority_and_media_type_before_reading_body():
+    broker, _ = _fill_fixture()
+    with make_server(broker, port=0, request_timeout=0.5) as server:
+        port = server.server_port
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+
+        def status(method, path, hosts, media_types):
+            conn = HTTPConnection("127.0.0.1", port, timeout=2)
+            try:
+                conn.putrequest(method, path, skip_host=True)
+                for host in hosts:
+                    conn.putheader("Host", host)
+                for media_type in media_types:
+                    conn.putheader("Content-Type", media_type)
+                conn.putheader("Content-Length", "2")
+                conn.endheaders()
+                return conn.getresponse().status
+            finally:
+                conn.close()
+
+        try:
+            local = f"localhost:{port}"
+            for path in ("/v1/consume", "/v1/pending"):
+                for hosts in ([], ["other.test"], ["localhost:0"], [local, local]):
+                    for method in ("POST", "OPTIONS"):
+                        assert status(method, path, hosts, ["application/json"]) == 403
+                for types in ([], ["text/plain"], ["application/json", "text/plain"]):
+                    assert status("POST", path, [local], types) == 415
+            for host in ("LOCALHOST", "127.0.0.1", "[::1]"):
+                assert status("OPTIONS", "/v1/consume", [f"{host}:{port}"], []) == 204
+        finally:
+            server.shutdown()
+            thread.join()

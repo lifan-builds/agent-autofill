@@ -174,3 +174,30 @@ test('username delivery stays bound to the checked document', async () => {
   assert.deepEqual(Array.from(delivery.target.documentIds), ['doc-1']);
   assert.equal(f.calls.some(call => call.consume), false);
 });
+
+test('bridge requests reject redirects on every route', async () => {
+  const f = await fixture();
+  const fetch = f.sandbox.fetch;
+  const requests = [];
+  f.sandbox.fetch = (url, options) => {
+    requests.push([options.method, new URL(url).pathname, options.redirect]);
+    return fetch(url, options);
+  };
+  await f.node('refresh-requests').listeners.click();
+  await f.click();
+  assert.deepEqual(requests, [
+    ['OPTIONS', '/v1/consume', 'error'], ['POST', '/v1/pending', 'error'],
+    ['OPTIONS', '/v1/consume', 'error'], ['POST', '/v1/consume', 'error'],
+  ]);
+});
+
+test('refresh during pairing lookup preserves the checked origin for consumption', async () => {
+  const f = await fixture();
+  f.sandbox.chrome.storage.session.get = async () => {
+    f.active.url = 'https://other.test/login';
+    await vm.runInContext('refreshState()', f.sandbox);
+    return {pairingToken: f.pairingToken};
+  };
+  await f.click();
+  assert.equal(f.calls.find(call => call.consume)?.body.target_origin, 'https://example.test');
+});

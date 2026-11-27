@@ -130,7 +130,7 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 1800) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, {...options, signal: controller.signal});
+    return await fetch(url, {...options, redirect: "error", signal: controller.signal});
   } finally {
     clearTimeout(timeout);
   }
@@ -281,23 +281,24 @@ fillButton.addEventListener("click", async () => {
   fillButton.disabled = true;
   setStatus("Checking the active origin before consuming the handle…");
   try {
-    pageState = await activeTabState();
+    const checkedPage = await activeTabState();
+    const targetOrigin = checkedPage.origin;
+    pageState = checkedPage;
     renderOrigin();
-    if (selected && selected.target_origin !== pageState.origin) {
+    if (selected && selected.target_origin !== targetOrigin) {
       throw new Error("The selected request belongs to another site. Refresh requests. No handle was consumed.");
     }
     if (selected && (!Number.isFinite(Date.parse(selected.expires_at)) || Date.parse(selected.expires_at) <= Date.now())) {
       throw new Error("This request expired. Ask your agent for a new request, then refresh. No fields were filled.");
     }
-    if (!pageState.supported) {
+    if (!checkedPage.supported) {
       throw new Error("Open the supported HTTPS page before consuming the handle.");
     }
     if (!(await checkBridge())) {
       throw new Error("The loopback bridge is unavailable; no handle was consumed.");
     }
     const bridgeUrl = normalizeBridgeUrl(bridgeInput.value);
-    const checkedPage = {...pageState};
-    const preflight = await pageCheck(checkedPage.tabId, checkedPage.origin);
+    const preflight = await pageCheck(checkedPage.tabId, targetOrigin);
     if (!preflight.documentId) {
       throw new Error("The browser could not identify this document. Update Chrome and retry. No handle was consumed.");
     }
@@ -305,7 +306,7 @@ fillButton.addEventListener("click", async () => {
       if (selected?.username) {
         const result = await chrome.scripting.executeScript({
           target: {tabId: checkedPage.tabId, documentIds: [preflight.documentId]},
-          func: loginPage, args: ["username", checkedPage.origin, selected.username, null],
+          func: loginPage, args: ["username", targetOrigin, selected.username, null],
         });
         if (result?.[0]?.result?.state !== "username_filled") throw new Error("The page changed. Refresh before trying again.");
         setStatus("Username filled. Continue on the site, then refresh here for the password step. No handle was consumed.", "ok");
@@ -318,7 +319,7 @@ fillButton.addEventListener("click", async () => {
       throw new Error(`Login fields are ${preflight.state || "unavailable"}. Open a single existing-account login form and retry. No handle was consumed.`);
     }
     const currentPage = await activeTabState();
-    if (currentPage.tabId !== checkedPage.tabId || currentPage.origin !== checkedPage.origin) {
+    if (currentPage.tabId !== checkedPage.tabId || currentPage.origin !== targetOrigin) {
       throw new Error("The active page changed. Refresh requests. No handle was consumed.");
     }
     const {pairingToken} = await chrome.storage.session.get("pairingToken");
@@ -334,7 +335,7 @@ fillButton.addEventListener("click", async () => {
         pairing_token: pairingToken,
         handle,
         agent_id: agentId,
-        target_origin: pageState.origin,
+        target_origin: targetOrigin,
       }),
     }, 5000);
     let body;
@@ -352,7 +353,7 @@ fillButton.addEventListener("click", async () => {
     const result = await chrome.scripting.executeScript({
       target: {tabId: checkedPage.tabId, documentIds: [preflight.documentId]},
       func: loginPage,
-      args: ["fill", checkedPage.origin, body.username, body.password],
+      args: ["fill", targetOrigin, body.username, body.password],
     });
     const filled = result?.[0]?.result;
     setStatus(
