@@ -220,7 +220,7 @@ async function refreshRequests() {
   if (!bridgeReady || !pageState.supported) return;
   try {
     const {pairingToken} = await chrome.storage.session.get("pairingToken");
-    if (!pairingToken) { detail.textContent = "Pair this browser session, or use a handle manually."; return; }
+    if (!pairingToken) { detail.textContent = "Pair this browser session to load pending requests and fill handles."; return; }
     const response = await fetchWithTimeout(`${normalizeBridgeUrl(bridgeInput.value)}/v1/pending`, {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({pairing_token: pairingToken, target_origin: pageState.origin}),

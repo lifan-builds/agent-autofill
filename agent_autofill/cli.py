@@ -6,7 +6,10 @@ import argparse
 import getpass
 import json
 import re
+import tomllib
+from datetime import date, time
 from importlib.metadata import version
+from io import StringIO
 from pathlib import Path
 from typing import Any, cast
 
@@ -1561,7 +1564,7 @@ def _parser() -> argparse.ArgumentParser:
     mcp_install.add_argument(
         "--config-path",
         type=Path,
-        help="explicit MCP JSON config file path",
+        help="explicit MCP config file path",
     )
     mcp_install.add_argument(
         "--write",
@@ -1586,6 +1589,71 @@ def _parser() -> argparse.ArgumentParser:
     fill.add_argument("--host", default="127.0.0.1")
     fill.add_argument("--port", type=int, default=8766)
     return p
+
+
+def _toml_value(value: Any) -> str:
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_value(item) for item in value) + "]"
+    if isinstance(value, dict):
+        fields = (f"{_toml_value(k)} = {_toml_value(v)}" for k, v in value.items())
+        return "{" + ", ".join(fields) + "}"
+    if isinstance(value, (date, time)):
+        return value.isoformat()
+    return str(value).lower()
+
+
+def _toml_statements(source: str):
+    lines = iter(StringIO(source))
+    for statement in lines:
+        # Read the complete value before interpreting any embedded table headers.
+        while True:
+            try:
+                fields = tomllib.loads(statement)
+                break
+            except tomllib.TOMLDecodeError:
+                statement += next(lines)
+        yield statement, fields
+
+
+def _codex_config(source: str, command: str, args: list[str]) -> str:
+    config = tomllib.loads(source)
+    if "mcp_servers" in config:
+        kept = []
+        header = {}
+        in_server = False
+        for statement, fields in _toml_statements(source):
+            if not fields:
+                kept.append(statement)
+                continue
+            if statement.lstrip().startswith("["):
+                header = fields
+                in_server = "agent-autofill" in header.get("mcp_servers", {})
+            else:
+                if not header and "mcp_servers" in fields:
+                    if "." not in statement.partition("=")[0]:
+                        # Expand a sealed inline table so the new section can follow it.
+                        for name, server in fields["mcp_servers"].items():
+                            if name != "agent-autofill":
+                                kept.append(f"mcp_servers.{_toml_value(name)} = {_toml_value(server)}\n")
+                        continue
+                    if "agent-autofill" in fields["mcp_servers"]:
+                        continue
+                if header == {"mcp_servers": {}} and "agent-autofill" in fields:
+                    continue
+            if not in_server:
+                kept.append(statement)
+        source = "".join(kept)
+
+    section = (
+        "[mcp_servers.agent-autofill]\n"
+        f"command = {_toml_value(command)}\n"
+        f"args = {_toml_value(args)}\n"
+    )
+    merged = source.rstrip("\n") + "\n\n" + section if source else section
+    tomllib.loads(merged)
+    return merged
 
 
 def main(argv=None) -> int:
@@ -1684,30 +1752,28 @@ def main(argv=None) -> int:
                 else Path.home() / ".config/Claude/claude_desktop_config.json"
             ),
             "cursor": Path.home() / ".cursor/mcp.json",
-            "codex": Path.home() / ".codex/mcp.json",
+            "codex": Path.home() / ".codex/config.toml",
             "antigravity": Path.home() / ".gemini/config/mcp_config.json",
         }
         target_path = (args.config_path or default_paths[args.client]).expanduser()
         server_args = ["--service", service_name]
         if args.db != "agent-autofill.sqlite3":
             server_args.extend(["--db", str(Path(args.db).expanduser().resolve())])
+        server_command = "agent-autofill-server"
         entry = {
-            "command": "agent-autofill-server",
+            "command": server_command,
             "args": server_args,
         }
+        server_key = "mcp_servers" if args.client == "codex" else "mcpServers"
+        result = {
+            "client": args.client,
+            "service": service_name,
+            "config_path": str(target_path),
+            "written": args.write,
+            server_key: {"agent-autofill": entry},
+        }
         if not args.write:
-            print(
-                json.dumps(
-                    {
-                        "client": args.client,
-                        "service": service_name,
-                        "config_path": str(target_path),
-                        "written": False,
-                        "mcpServers": {"agent-autofill": entry},
-                    },
-                    indent=2,
-                )
-            )
+            print(json.dumps(result, indent=2))
             return 0
         db_arg = None if args.db == "agent-autofill.sqlite3" else args.db
         try:
@@ -1715,33 +1781,23 @@ def main(argv=None) -> int:
             connection.close()
         except RuntimeError as exc:
             raise SystemExit(str(exc)) from exc
-        existing: dict[str, Any] = {}
-        if target_path.exists():
-            try:
-                loaded = json.loads(target_path.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    existing = loaded
-            except (OSError, ValueError) as exc:
-                raise SystemExit(f"Could not parse existing MCP config: {target_path}") from exc
-        servers = existing.get("mcpServers")
-        if not isinstance(servers, dict):
-            servers = {}
-            existing["mcpServers"] = servers
-        servers["agent-autofill"] = entry
+        try:
+            source = target_path.read_text(encoding="utf-8") if target_path.exists() else None
+            if args.client == "codex":
+                contents = _codex_config(source or "", server_command, server_args)
+            else:
+                existing = json.loads(source) if source is not None else {}
+                if not isinstance(existing, dict):
+                    existing = {}
+                if not isinstance(existing.get("mcpServers"), dict):
+                    existing["mcpServers"] = {}
+                existing["mcpServers"]["agent-autofill"] = entry
+                contents = json.dumps(existing, indent=2) + "\n"
+        except (OSError, ValueError) as exc:
+            raise SystemExit(f"Could not merge MCP config: {target_path}") from exc
         target_path.parent.mkdir(parents=True, exist_ok=True)
-        target_path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
-        print(
-            json.dumps(
-                {
-                    "client": args.client,
-                    "service": service_name,
-                    "config_path": str(target_path),
-                    "written": True,
-                    "mcpServers": {"agent-autofill": entry},
-                },
-                indent=2,
-            )
-        )
+        target_path.write_text(contents, encoding="utf-8")
+        print(json.dumps(result, indent=2))
         return 0
     if args.command == "pair-browser":
         from .fill_server import pair_browser

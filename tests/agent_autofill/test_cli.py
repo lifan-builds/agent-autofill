@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (C) 2026 lifan-builds. Agent Autofill; Section 7 attribution terms in ATTRIBUTION.md.
 import json
+import tomllib
 from datetime import datetime
 from typing import ClassVar
+from unittest.mock import Mock
 
 import pytest
 
@@ -1293,6 +1295,66 @@ def test_mcp_install_prints_and_writes_client_config(monkeypatch, tmp_path, caps
     assert written["written"] is True
     saved = json.loads(config_file.read_text(encoding="utf-8"))
     assert saved["mcpServers"]["agent-autofill"]["command"] == "agent-autofill-server"
+
+
+def test_mcp_install_codex_preview_and_write(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    connect = Mock()
+    monkeypatch.setattr("agent_autofill.local.connect_service", connect)
+    config_file = tmp_path / ".codex/config.toml"
+    command = ["mcp-install", "--client", "codex"]
+
+    assert cli.main(command) == 0
+    preview = json.loads(capsys.readouterr().out)
+    entry = {"command": "agent-autofill-server", "args": ["--service", "codex"]}
+    assert preview["config_path"] == str(config_file)
+    assert preview["mcp_servers"]["agent-autofill"] == entry
+    assert preview["written"] is False
+    assert not config_file.exists()
+    connect.assert_not_called()
+
+    assert cli.main([*command, "--write"]) == 0
+    assert json.loads(capsys.readouterr().out)["written"] is True
+    assert tomllib.loads(config_file.read_text()) == {"mcp_servers": {"agent-autofill": entry}}
+
+
+def test_mcp_install_codex_preserves_unrelated_tables(monkeypatch, tmp_path):
+    monkeypatch.setattr("agent_autofill.local.connect_service", Mock())
+    config_file = tmp_path / "custom.toml"
+    before = (
+        'model = "example"  # keep this comment\n'
+        'instructions = """\n[mcp_servers.agent-autofill]\n"""\n'
+        '[mcp_servers.other]\ncommand = "other-server"\n'
+    )
+    after = '[projects."/repo"]\ntrust_level = "trusted"\n'
+    config_file.write_text(before + '[mcp_servers."agent-autofill"]\ncommand = "old"\n' + after)
+    command = ["mcp-install", "--client", "codex", "--config-path", str(config_file), "--write"]
+
+    assert cli.main(command) == 0
+    installed = config_file.read_text()
+    assert before in installed and after in installed
+    expected = tomllib.loads(before + after)
+    expected["mcp_servers"]["agent-autofill"] = {
+        "command": "agent-autofill-server", "args": ["--service", "codex"]
+    }
+    assert tomllib.loads(installed) == expected
+    assert cli.main(command) == 0
+    assert config_file.read_text() == installed
+
+
+@pytest.mark.parametrize("source", [
+    'mcp_servers = { other = { command = "keep" }, agent-autofill = { command = "old" } }',
+    'mcp_servers.other.command = "keep"\nmcp_servers.agent-autofill.command = "old"',
+    '[mcp_servers]\nother = { command = "keep" }\nagent-autofill = { command = "old" }',
+])
+def test_mcp_install_codex_updates_inline_and_dotted_entries(source, monkeypatch, tmp_path):
+    monkeypatch.setattr("agent_autofill.local.connect_service", Mock())
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(source)
+    assert cli.main(["mcp-install", "--client", "codex", "--config-path", str(config_file), "--write"]) == 0
+    servers = tomllib.loads(config_file.read_text())["mcp_servers"]
+    assert servers["other"] == {"command": "keep"}
+    assert servers["agent-autofill"]["command"] == "agent-autofill-server"
 
 
 def test_default_setup_profile_accepts_explicit_numbered_profile(tmp_path):

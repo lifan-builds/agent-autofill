@@ -29,7 +29,7 @@ second dashboard or a general form-filling UI.
 4. On the target page, select **Refresh requests**, choose the account and
    purpose, and select **Fill selected login**. The agent still requests
    extension delivery through CLI/MCP; routine handle copying is unnecessary.
-   The manual handle option remains available without pairing.
+   Pairing is required for every fill, including fills with a manual handle.
 
 The pairing secret exists only in Chrome's extension session memory; the
 broker stores an encrypted verifier. Restarting the browser or selecting
