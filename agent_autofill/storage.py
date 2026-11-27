@@ -7,8 +7,8 @@ import os
 import re
 import secrets
 import sqlite3
+import stat
 import sys
-import tempfile
 from collections.abc import Iterable
 from contextlib import contextmanager
 from pathlib import Path
@@ -20,6 +20,94 @@ try:
     import fcntl
 except ImportError:  # pragma: no cover - the supported host is macOS/Unix.
     fcntl = None  # type: ignore[assignment]
+
+
+def _ensure_private_dir(path: Path) -> Path:
+    """Create or verify a user-owned 0700 directory without following symlinks."""
+
+    path = path.expanduser()
+    if path.is_symlink():
+        raise RuntimeError("private application directory must not be a symlink")
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.mkdir(path, 0o700)
+        except FileExistsError:
+            pass
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    fd = os.open(path, flags)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISDIR(st.st_mode):
+            raise RuntimeError("private application directory is not a directory")
+        if hasattr(os, "getuid") and st.st_uid != os.getuid():
+            raise RuntimeError("private application directory is not owned by the current user")
+        if stat.S_IMODE(st.st_mode) & 0o077:
+            os.fchmod(fd, 0o700)
+    finally:
+        os.close(fd)
+    return path
+
+
+def _vault_lock_dir() -> Path:
+    app_dir = _ensure_private_dir(Path.home() / ".agent-autofill")
+    return _ensure_private_dir(app_dir / "locks")
+
+
+def _prepare_private_sqlite_file(db_path: Path) -> None:
+    """Pre-create or validate a user-owned 0600 SQLite file before sqlite3.connect."""
+
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    flags = (
+        os.O_RDWR
+        | os.O_CREAT
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    fd = os.open(db_path, flags, 0o600)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise ValueError("database path must be a regular file")
+        if hasattr(os, "getuid") and st.st_uid != os.getuid():
+            raise ValueError("database file is not owned by the current user")
+        if stat.S_IMODE(st.st_mode) & 0o077:
+            os.fchmod(fd, 0o600)
+    finally:
+        os.close(fd)
+
+
+def _tighten_existing_private_file(path: Path) -> None:
+    """Validate and tighten an existing SQLite sidecar file without following symlinks."""
+
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    try:
+        fd = os.open(path, flags)
+    except FileNotFoundError:
+        return
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise ValueError("database sidecar path must be a regular file")
+        if hasattr(os, "getuid") and st.st_uid != os.getuid():
+            raise ValueError("database sidecar file is not owned by the current user")
+        if stat.S_IMODE(st.st_mode) & 0o077:
+            os.fchmod(fd, 0o600)
+    finally:
+        os.close(fd)
+
+
+def _looks_encrypted_audit(value: object) -> bool:
+    return isinstance(value, str) and bool(value) and not value.lstrip().startswith("{")
 
 
 def _credential_store_error_message() -> str:
@@ -178,16 +266,33 @@ class KeyringProvider(KeyProvider):
     def _vault_lock(self):
         """Serialize vault read-modify-write operations across local processes."""
 
+        lock_dir = _vault_lock_dir()
         lock_name = hashlib.sha256(self.service.encode("utf-8")).hexdigest()[:24]
-        lock_path = Path(tempfile.gettempdir()) / f"agent-autofill-keyring-{lock_name}.lock"
-        with lock_path.open("a+") as handle:
-            if fcntl is not None:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        lock_path = lock_dir / f"keyring-{lock_name}.lock"
+        flags = (
+            os.O_RDWR
+            | os.O_CREAT
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+        )
+        fd = os.open(lock_path, flags, 0o600)
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                raise RuntimeError("vault lock path is not a regular file")
+            if hasattr(os, "getuid") and st.st_uid != os.getuid():
+                raise RuntimeError("vault lock file is not owned by the current user")
+            if stat.S_IMODE(st.st_mode) & 0o077:
+                os.fchmod(fd, 0o600)
+            if fcntl is None:
+                raise RuntimeError("vault file locking is unavailable on this platform")
+            fcntl.flock(fd, fcntl.LOCK_EX)
             try:
                 yield
             finally:
-                if fcntl is not None:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
 
     def _keyring(self):
         if self._backend is not None:
@@ -237,23 +342,26 @@ class KeyringProvider(KeyProvider):
             serialized = self._keyring().get_password(
                 self.service, self._VAULT_ACCOUNT
             )
-            if not serialized:
-                vault = self._empty_vault()
-            else:
-                vault = json.loads(serialized)
-                if (
-                    not isinstance(vault, dict)
-                    or vault.get("version") != self._VAULT_VERSION
-                    or not isinstance(vault.get("database_keys"), dict)
-                    or not isinstance(vault.get("secrets"), dict)
-                ):
-                    raise RuntimeError("Keychain vault format is unsupported")
-            self._vault = vault
-            return vault
-        except RuntimeError:
-            raise
         except Exception as exc:
-            raise CredentialStoreError(exc) from exc
+            raise CredentialStoreError(exc) from None
+        if serialized is None:
+            vault = self._empty_vault()
+        elif not isinstance(serialized, str) or not serialized:
+            raise RuntimeError("Keychain vault format is unsupported")
+        else:
+            try:
+                vault = json.loads(serialized)
+            except ValueError as exc:
+                raise RuntimeError("Keychain vault format is unsupported") from exc
+            if (
+                not isinstance(vault, dict)
+                or vault.get("version") != self._VAULT_VERSION
+                or not isinstance(vault.get("database_keys"), dict)
+                or not isinstance(vault.get("secrets"), dict)
+            ):
+                raise RuntimeError("Keychain vault format is unsupported")
+        self._vault = vault
+        return vault
 
     def _persist_vault(self, vault: dict) -> None:
         serialized = json.dumps(vault, separators=(",", ":"), sort_keys=True)
@@ -262,7 +370,7 @@ class KeyringProvider(KeyProvider):
                 self.service, self._VAULT_ACCOUNT, serialized
             )
         except Exception as exc:
-            raise CredentialStoreError(exc) from exc
+            raise CredentialStoreError(exc) from None
         self._vault = vault
 
     def _legacy_get(self, name: str) -> bytes | None:
@@ -270,11 +378,9 @@ class KeyringProvider(KeyProvider):
             return None
         try:
             value = self._keyring().get_password(self.service, name)
-            return self._decode(value, "legacy secret") if value else None
-        except RuntimeError:
-            raise
         except Exception as exc:
-            raise CredentialStoreError(exc) from exc
+            raise CredentialStoreError(exc) from None
+        return self._decode(value, "legacy secret") if value else None
 
     def _legacy_delete(self, name: str) -> None:
         if name == self._VAULT_ACCOUNT:
@@ -291,7 +397,7 @@ class KeyringProvider(KeyProvider):
                 or "no such" in message
             ):
                 return
-            raise CredentialStoreError(exc) from exc
+            raise CredentialStoreError(exc) from None
 
     def load(self, name: str) -> bytes | None:
         vault = self._load_vault(force=True)
@@ -327,10 +433,10 @@ class KeyringProvider(KeyProvider):
                 if legacy is not None:
                     self._legacy_delete(name)
                 return raw
-        except RuntimeError:
+        except (OSError, RuntimeError):
             raise
         except Exception as exc:
-            raise CredentialStoreError(exc) from exc
+            raise CredentialStoreError(exc) from None
 
     def get_secret(self, name: str) -> bytes | None:
         vault = self._load_vault()
@@ -399,23 +505,43 @@ class Store:
             ":memory:" if str(path) == ":memory:" else str(Path(path).expanduser())
         )
         if db_path != ":memory:":
-            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(db_path, timeout=10)
+            _prepare_private_sqlite_file(Path(db_path))
+            for suffix in ("-wal", "-shm"):
+                _tighten_existing_private_file(Path(f"{db_path}{suffix}"))
+        self.db = sqlite3.connect(db_path, timeout=10, check_same_thread=False)
         try:
             self.db.execute("pragma busy_timeout=10000")
             if db_path != ":memory:":
-                os.chmod(db_path, 0o600)
                 self.db.execute("pragma journal_mode=wal")
+                for suffix in ("-wal", "-shm"):
+                    _tighten_existing_private_file(Path(f"{db_path}{suffix}"))
             self.db.row_factory = sqlite3.Row
             self.db.executescript("""
             create table if not exists kv (namespace text, key text, value text not null, primary key(namespace,key));
             create table if not exists audit (id integer primary key, agent_id text, operation text, resource text, created_at text, metadata text);
+            create table if not exists store_meta (key text primary key, value text not null);
             """)
 
-            row = None
+            meta_row = self.db.execute(
+                "select value from store_meta where key='key_check'"
+            ).fetchone()
+            kv_row = self.db.execute("select value from kv limit 1").fetchone()
+            audit_row = self.db.execute(
+                "select metadata from audit where metadata is not null limit 1"
+            ).fetchone()
+            encrypted_audit_row = (
+                audit_row
+                if audit_row is not None and _looks_encrypted_audit(audit_row["metadata"])
+                else None
+            )
+            has_existing_data = (
+                meta_row is not None
+                or kv_row is not None
+                or encrypted_audit_row is not None
+            )
+
             if not key and key_provider is not None:
-                row = self.db.execute("select value from kv limit 1").fetchone()
-                if row is None:
+                if not has_existing_data:
                     key = key_provider.load_or_create(key_name)
                 else:
                     load = getattr(key_provider, "load", None)
@@ -430,12 +556,24 @@ class Store:
                         key = None
                     if not key:
                         raise ValueError("existing database key unavailable")
-            else:
-                key = key or secrets.token_bytes(32)
+            elif not key:
+                if has_existing_data:
+                    raise ValueError("existing database key unavailable")
+                key = secrets.token_bytes(32)
 
             self.cipher = Fernet(base64.urlsafe_b64encode(key[:32].ljust(32, b"0")))
-            if row is not None:
-                self._decrypt(row["value"])
+            if meta_row is not None:
+                self._decrypt(meta_row["value"])
+            if kv_row is not None:
+                self._decrypt(kv_row["value"])
+            if encrypted_audit_row is not None:
+                self._decrypt(encrypted_audit_row["metadata"])
+            if meta_row is None:
+                self.db.execute(
+                    "insert or ignore into store_meta(key, value) values ('key_check', ?)",
+                    (self._seal({"version": 1}),),
+                )
+                self.db.commit()
             # Older releases used the plaintext OTP in the ``otp-used`` key.  The
             # current broker stores only a non-secret hash in ``otp-consumed``;
             # remove legacy keys as soon as a compatible store is opened so a code

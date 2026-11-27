@@ -14,11 +14,66 @@ import hashlib
 import hmac
 import json
 import re
+import threading
+import time
 from datetime import UTC, datetime, timedelta
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from .service import Broker, BrokerError, _record_scope_allowed
+
+REQUEST_TIMEOUT_SECONDS = 5.0
+_EXTENSION_ORIGIN_RE = re.compile(r"chrome-extension://[a-p]{32}")
+
+
+class _RequestError(Exception):
+    def __init__(self, status: int, body: dict[str, Any]):
+        self.status = status
+        self.body = body
+
+
+class _FillHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+
+def _verify_paired_request(
+    broker: Broker, payload: bytes, origin: str | None
+) -> tuple[dict[str, Any], str, datetime]:
+    if not origin or not _EXTENSION_ORIGIN_RE.fullmatch(origin):
+        raise _RequestError(
+            403, {"error": "Open the paired Agent Autofill extension", "code": "unpaired"}
+        )
+    if not isinstance(payload, bytes) or not 1 <= len(payload) <= 8192:
+        raise _RequestError(400, {"error": "invalid request", "code": "invalid_request"})
+    try:
+        request = json.loads(payload)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        raise _RequestError(
+            400, {"error": "invalid request", "code": "invalid_request"}
+        ) from None
+    if not isinstance(request, dict):
+        raise _RequestError(400, {"error": "invalid request", "code": "invalid_request"})
+    token = request.get("pairing_token")
+    if not isinstance(token, str):
+        raise _RequestError(400, {"error": "invalid request", "code": "invalid_request"})
+    pairing = broker.store.get("browser-pairing", origin.split("://", 1)[1])
+    now = datetime.now(UTC)
+    if (
+        not pairing
+        or not hmac.compare_digest(
+            pairing["verifier"], hashlib.sha256(token.encode()).hexdigest()
+        )
+        or datetime.fromisoformat(pairing["expires_at"]) <= now
+    ):
+        raise _RequestError(
+            403, {"error": "Pair this browser session again", "code": "unpaired"}
+        )
+    agent_id = pairing["agent_id"]
+    identity = broker.store.get("agent", agent_id)
+    if not identity or identity.get("revoked"):
+        raise _RequestError(403, {"error": "This agent was revoked", "code": "revoked"})
+    return request, agent_id, now
 
 
 def pair_browser(broker: Broker, agent_id: str, extension_id: str, token: str) -> None:
@@ -39,30 +94,13 @@ def pair_browser(broker: Broker, agent_id: str, extension_id: str, token: str) -
 
 def pending_payload(broker: Broker, payload: bytes, origin: str | None) -> tuple[int, dict]:
     """Return matching approved handoffs only to an explicitly paired extension."""
-    if not origin or not re.fullmatch(r"chrome-extension://[a-p]{32}", origin):
-        return 403, {"error": "Open the paired Agent Autofill extension", "code": "unpaired"}
-    if not isinstance(payload, bytes) or not 1 <= len(payload) <= 8192:
-        return 400, {"error": "invalid request", "code": "invalid_request"}
     try:
-        request = json.loads(payload)
-        if not isinstance(request, dict):
-            raise TypeError
-        token = request.get("pairing_token")
-        target = request.get("target_origin")
-        if not isinstance(token, str) or not isinstance(target, str):
-            raise TypeError
-    except (ValueError, TypeError):
+        request, agent_id, now = _verify_paired_request(broker, payload, origin)
+    except _RequestError as exc:
+        return exc.status, exc.body
+    target = request.get("target_origin")
+    if not isinstance(target, str):
         return 400, {"error": "invalid request", "code": "invalid_request"}
-    pairing = broker.store.get("browser-pairing", origin.split("://", 1)[1])
-    now = datetime.now(UTC)
-    if not pairing or not hmac.compare_digest(
-        pairing["verifier"], hashlib.sha256(token.encode()).hexdigest()
-    ) or datetime.fromisoformat(pairing["expires_at"]) <= now:
-        return 403, {"error": "Pair this browser session again", "code": "unpaired"}
-    agent_id = pairing["agent_id"]
-    identity = broker.store.get("agent", agent_id)
-    if not identity or identity.get("revoked"):
-        return 403, {"error": "This agent was revoked", "code": "revoked"}
     requests = []
     for row in broker.store.db.execute(
         "select key from kv where namespace='credential-handle'"
@@ -112,48 +150,88 @@ def _json_response(handler: BaseHTTPRequestHandler, status: int, body: dict[str,
     handler.wfile.write(payload)
 
 
-def consume_payload(broker: Broker, payload: bytes) -> tuple[int, dict[str, Any]]:
-    """Validate and consume one browser-fill request without logging secrets.
+def consume_payload(
+    broker: Broker, payload: bytes, origin: str | None = None
+) -> tuple[int, dict[str, Any]]:
+    """Validate pairing and consume one browser-fill request without logging secrets.
 
     The returned success body intentionally contains the password because this
-    function is called only by the loopback browser helper. Callers must keep
-    it on the local fill path and must never forward it to an agent or logger.
+    function is called only by the paired loopback browser helper. Callers must
+    keep it on the local fill path and must never forward it to an agent or logger.
     """
 
-    if not isinstance(payload, bytes) or not 1 <= len(payload) <= 8192:
-        return 400, {"error": "invalid request"}
     try:
-        request = json.loads(payload)
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return 400, {"error": "invalid request"}
-    if not isinstance(request, dict):
-        return 400, {"error": "invalid request"}
+        request, paired_agent_id, _now = _verify_paired_request(broker, payload, origin)
+    except _RequestError as exc:
+        return exc.status, exc.body
     handle = request.get("handle")
-    agent_id = request.get("agent_id")
     target_origin = request.get("target_origin")
+    body_agent_id = request.get("agent_id")
     if (
         not isinstance(handle, str)
         or not handle
-        or not isinstance(agent_id, str)
-        or not agent_id
         or not isinstance(target_origin, str)
         or not target_origin
+        or (
+            body_agent_id is not None
+            and (not isinstance(body_agent_id, str) or not body_agent_id)
+        )
     ):
-        return 400, {"error": "invalid request"}
+        return 400, {"error": "invalid request", "code": "invalid_request"}
+    if body_agent_id is not None and body_agent_id != paired_agent_id:
+        return 403, {
+            "error": "Pair this browser session with the requested agent",
+            "code": "agent_mismatch",
+        }
     try:
         result = broker.consume_credential_handle(
-            handle, agent_id, target_origin=target_origin
+            handle, paired_agent_id, target_origin=target_origin
         )
     except BrokerError as exc:
         return 403, {"error": str(exc)}
     return 200, result
 
 
-def serve(broker: Broker, host: str = "127.0.0.1", port: int = 8766) -> None:
+def _read_request_body(
+    handler: BaseHTTPRequestHandler, length: int, timeout_seconds: float
+) -> bytes | None:
+    conn = getattr(handler, "connection", None)
+    if conn is None or not hasattr(conn, "settimeout"):
+        data = handler.rfile.read(length)
+        return data if len(data) == length else None
+    deadline = time.monotonic() + timeout_seconds
+    chunks: list[bytes] = []
+    remaining = length
+    while remaining > 0:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("request body read timed out")
+        conn.settimeout(left)
+        if hasattr(handler.rfile, "read1"):
+            chunk = handler.rfile.read1(remaining)
+        else:
+            chunk = handler.rfile.read(remaining)
+        if not chunk:
+            return None
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def make_server(
+    broker: Broker,
+    host: str = "127.0.0.1",
+    port: int = 8766,
+    *,
+    request_timeout: float = REQUEST_TIMEOUT_SECONDS,
+) -> ThreadingHTTPServer:
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise ValueError("fill-server only permits loopback hosts")
+    broker_lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
+        timeout = request_timeout
+
         def do_OPTIONS(self):
             if self.path not in {"/v1/consume", "/v1/pending"}:
                 self.send_error(404)
@@ -179,16 +257,47 @@ def serve(broker: Broker, host: str = "127.0.0.1", port: int = 8766) -> None:
             except ValueError:
                 length = 0
             if length < 1 or length > 8192:
-                _json_response(self, 400, {"error": "invalid request"}, origin)
+                _json_response(
+                    self, 400, {"error": "invalid request", "code": "invalid_request"}, origin
+                )
                 return
-            payload = self.rfile.read(length)
-            if self.path == "/v1/pending":
-                status, result = pending_payload(broker, payload, origin)
-            else:
-                status, result = consume_payload(broker, payload)
+            try:
+                payload = _read_request_body(self, length, request_timeout)
+            except TimeoutError:
+                self.close_connection = True
+                try:
+                    _json_response(
+                        self, 408, {"error": "request timed out", "code": "timeout"}, origin
+                    )
+                except OSError:
+                    pass
+                return
+            except OSError:
+                self.close_connection = True
+                return
+            if payload is None:
+                _json_response(
+                    self, 400, {"error": "invalid request", "code": "invalid_request"}, origin
+                )
+                return
+            with broker_lock:
+                if self.path == "/v1/pending":
+                    status, result = pending_payload(broker, payload, origin)
+                else:
+                    status, result = consume_payload(broker, payload, origin)
             _json_response(self, status, result, origin)
 
         def log_message(self, *_):
             return
 
-    HTTPServer((host, port), Handler).serve_forever()
+    return _FillHTTPServer((host, port), Handler)
+
+
+def serve(
+    broker: Broker,
+    host: str = "127.0.0.1",
+    port: int = 8766,
+    *,
+    request_timeout: float = REQUEST_TIMEOUT_SECONDS,
+) -> None:
+    make_server(broker, host, port, request_timeout=request_timeout).serve_forever()

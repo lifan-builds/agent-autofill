@@ -224,6 +224,9 @@ class GoogleOAuthTokenProvider:
         self._access_token = access_token
         self._expires_at = float(expires_at)
         self._on_refresh = on_refresh
+        self._pending_refresh_token: str | None = None
+        self._pending_access_token: str | None = None
+        self._pending_expires_at: float = 0.0
 
     @classmethod
     def from_token_response(
@@ -234,6 +237,7 @@ class GoogleOAuthTokenProvider:
         http_post: HttpPost | None = None,
         token_endpoint: str | None = None,
         clock: Callable[[], float] | None = None,
+        on_refresh: Callable[[bytes], None] | None = None,
     ) -> GoogleOAuthTokenProvider:
         decoded = _safe_response_json(response)
         access_token = _access_token(decoded)
@@ -252,6 +256,7 @@ class GoogleOAuthTokenProvider:
             clock=clock,
             access_token=access_token,
             expires_at=now + _expires_in(decoded),
+            on_refresh=on_refresh,
         )
 
     @classmethod
@@ -336,10 +341,37 @@ class GoogleOAuthTokenProvider:
     to_secret = to_keychain_secret
     serialize = to_keychain_secret
 
+    def _persist_refresh_token(self, refresh_token: str) -> None:
+        if self._on_refresh is None:
+            return
+        payload = self.keychain_payload()
+        payload["refresh_token"] = refresh_token
+        try:
+            self._on_refresh(_encode_keychain_secret(payload))
+        except Exception:
+            raise GoogleOAuthTokenError(
+                "Could not save refreshed OAuth state in Keychain"
+            ) from None
+
     def get_access_token(self) -> str:
         """Return a cached token or refresh it before the next IMAP login."""
 
         now = self._clock()
+        if self._pending_refresh_token is not None:
+            self._persist_refresh_token(self._pending_refresh_token)
+            self._refresh_token = self._pending_refresh_token
+            pending_access = self._pending_access_token
+            pending_expires_at = self._pending_expires_at
+            self._pending_refresh_token = None
+            self._pending_access_token = None
+            self._pending_expires_at = 0.0
+            if (
+                pending_access
+                and now < pending_expires_at - TOKEN_REFRESH_SKEW_SECONDS
+            ):
+                self._access_token = pending_access
+                self._expires_at = pending_expires_at
+                return pending_access
         if (
             self._access_token
             and now < self._expires_at - TOKEN_REFRESH_SKEW_SECONDS
@@ -370,14 +402,13 @@ class GoogleOAuthTokenProvider:
             and rotated_refresh != self._refresh_token
         ):
             if self._on_refresh is not None:
-                payload = self.keychain_payload()
-                payload["refresh_token"] = rotated_refresh
                 try:
-                    self._on_refresh(_encode_keychain_secret(payload))
-                except Exception:
-                    raise GoogleOAuthTokenError(
-                        "Could not save refreshed OAuth state in Keychain"
-                    ) from None
+                    self._persist_refresh_token(rotated_refresh)
+                except GoogleOAuthTokenError:
+                    self._pending_refresh_token = rotated_refresh
+                    self._pending_access_token = token
+                    self._pending_expires_at = now + expires
+                    raise
             self._refresh_token = rotated_refresh
         self._access_token = token
         self._expires_at = now + expires

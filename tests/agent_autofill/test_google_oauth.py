@@ -325,3 +325,112 @@ def test_refresh_save_failure_is_sanitized_and_does_not_cache_access():
     assert observed == [original]
     assert provider.to_keychain_secret() == original
     assert provider.expires_at == 0
+
+
+def test_failed_rotation_save_retains_pending_token_and_retries_save_without_old_token_exchange():
+    now = [1000.0]
+    network_calls = []
+    saved = []
+    fail_save = [True]
+
+    def http_post(endpoint, fields, timeout):
+        network_calls.append((endpoint, dict(fields)))
+        return {
+            "access_token": f"access-{len(network_calls)}",
+            "refresh_token": f"refresh-rotated-{len(network_calls)}",
+            "expires_in": 3600,
+        }
+
+    def on_refresh(payload):
+        if fail_save[0]:
+            raise OSError("synthetic-canary-secret-88412")
+        saved.append(json.loads(payload))
+
+    provider = GoogleOAuthTokenProvider(
+        "client-id",
+        None,
+        "refresh-old-invalidated",
+        http_post=http_post,
+        on_refresh=on_refresh,
+        clock=lambda: now[0],
+    )
+
+    # First call rotates on server, then persistence fails.
+    with pytest.raises(GoogleOAuthTokenError, match="Keychain") as caught:
+        provider.get_access_token()
+    assert "synthetic-canary-secret-88412" not in "".join(
+        traceback.format_exception(caught.value)
+    )
+    assert len(network_calls) == 1
+    assert network_calls[0][1]["refresh_token"] == "refresh-old-invalidated"
+    assert provider.keychain_payload()["refresh_token"] == "refresh-old-invalidated"
+    assert provider.expires_at == 0
+
+    # Second call while persistence still fails retries ONLY save, never network exchange.
+    with pytest.raises(GoogleOAuthTokenError, match="Keychain"):
+        provider.get_access_token()
+    assert len(network_calls) == 1
+
+    # Once persistence recovers, save commits pending token and returns fresh access token
+    # without touching the network again.
+    fail_save[0] = False
+    assert provider.get_access_token() == "access-1"
+    assert len(network_calls) == 1
+    assert len(saved) == 1
+    assert saved[0]["refresh_token"] == "refresh-rotated-1"
+    assert provider.keychain_payload()["refresh_token"] == "refresh-rotated-1"
+    assert provider.expires_at == 4600.0
+
+    # Subsequent network refresh after expiry uses the rotated token, never the old one.
+    now[0] = 5000.0
+    assert provider.get_access_token() == "access-2"
+    assert len(network_calls) == 2
+    assert network_calls[1][1]["refresh_token"] == "refresh-rotated-1"
+    assert saved[1]["refresh_token"] == "refresh-rotated-2"
+
+
+def test_failed_rotation_save_after_pending_access_expires_uses_rotated_token_on_exchange():
+    now = [1000.0]
+    network_calls = []
+    saved = []
+    fail_save = [True]
+
+    def http_post(endpoint, fields, timeout):
+        network_calls.append(dict(fields))
+        if len(network_calls) == 1:
+            return {
+                "access_token": "access-first",
+                "refresh_token": "refresh-rotated",
+                "expires_in": 300,
+            }
+        return {
+            "access_token": "access-second",
+            "expires_in": 3600,
+        }
+
+    def on_refresh(payload):
+        if fail_save[0]:
+            raise OSError("temporary keychain outage")
+        saved.append(json.loads(payload))
+
+    provider = GoogleOAuthTokenProvider(
+        "client-id",
+        None,
+        "refresh-old",
+        http_post=http_post,
+        on_refresh=on_refresh,
+        clock=lambda: now[0],
+    )
+
+    with pytest.raises(GoogleOAuthTokenError):
+        provider.get_access_token()
+    assert len(network_calls) == 1
+
+    # Advance past pending access token expiry before Keychain recovers.
+    now[0] = 2000.0
+    fail_save[0] = False
+    assert provider.get_access_token() == "access-second"
+    assert len(saved) == 1
+    assert saved[0]["refresh_token"] == "refresh-rotated"
+    assert len(network_calls) == 2
+    assert network_calls[1]["refresh_token"] == "refresh-rotated"

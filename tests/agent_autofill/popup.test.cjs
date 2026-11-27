@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const {test} = require('node:test');
 
-async function fixture(state = 'password') {
+async function fixture(state = 'password', {paired = true} = {}) {
   const nodes = new Map();
   const node = id => {
     if (!nodes.has(id)) nodes.set(id, {value: '', textContent: '', disabled: false,
@@ -16,19 +16,25 @@ async function fixture(state = 'password') {
     return nodes.get(id);
   };
   const calls = [];
+  const pairingToken = '1'.repeat(64);
   const active = {id: 7, url: 'https://example.test/login'};
   const sandbox = {document: {getElementById: node}, URL, AbortController,
     setTimeout, clearTimeout, Option: class {}, loginPage() {},
     chrome: {tabs: {query: async () => [active]},
       storage: {local: {get: async d => d, set: async () => {}},
-        session: {get: async () => ({}), set: async () => {}, remove: async () => {}}},
+        session: {
+          get: async () => (paired ? {pairingToken} : {}),
+          set: async () => {},
+          remove: async () => {},
+        }},
       scripting: {executeScript: async request => {
         calls.push(request);
         return [{documentId: 'doc-1', result: {state: request.args[0] === 'check' ? state : 'filled'}}];
       }}},
     fetch: async (url, options) => {
       if (options.method === 'OPTIONS') return {status: 204, ok: true};
-      calls.push({consume: true});
+      if (url.endsWith('/v1/pending')) return {ok: true, json: async () => ({requests: []})};
+      calls.push({consume: true, body: JSON.parse(options.body)});
       return {ok: true, json: async () => ({username: 'synthetic-user', password: 'synthetic-secret'})};
     }};
   vm.createContext(sandbox);
@@ -36,7 +42,7 @@ async function fixture(state = 'password') {
   await new Promise(resolve => setImmediate(resolve));
   node('handle').value = 'synthetic-handle';
   node('handle').listeners.input();
-  return {nodes, node, calls, sandbox, active, click: () => node('fill').listeners.click()};
+  return {nodes, node, calls, sandbox, active, pairingToken, click: () => node('fill').listeners.click()};
 }
 
 test('initial refresh works and missing fields preserve the unused handoff', async () => {
@@ -51,7 +57,9 @@ test('initial refresh works and missing fields preserve the unused handoff', asy
 test('password delivery targets the preflight document and clears the handoff', async () => {
   const f = await fixture();
   await f.click();
-  assert.equal(f.calls.filter(call => call.consume).length, 1);
+  const consumes = f.calls.filter(call => call.consume);
+  assert.equal(consumes.length, 1);
+  assert.equal(consumes[0].body.pairing_token, f.pairingToken);
   const fill = f.calls.find(call => call.args?.[0] === 'fill');
   assert.equal(fill.target.documentIds[0], 'doc-1');
   assert.equal(fill.args[1], 'https://example.test');
@@ -115,10 +123,12 @@ test('expired request never injects fields and clears the attempted handle', asy
 });
 
 test('a new browser session requires pairing again', async () => {
-  const f = await fixture();
+  const f = await fixture('password', {paired: false});
   // The fixture has persistent preferences but empty chrome.storage.session.
   await f.node('refresh-requests').listeners.click();
   assert.match(f.node('request-detail').textContent, /Pair this browser session/);
+  await f.click();
+  assert.match(f.node('status').textContent, /Pair this browser session/);
   assert.equal(f.calls.some(call => call.consume), false);
 });
 

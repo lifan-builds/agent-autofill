@@ -381,3 +381,166 @@ def test_sensitive_records_persist_encrypted_across_store_reopen(tmp_path):
     assert second.list_credentials()[0]["credential_id"] == "login"
     assert second.list_financial_records()[0]["record_id"] == "card"
     assert "values" not in second.list_financial_records()[0]
+
+
+def test_store_rejects_wrong_explicit_key_and_missing_key_without_overwriting(tmp_path):
+    path = tmp_path / "vault.sqlite3"
+    original_key = b"A" * 32
+    first = Store(path, key=original_key)
+    first.put("profile", "field", {"value": "preserved"})
+    first.db.close()
+
+    with pytest.raises(ValueError, match="store integrity check failed"):
+        Store(path, key=b"B" * 32)
+
+    with pytest.raises(ValueError, match="existing database key unavailable"):
+        Store(path)
+
+    reopened = Store(path, key=original_key)
+    try:
+        assert reopened.get("profile", "field") == {"value": "preserved"}
+    finally:
+        reopened.db.close()
+
+
+def test_store_verifies_key_check_even_on_empty_store_and_audit_only_legacy_db(tmp_path):
+    empty_path = tmp_path / "empty.sqlite3"
+    first = Store(empty_path, key=b"E" * 32)
+    first.db.close()
+    with pytest.raises(ValueError, match="store integrity check failed"):
+        Store(empty_path, key=b"F" * 32)
+
+    audit_path = tmp_path / "audit-only.sqlite3"
+    audit_store = Store(audit_path, key=b"G" * 32)
+    audit_store.audit("agent", "op", "res", "2026-01-01T00:00:00Z", {"safe": "ok"})
+    # Simulate a legacy database that has only encrypted audit rows and no store_meta.
+    audit_store.db.execute("delete from store_meta")
+    audit_store.db.commit()
+    audit_store.db.close()
+
+    class RejectCreateKeys(KeyProvider):
+        def load(self, name):
+            return None
+
+        def load_or_create(self, name):
+            pytest.fail("must not provision a replacement key for an audit-only database")
+
+    with pytest.raises(ValueError, match="existing database key unavailable"):
+        Store(audit_path, key_provider=RejectCreateKeys(), key_name="db")
+    with pytest.raises(ValueError, match="store integrity check failed"):
+        Store(audit_path, key=b"H" * 32)
+    valid = Store(audit_path, key=b"G" * 32)
+    try:
+        assert valid.audits()[0]["metadata"] == {"safe": "ok"}
+    finally:
+        valid.db.close()
+
+
+def test_keyring_vault_lock_uses_private_user_dir_independent_of_tmpdir_and_rejects_symlinks(
+    monkeypatch, tmp_path
+):
+    import hashlib
+    import os
+    import stat
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    tmp_a = tmp_path / "tmp-a"
+    tmp_b = tmp_path / "tmp-b"
+    tmp_a.mkdir()
+    tmp_b.mkdir()
+
+    backend = FakeKeychain()
+    monkeypatch.setenv("TMPDIR", str(tmp_a))
+    KeyringProvider(service="unit-svc", backend=backend).set_secret("k1", b"v1")
+    monkeypatch.setenv("TMPDIR", str(tmp_b))
+    KeyringProvider(service="unit-svc", backend=backend).set_secret("k2", b"v2")
+
+    assert list(tmp_a.iterdir()) == []
+    assert list(tmp_b.iterdir()) == []
+
+    app_dir = home / ".agent-autofill"
+    lock_dir = app_dir / "locks"
+    lock_name = hashlib.sha256(b"unit-svc").hexdigest()[:24]
+    lock_file = lock_dir / f"keyring-{lock_name}.lock"
+
+    assert stat.S_IMODE(os.stat(app_dir).st_mode) == 0o700
+    assert stat.S_IMODE(os.stat(lock_dir).st_mode) == 0o700
+    assert stat.S_IMODE(os.stat(lock_file).st_mode) == 0o600
+
+    # Replace lock file with symlink; O_NOFOLLOW must fail closed.
+    decoy = tmp_path / "decoy"
+    decoy.write_text("decoy")
+    lock_file.unlink()
+    lock_file.symlink_to(decoy)
+    with pytest.raises(OSError):
+        KeyringProvider(service="unit-svc", backend=backend).set_secret("k3", b"v3")
+
+
+def test_store_precreates_sqlite_db_with_0600_before_connect_and_rejects_symlinks(
+    monkeypatch, tmp_path
+):
+    import os
+    import stat
+
+    from agent_autofill import storage
+
+    db_path = tmp_path / "secure.sqlite3"
+    observed_modes = []
+    real_connect = storage.sqlite3.connect
+
+    def checking_connect(target, *args, **kwargs):
+        if target != ":memory:":
+            observed_modes.append(stat.S_IMODE(os.stat(target).st_mode))
+        return real_connect(target, *args, **kwargs)
+
+    monkeypatch.setattr(storage.sqlite3, "connect", checking_connect)
+    store = Store(db_path, key=b"S" * 32)
+    store.put("profile", "k", {"v": 1})
+    store.db.close()
+
+    assert observed_modes == [0o600]
+    assert stat.S_IMODE(os.stat(db_path).st_mode) == 0o600
+
+    # Existing overly permissive DB is tightened before sqlite3.connect.
+    os.chmod(db_path, 0o644)
+    observed_modes.clear()
+    reopened = Store(db_path, key=b"S" * 32)
+    reopened.db.close()
+    assert observed_modes == [0o600]
+
+    # Symlink DB target is rejected via O_NOFOLLOW before sqlite3.connect.
+    symlink_path = tmp_path / "link.sqlite3"
+    symlink_path.symlink_to(db_path)
+    with pytest.raises(OSError):
+        Store(symlink_path, key=b"S" * 32)
+
+
+def test_keyring_backend_errors_are_value_free_in_tracebacks(monkeypatch, tmp_path):
+    import traceback
+
+    from agent_autofill.storage import CredentialStoreError
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    canary = "synthetic-backend-secret-99123"
+
+    class LeakyBackend:
+        def __init__(self, fail_on):
+            self.fail_on = fail_on
+
+        def get_password(self, service, account):
+            if self.fail_on == "get":
+                raise RuntimeError(canary)
+            return None
+
+        def set_password(self, service, account, value):
+            if self.fail_on == "set":
+                raise RuntimeError(canary)
+
+    for fail_on in ("get", "set"):
+        provider = KeyringProvider(service="unit", backend=LeakyBackend(fail_on))
+        with pytest.raises(CredentialStoreError) as caught:
+            provider.set_secret("connector", b"unit-secret")
+        assert canary not in str(caught.value)
+        assert canary not in "".join(traceback.format_exception(caught.value))

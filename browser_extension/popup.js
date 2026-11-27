@@ -321,12 +321,21 @@ fillButton.addEventListener("click", async () => {
     if (currentPage.tabId !== checkedPage.tabId || currentPage.origin !== checkedPage.origin) {
       throw new Error("The active page changed. Refresh requests. No handle was consumed.");
     }
+    const {pairingToken} = await chrome.storage.session.get("pairingToken");
+    if (!pairingToken) {
+      throw new Error("Pair this browser session before filling. No handle was consumed.");
+    }
     consumptionStarted = true;
     const response = await fetchWithTimeout(`${bridgeUrl}/v1/consume`, {
       method: "POST",
       mode: "cors",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({handle, agent_id: agentId, target_origin: pageState.origin}),
+      body: JSON.stringify({
+        pairing_token: pairingToken,
+        handle,
+        agent_id: agentId,
+        target_origin: pageState.origin,
+      }),
     }, 5000);
     let body;
     try {
